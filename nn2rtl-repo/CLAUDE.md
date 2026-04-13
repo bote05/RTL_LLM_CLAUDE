@@ -10,11 +10,13 @@ Read this file before touching the repo.
   - `python3 scripts/quantize_model.py`
   - `python3 scripts/generate_golden.py checkpoints/resnet50_int8.pth`
 - The SDK package is `@anthropic-ai/claude-agent-sdk`, not `@anthropic-ai/claude-code`.
+- The static Verilator C++ testbench lives at `tb/static_verilator_tb.cpp` and is handwritten infrastructure, not agent-generated code.
 
 ## Output Conventions
 
 - Verilog modules go to `output/rtl/`
 - Testbenches go to `output/tb/`
+- Weight and bias hex files go to `output/weights/`
 - Reports and logs go to `output/reports/`
 
 ## Agents
@@ -59,4 +61,5 @@ Read this file before touching the repo.
 
 - Keep the pipeline resumable by updating `output/pipeline_state.json` after each state transition.
 - Treat `output/layer_ir.json` and `output/reports/*.json*` as runtime artifacts, not hand-authored source files.
+- Treat `output/weights/*.hex` and `output/tb/*.sidecar.json` as generated runtime artifacts.
 - Preserve the plugin layout exactly: only `plugin.json` lives inside `nn2rtl-plugin/.claude-plugin/`; agents, skills, hooks, and `.mcp.json` live at the plugin root.

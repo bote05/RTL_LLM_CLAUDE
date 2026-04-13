@@ -14,28 +14,29 @@ Input contract:
 
 Output contract:
 
-- You must produce one complete `VerilogModule` JSON object.
-- You must call the `write_verilog` MCP tool to persist the generated RTL before finishing.
-- Your final message must be the `VerilogModule` JSON object only.
+- Produce one complete synthesizable `VerilogModule`.
+- Persist the RTL through the `write_verilog` MCP tool before finishing.
+- Return only the `VerilogModule` JSON object as the final message.
 
 Hard RTL rules:
 
-- Use INT8 fixed-point arithmetic with the provided `scale_factor`.
-- Never use `$display`.
-- Never use `initial` blocks outside testbenches.
-- Never use `#delay`.
-- Never use `$random`.
-- Every multiplier must be `8x8 -> 16 bit`.
-- Residual addition must use saturation arithmetic.
-- Emit synthesizable Verilog only.
+- Use INT8 fixed-point arithmetic with widened accumulators where required.
+- Every multiplier is `8x8 -> 16 bit`.
+- Residual addition uses saturation arithmetic.
+- All weight and activation datapath signals are signed.
+- Implement a valid/ready style streaming interface using the exact signal names in `LayerIR`.
+- Assert `valid_out` exactly `pipeline_latency_cycles` cycles after `valid_in`.
+- Load weights and bias through `$readmemh` using `weights_path` and `bias_path`; never hardcode numeric arrays in source.
+- Never use `$display`, `#delay`, `$random`, or simulation-only logic in synthesizable modules.
 
 Implementation guidance:
 
 - Keep the module self-contained.
-- Use deterministic naming derived from `module_id`.
+- Honor `clock_signal`, `reset_signal`, `valid_in_signal`, and `valid_out_signal` exactly.
+- Use the timing contract from `pipeline_latency_cycles` and `clock_period_ns`.
 - Compute `spec_hash` deterministically from the semantic contents of the `LayerIR`.
 - Set `generated_by` to `Foundry`.
-- Set `attempt` to `0` for the first generation.
+- Set `attempt` to `1` for first-pass output.
 
 Exact `LayerIR` JSON Schema:
 
@@ -48,75 +49,50 @@ Exact `LayerIR` JSON Schema:
     "op_type",
     "input_shape",
     "output_shape",
-    "weight_int8",
+    "weights_path",
+    "bias_path",
+    "weight_shape",
+    "num_weights",
     "scale_factor",
+    "zero_point",
+    "pipeline_latency_cycles",
+    "clock_period_ns",
+    "input_width_bits",
+    "output_width_bits",
+    "valid_in_signal",
+    "valid_out_signal",
+    "clock_signal",
+    "reset_signal",
     "golden_inputs",
     "golden_outputs"
   ],
   "properties": {
     "module_id": { "type": "string" },
-    "op_type": {
-      "type": "string",
-      "enum": ["conv2d", "batchnorm", "relu", "add"]
-    },
-    "input_shape": {
-      "type": "array",
-      "items": { "type": "integer" }
-    },
-    "output_shape": {
-      "type": "array",
-      "items": { "type": "integer" }
-    },
-    "weight_int8": {
-      "type": "array",
-      "items": {
-        "type": "array",
-        "items": { "type": "integer" }
-      }
-    },
+    "op_type": { "type": "string", "enum": ["conv2d", "relu", "add"] },
+    "input_shape": { "type": "array", "items": { "type": "integer" } },
+    "output_shape": { "type": "array", "items": { "type": "integer" } },
+    "weights_path": { "type": "string" },
+    "bias_path": { "type": ["string", "null"] },
+    "weight_shape": { "type": "array", "items": { "type": "integer" } },
+    "num_weights": { "type": "integer", "minimum": 0 },
     "scale_factor": { "type": "number" },
+    "zero_point": { "type": "integer" },
+    "pipeline_latency_cycles": { "type": "integer", "minimum": 1 },
+    "clock_period_ns": { "type": "number", "minimum": 0 },
+    "input_width_bits": { "type": "integer", "minimum": 1 },
+    "output_width_bits": { "type": "integer", "minimum": 1 },
+    "valid_in_signal": { "type": "string" },
+    "valid_out_signal": { "type": "string" },
+    "clock_signal": { "type": "string" },
+    "reset_signal": { "type": "string" },
     "golden_inputs": {
       "type": "array",
-      "items": {
-        "type": "array",
-        "items": { "type": "number" }
-      }
+      "items": { "type": "array", "items": { "type": "number" } }
     },
     "golden_outputs": {
       "type": "array",
-      "items": {
-        "type": "array",
-        "items": { "type": "number" }
-      }
+      "items": { "type": "array", "items": { "type": "number" } }
     }
   }
 }
 ```
-
-Exact `VerilogModule` JSON Schema:
-
-```json
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "module_id",
-    "spec_hash",
-    "verilog_source",
-    "generated_by",
-    "attempt"
-  ],
-  "properties": {
-    "module_id": { "type": "string" },
-    "spec_hash": { "type": "string" },
-    "verilog_source": { "type": "string" },
-    "generated_by": {
-      "type": "string",
-      "const": "Foundry"
-    },
-    "attempt": { "type": "integer", "minimum": 0 }
-  }
-}
-```
-
-Return only JSON in your final answer.

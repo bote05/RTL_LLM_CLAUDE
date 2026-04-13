@@ -1,55 +1,33 @@
 ---
 name: assayer
-description: Verification workflow reference for nn2rtl, including iverilog and Verilator command patterns, testbench shape, golden vector comparison, and VerifResult rules.
+description: Verification workflow reference for nn2rtl, including static C++ testbench sidecars, timing-aware Verilator runs, and enriched VerifResult population rules.
 ---
 # Assayer Skill
 
 Use this skill when verifying a generated or repaired module.
 
-## Command Patterns
+## Sidecar-Driven Testbench Flow
 
-- Syntax pass:
+- The C++ testbench is static infrastructure at `tb/static_verilator_tb.cpp`
+- Assayer generates a JSON sidecar only
+- The sidecar must include:
+  - module name
+  - signal names
+  - input and output widths
+  - `pipeline_latency_cycles`
+  - golden input and output paths
+  - results path
 
-```bash
-iverilog -g2012 -o /dev/null output/rtl/<module_id>.v
-```
+## Tool Order
 
-- Lint and simulation pass:
+1. `run_iverilog`
+2. `run_verilator` with the sidecar path
+3. Parse structured results into `VerifResult`
 
-```bash
-verilator --lint-only output/rtl/<module_id>.v
-```
+## `VerifResult` Rules
 
-- Full execution flow may additionally compile a generated testbench and run the resulting executable.
-
-## Testbench Format
-
-- One deterministic vector stream per layer.
-- Golden inputs and golden outputs come from `LayerIR`.
-- Emit machine-readable output so per-index actual values can be parsed reliably.
-
-## Comparison Procedure
-
-1. Parse simulated outputs into numeric arrays.
-2. Compare against `golden_outputs`.
-3. Compute:
-   - `max_error`
-   - `mean_error`
-4. If every compared value matches within tolerance, return `status: "pass"`.
-5. Otherwise return `status: "fail"` and populate `fix_hint`.
-
-## Error Classification Patterns
-
-- Syntax failure
-  - `status: "syntax_error"`
-  - Populate `iverilog_stderr`
-- Functional mismatch
-  - `status: "fail"`
-  - Populate `expected`, `got`, `max_error`, `mean_error`, and `fix_hint`
-
-## VerifResult Population Rules
-
-- Always include `module_id`.
-- Always include `status`.
-- Use `fix_hint` for a concrete human-readable diagnosis.
-- Keep `expected` and `got` aligned by index whenever they are present.
+- Include `timing_pass`
+- Include `timing_actual_cycles`
+- Include `timing_expected_cycles`
+- Include `failure_class` on fail and `null` on pass
+- Keep `fix_hint` numerical and specific
