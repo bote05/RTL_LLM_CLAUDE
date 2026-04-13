@@ -1,0 +1,22 @@
+{
+  "name": "nn2rtl-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/orchestrate.js",
+    "dev": "tsx watch orchestrate.ts",
+    "pipeline": "tsx orchestrate.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.5"
+  }
+}

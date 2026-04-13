@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime artifacts
+output/rtl/
+output/tb/
+output/reports/
+output/weights/
+output/layer_ir.json
+output/pipeline_state.json
+output/run_log.jsonl
+output/golden_vectors.json
+
+# Model checkpoints
+checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db

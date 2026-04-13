@@ -1,0 +1,13 @@
+{
+  "name": "nn2rtl",
+  "version": "0.1.0",
+  "description": "Multi-agent pipeline: ResNet-50 residual block stack → synthesizable Verilog RTL",
+  "author": {
+    "name": "Daniel",
+    "email": "daniel@example.com"
+  },
+  "license": "MIT",
+  "agents": "./agents/",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

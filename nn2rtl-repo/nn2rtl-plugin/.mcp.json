@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nn2rtl-tools": {
+      "command": "node",
+      "args": ["../mcp/dist/server.js"],
+      "env": {
+        "OUTPUT_DIR": "../output"
+      }
+    }
+  }
+}
