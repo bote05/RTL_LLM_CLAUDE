@@ -127,6 +127,27 @@ describe("mcp tools", () => {
     });
   });
 
+  it("parses abc9 delay reported in ns into Fmax", () => {
+    const report = "LUT4 8\nABC: Best Delay = 10.000 ns";
+    const parsed = parseYosysReport(report);
+    expect(parsed.lut_count).toBe(8);
+    expect(parsed.fmax_mhz).toBeCloseTo(100, 5);
+  });
+
+  it("parses abc9 delay reported in ps into Fmax", () => {
+    const report = "LUT4 2\nABC: Delay = 2500.0 ps";
+    const parsed = parseYosysReport(report);
+    expect(parsed.lut_count).toBe(2);
+    expect(parsed.fmax_mhz).toBeCloseTo(400, 5);
+  });
+
+  it("returns fmax_mhz=0 when no delay/MHz information is present", () => {
+    expect(parseYosysReport("LUT4 3\nnothing measurable here")).toEqual({
+      lut_count: 3,
+      fmax_mhz: 0,
+    });
+  });
+
   it("runs yosys successfully when the command layer returns a valid report", async () => {
     const result = await run_yosys("module passthrough; endmodule", "passthrough", {
       commandRunner: async () => ({

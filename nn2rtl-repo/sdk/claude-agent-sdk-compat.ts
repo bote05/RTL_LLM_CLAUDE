@@ -1,4 +1,7 @@
-// TODO: Remove this compatibility shim once the published @anthropic-ai/claude-agent-sdk package ships a valid root declaration file for sdk.mjs.
+// Thin compatibility layer over @anthropic-ai/claude-agent-sdk.
+// We keep our own narrowed types here (rather than re-exporting the SDK's)
+// so we only depend on the fields the orchestrator actually uses. This
+// insulates the rest of the codebase from shape changes in the SDK.
 
 export type AgentDefinition = {
   description: string;
@@ -6,6 +9,8 @@ export type AgentDefinition = {
   tools?: string[];
   disallowedTools?: string[];
   model?: "sonnet" | "opus" | "haiku" | "inherit";
+  skills?: string[];
+  maxTurns?: number;
 };
 
 export type OutputFormat = {

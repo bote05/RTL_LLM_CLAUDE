@@ -126,11 +126,32 @@ export function parseYosysReport(
   report: string,
 ): { fmax_mhz: number; lut_count: number } {
   const lutMatch = report.match(/LUT4\s+(\d+)/);
-  const fmaxMatch = report.match(/([0-9]+(?:\.[0-9]+)?)\s*MHz/i);
-  return {
-    lut_count: lutMatch ? Number(lutMatch[1]) : 0,
-    fmax_mhz: fmaxMatch ? Number(fmaxMatch[1]) : 0,
-  };
+  const lut_count = lutMatch ? Number(lutMatch[1]) : 0;
+
+  // Fmax extraction order — most specific first:
+  // 1. Explicit "X MHz" (nextpnr-style report or test mocks)
+  // 2. ABC/abc9 "Delay = X.XX ns" (Yosys sta/abc9 output)
+  // 3. ABC/abc9 "Delay = X.XX ps"
+  // abc9's delay line appears on every synth_ice40 -abc9 run and is our
+  // primary production signal.
+  const mhzMatch = report.match(/([0-9]+(?:\.[0-9]+)?)\s*MHz/i);
+  if (mhzMatch) {
+    return { lut_count, fmax_mhz: Number(mhzMatch[1]) };
+  }
+
+  const nsMatch = report.match(/Delay\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*ns/i);
+  if (nsMatch) {
+    const ns = Number(nsMatch[1]);
+    return { lut_count, fmax_mhz: ns > 0 ? 1_000 / ns : 0 };
+  }
+
+  const psMatch = report.match(/Delay\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*ps/i);
+  if (psMatch) {
+    const ps = Number(psMatch[1]);
+    return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0 };
+  }
+
+  return { lut_count, fmax_mhz: 0 };
 }
 
 export function resolveOutputRoot(outputDir: string): string {
@@ -306,7 +327,11 @@ export async function run_yosys(
     try {
       const { stdout, stderr } = await runtime.commandRunner(
         "yosys",
-        ["-p", "synth_ice40 -abc9; stat", verilogPath],
+        [
+          "-p",
+          `synth_ice40 -abc9 -top ${module_name}; stat; tee -o /dev/stdout ltp -noff`,
+          verilogPath,
+        ],
         { cwd: tempDir },
       );
 

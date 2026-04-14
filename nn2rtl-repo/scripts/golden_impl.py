@@ -3,24 +3,190 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Iterable
+import operator
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterable, Mapping, Sequence
 
 import torch
+import torch.nn.functional as F
+from torch import fx, nn
 
 from scripts.quantize_impl import create_toy_model, load_quantized_checkpoint, run_toy_model
 
 
-def get_output_paths(repo_root: Path) -> tuple[Path, Path]:
-    output_path = repo_root / "output" / "golden_vectors.json"
-    weights_dir = repo_root / "output" / "weights"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+LAYER_IR_FILE_NAME = "layer_ir.json"
+LEGACY_GOLDEN_FILE_NAME = "golden_vectors.json"
+SIGNAL_LITERALS = {
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+}
+PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1}
+SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
+
+
+class GoldenGenerationError(ValueError):
+    """Raised when golden generation cannot satisfy the repo contract."""
+
+
+class Int8Conv2d(nn.Module):
+    def __init__(
+        self,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None,
+        stride: Sequence[int] = (1, 1),
+        padding: Sequence[int] = (0, 0),
+        dilation: Sequence[int] = (1, 1),
+        groups: int = 1,
+    ) -> None:
+        super().__init__()
+        self.register_buffer("weight", weight.to(torch.float32))
+        if bias is None:
+            self.bias = None
+        else:
+            self.register_buffer("bias", bias.to(torch.float32))
+        self.stride = tuple(int(v) for v in stride)
+        self.padding = tuple(int(v) for v in padding)
+        self.dilation = tuple(int(v) for v in dilation)
+        self.groups = int(groups)
+
+    def forward(self, x):
+        y = F.conv2d(
+            x.to(torch.float32),
+            self.weight,
+            self.bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+        )
+        return quantize_tensor_to_int8_range(y)
+
+
+class Int8ReLU(nn.Module):
+    def forward(self, x):
+        return quantize_tensor_to_int8_range(torch.relu(x.to(torch.float32)))
+
+
+class Int8Add(nn.Module):
+    def forward(self, lhs, rhs):
+        return quantize_tensor_to_int8_range(lhs.to(torch.float32) + rhs.to(torch.float32))
+
+
+class ResidualStackTracer(fx.Tracer):
+    def is_leaf_module(self, module: nn.Module, qualname: str) -> bool:
+        if isinstance(module, (Int8Conv2d, Int8ReLU, Int8Add)):
+            return True
+        return super().is_leaf_module(module, qualname)
+
+
+class ActivationCaptureInterpreter(fx.Interpreter):
+    def __init__(self, graph_module: fx.GraphModule) -> None:
+        super().__init__(graph_module)
+        self.captured_outputs: dict[str, Any] = {}
+
+    def run_node(self, node: fx.Node) -> Any:
+        result = super().run_node(node)
+        self.captured_outputs[node.name] = result
+        return result
+
+
+class CheckpointResidualStack(nn.Module):
+    def __init__(
+        self,
+        operations: Sequence[Mapping[str, Any]],
+        layers: Mapping[str, Mapping[str, Any]],
+        output_module_id: str | None = None,
+        input_name: str = "input",
+    ) -> None:
+        super().__init__()
+        self.operations = [dict(operation) for operation in operations]
+        self.output_module_id = output_module_id
+        self.input_name = input_name
+
+        for operation in self.operations:
+            module_id = require_string(operation, "module_id", "operation")
+            op_type = require_op_type(operation, "operation")
+            if module_id not in layers:
+                raise GoldenGenerationError(
+                    f"Checkpoint graph references unknown layer '{module_id}'."
+                )
+            metadata = layers[module_id]
+            if op_type == "conv2d":
+                weight_tensor, bias_tensor = resolve_layer_parameters(metadata)
+                if metadata.get("batch_norm") is not None:
+                    weight_tensor, bias_tensor = fold_batch_norm_from_metadata(
+                        weight_tensor,
+                        bias_tensor,
+                        metadata["batch_norm"],
+                    )
+                module = Int8Conv2d(
+                    weight=weight_tensor,
+                    bias=bias_tensor,
+                    stride=coerce_int_sequence(operation.get("stride", [1, 1]), "stride"),
+                    padding=coerce_int_sequence(operation.get("padding", [0, 0]), "padding"),
+                    dilation=coerce_int_sequence(operation.get("dilation", [1, 1]), "dilation"),
+                    groups=int(operation.get("groups", 1)),
+                )
+            elif op_type == "relu":
+                module = Int8ReLU()
+            else:
+                module = Int8Add()
+            register_module_path(self, module_id, module)
+
+    def forward(self, x):
+        values: dict[str, torch.Tensor] = {self.input_name: quantize_tensor_to_int8_range(x)}
+        previous_id = self.input_name
+
+        for operation in self.operations:
+            module_id = require_string(operation, "module_id", "operation")
+            op_type = require_op_type(operation, "operation")
+            module = get_module_by_path(self, module_id)
+
+            if op_type == "add":
+                lhs = require_string(operation, "lhs", f"operation '{module_id}'")
+                rhs = require_string(operation, "rhs", f"operation '{module_id}'")
+                output = module(values[lhs], values[rhs])
+            else:
+                input_ref = str(operation.get("input", previous_id))
+                if input_ref not in values:
+                    raise GoldenGenerationError(
+                        f"Operation '{module_id}' references unknown input '{input_ref}'."
+                    )
+                output = module(values[input_ref])
+
+            values[module_id] = quantize_tensor_to_int8_range(output)
+            previous_id = module_id
+
+        final_id = self.output_module_id or previous_id
+        if final_id not in values:
+            raise GoldenGenerationError(
+                f"Checkpoint output_module_id '{final_id}' is not produced by the graph."
+            )
+        return values[final_id]
+
+
+def get_output_paths(repo_root: Path) -> tuple[Path, Path, Path]:
+    output_dir = repo_root / "output"
+    layer_ir_path = output_dir / LAYER_IR_FILE_NAME
+    legacy_output_path = output_dir / LEGACY_GOLDEN_FILE_NAME
+    weights_dir = output_dir / "weights"
+    output_dir.mkdir(parents=True, exist_ok=True)
     weights_dir.mkdir(parents=True, exist_ok=True)
-    return output_path, weights_dir
+    return layer_ir_path, legacy_output_path, weights_dir
+
+
+def get_legacy_output_path(repo_root: Path) -> Path:
+    return repo_root / "output" / LEGACY_GOLDEN_FILE_NAME
 
 
 def get_weight_artifact_paths(repo_root: Path, module_id: str) -> tuple[Path, Path]:
-    _, weights_dir = get_output_paths(repo_root)
+    _, _, weights_dir = get_output_paths(repo_root)
     return (
         weights_dir / f"{module_id}_weights.hex",
         weights_dir / f"{module_id}_bias.hex",
@@ -33,13 +199,25 @@ def int8_to_hex(value: int) -> str:
     return f"{value & 0xFF:02X}"
 
 
+def int32_to_hex(value: int) -> str:
+    if value < -(2**31) or value > 2**31 - 1:
+        raise ValueError(f"INT32 value out of range: {value}")
+    return f"{value & 0xFFFFFFFF:08X}"
+
+
 def write_signed_int8_hex(values: Iterable[int], file_path: Path) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    # $readmemh accepts LF everywhere, and the bench tests pin the on-disk
-    # bytes. newline="" disables Python's platform-specific CRLF translation
-    # on Windows.
     file_path.write_text(
         "".join(f"{int8_to_hex(int(value))}\n" for value in values),
+        encoding="utf8",
+        newline="",
+    )
+
+
+def write_signed_int32_hex(values: Iterable[int], file_path: Path) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(
+        "".join(f"{int32_to_hex(int(value))}\n" for value in values),
         encoding="utf8",
         newline="",
     )
@@ -63,15 +241,136 @@ def fold_batch_norm_into_conv(
     return folded_weight, folded_bias
 
 
+def quantize_tensor_to_int8_range(tensor: torch.Tensor) -> torch.Tensor:
+    working = tensor.detach() if isinstance(tensor, torch.Tensor) else tensor
+    if isinstance(working, torch.Tensor) and working.is_quantized:
+        working = working.dequantize()
+    return torch.clamp(working.to(torch.float32).round(), -128, 127)
+
+
 def tensor_to_int8_list(tensor: torch.Tensor) -> list[int]:
-    flattened = tensor.reshape(-1).to(torch.float32)
-    return [int(value) for value in torch.clamp(flattened.round(), -128, 127).tolist()]
+    return [int(value) for value in quantize_tensor_to_int8_range(tensor).reshape(-1).tolist()]
 
 
-def build_pipeline_ir_payload(checkpoint_path: Path, repo_root: Path) -> dict[str, Any]:
-    checkpoint = load_quantized_checkpoint(checkpoint_path)
-    module_id = checkpoint["module_id"]
+def utc_now_iso8601() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
+def summarize_pipeline_ir(
+    payload: Mapping[str, Any],
+    checkpoint_path: Path,
+    output_path: Path,
+) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "model_name": payload["model_name"],
+        "num_layers": len(payload["layers"]),
+        "checkpoint_path": checkpoint_path.resolve().as_posix(),
+        "pipeline_ir_path": output_path.resolve().as_posix(),
+    }
+
+
+def build_pipeline_ir_payload(
+    checkpoint_path: Path,
+    repo_root: Path,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    raw_checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if not isinstance(raw_checkpoint, dict):
+        raise GoldenGenerationError("Checkpoint payload must deserialize to a dict.")
+
+    format_version = int(raw_checkpoint.get("format_version", 1))
+    if format_version == 1:
+        checkpoint = load_quantized_checkpoint(checkpoint_path)
+        payload = build_legacy_pipeline_ir_payload(checkpoint, repo_root)
+    elif format_version == 2:
+        if is_flat_checkpoint_v2(raw_checkpoint):
+            checkpoint = load_quantized_checkpoint(checkpoint_path)
+            payload = build_flat_checkpoint_pipeline_ir_payload(
+                checkpoint=checkpoint,
+                repo_root=repo_root,
+                generated_at=generated_at or checkpoint["generated_at"],
+            )
+        else:
+            payload = build_fx_pipeline_ir_payload(
+                checkpoint=raw_checkpoint,
+                repo_root=repo_root,
+                generated_at=generated_at or utc_now_iso8601(),
+            )
+    else:
+        raise GoldenGenerationError(f"Unsupported checkpoint format_version: {format_version}")
+
+    validate_pipeline_ir_payload(payload)
+    return payload
+
+
+def write_pipeline_ir(
+    repo_root: Path,
+    checkpoint_path: Path,
+    generated_at: str | None = None,
+) -> Path:
+    layer_ir_path, legacy_output_path, _ = get_output_paths(repo_root)
+    payload = build_pipeline_ir_payload(checkpoint_path, repo_root, generated_at=generated_at)
+    encoded = json.dumps(payload, indent=2) + "\n"
+    layer_ir_path.write_text(encoded, encoding="utf8", newline="")
+    legacy_output_path.write_text(encoded, encoding="utf8", newline="")
+    return layer_ir_path
+
+
+def validate_pipeline_ir_payload(payload: Mapping[str, Any]) -> None:
+    if payload.get("quantization") != "int8_symmetric_per_tensor":
+        raise GoldenGenerationError(
+            "PipelineIR quantization must be 'int8_symmetric_per_tensor'."
+        )
+
+    generated_at = payload.get("generated_at")
+    if not isinstance(generated_at, str) or not generated_at.endswith("Z"):
+        raise GoldenGenerationError("PipelineIR generated_at must be an ISO-8601 UTC string.")
+
+    layers = payload.get("layers")
+    if not isinstance(layers, list) or not layers:
+        raise GoldenGenerationError("PipelineIR must contain at least one layer.")
+
+    for layer in layers:
+        if not isinstance(layer, Mapping):
+            raise GoldenGenerationError("Each layer must be a dict.")
+        module_id = require_string(layer, "module_id", "LayerIR")
+        require_op_type(layer, f"LayerIR '{module_id}'")
+        coerce_shape(layer.get("input_shape"), f"{module_id}.input_shape")
+        coerce_shape(layer.get("output_shape"), f"{module_id}.output_shape")
+        coerce_shape(layer.get("weight_shape"), f"{module_id}.weight_shape")
+        coerce_nonnegative_int(layer.get("num_weights"), f"{module_id}.num_weights")
+        coerce_int(layer.get("zero_point"), f"{module_id}.zero_point")
+
+        for signal_name, literal in SIGNAL_LITERALS.items():
+            if layer.get(signal_name) != literal:
+                raise GoldenGenerationError(
+                    f"Layer '{module_id}' must set {signal_name}='{literal}'."
+                )
+
+        weights_path = layer.get("weights_path")
+        if not isinstance(weights_path, str) or not is_absolute_posix_path(weights_path):
+            raise GoldenGenerationError(
+                f"Layer '{module_id}' weights_path must be an absolute POSIX path."
+            )
+
+        bias_path = layer.get("bias_path")
+        if bias_path is not None and (
+            not isinstance(bias_path, str) or not is_absolute_posix_path(bias_path)
+        ):
+            raise GoldenGenerationError(
+                f"Layer '{module_id}' bias_path must be null or an absolute POSIX path."
+            )
+
+
+def build_legacy_pipeline_ir_payload(
+    checkpoint: Mapping[str, Any],
+    repo_root: Path,
+) -> dict[str, Any]:
+    module_id = require_string(checkpoint, "module_id", "checkpoint")
     weights_path, bias_path = get_weight_artifact_paths(repo_root, module_id)
     model = create_toy_model(checkpoint)
 
@@ -107,8 +406,8 @@ def build_pipeline_ir_payload(checkpoint_path: Path, repo_root: Path) -> dict[st
                 "op_type": "conv2d",
                 "input_shape": stream_shape,
                 "output_shape": stream_shape,
-                "weights_path": str(weights_path.resolve()),
-                "bias_path": str(bias_path.resolve()),
+                "weights_path": weights_path.resolve().as_posix(),
+                "bias_path": bias_path.resolve().as_posix(),
                 "weight_shape": checkpoint["weight_shape"],
                 "num_weights": 1,
                 "scale_factor": checkpoint["scale_factor"],
@@ -117,13 +416,7 @@ def build_pipeline_ir_payload(checkpoint_path: Path, repo_root: Path) -> dict[st
                 "clock_period_ns": checkpoint["clock_period_ns"],
                 "input_width_bits": checkpoint["input_width_bits"],
                 "output_width_bits": checkpoint["output_width_bits"],
-                "clock_signal": "clk",
-                "reset_signal": "rst_n",
-                "valid_in_signal": "valid_in",
-                "valid_out_signal": "valid_out",
-                "ready_in_signal": "ready_in",
-                "data_in_signal": "data_in",
-                "data_out_signal": "data_out",
+                **SIGNAL_LITERALS,
                 "golden_inputs": [input_stream],
                 "golden_outputs": [output_stream],
             }
@@ -131,8 +424,533 @@ def build_pipeline_ir_payload(checkpoint_path: Path, repo_root: Path) -> dict[st
     }
 
 
-def write_pipeline_ir(repo_root: Path, checkpoint_path: Path) -> Path:
-    output_path, _ = get_output_paths(repo_root)
-    payload = build_pipeline_ir_payload(checkpoint_path, repo_root)
-    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf8")
-    return output_path
+def is_flat_checkpoint_v2(checkpoint: Mapping[str, Any]) -> bool:
+    if any(
+        key in checkpoint
+        for key in ("quantized_residual_stack", "residual_stack", "model", "residual_stack_spec", "model_spec", "graph")
+    ):
+        return False
+
+    raw_layers = checkpoint.get("layers")
+    if not isinstance(raw_layers, Mapping) or not raw_layers:
+        return False
+
+    first_layer = next(iter(raw_layers.values()))
+    return isinstance(first_layer, Mapping) and "num_weights" not in first_layer
+
+
+def build_flat_checkpoint_pipeline_ir_payload(
+    checkpoint: Mapping[str, Any],
+    repo_root: Path,
+    generated_at: str,
+) -> dict[str, Any]:
+    raw_layers = checkpoint.get("layers")
+    if not isinstance(raw_layers, Mapping) or not raw_layers:
+        raise GoldenGenerationError("Checkpoint v2 must contain a non-empty 'layers' mapping.")
+
+    layer_payloads: list[dict[str, Any]] = []
+
+    for module_id, metadata in raw_layers.items():
+        if not isinstance(module_id, str) or not isinstance(metadata, Mapping):
+            raise GoldenGenerationError("Checkpoint v2 layers must map string ids to dict metadata.")
+
+        op_type = require_op_type(metadata, f"checkpoint layer '{module_id}'")
+        input_shape = coerce_shape(metadata.get("input_shape"), f"{module_id}.input_shape")
+        output_shape = coerce_shape(metadata.get("output_shape"), f"{module_id}.output_shape")
+        scale_factor = float(metadata.get("scale_factor"))
+        zero_point = coerce_int(metadata.get("zero_point"), f"{module_id}.zero_point")
+        input_width_bits = coerce_int(metadata.get("input_width_bits"), f"{module_id}.input_width_bits")
+        output_width_bits = coerce_int(metadata.get("output_width_bits"), f"{module_id}.output_width_bits")
+
+        weights_path, bias_path = get_weight_artifact_paths(repo_root, module_id)
+        if op_type == "conv2d":
+            weight_values = metadata.get("weight_int8")
+            if not isinstance(weight_values, list) or not all(isinstance(value, int) for value in weight_values):
+                raise GoldenGenerationError(
+                    f"Checkpoint layer '{module_id}' field 'weight_int8' must be a list of integers."
+                )
+            bias_values = metadata.get("bias_int32")
+            if bias_values is not None and (
+                not isinstance(bias_values, list) or not all(isinstance(value, int) for value in bias_values)
+            ):
+                raise GoldenGenerationError(
+                    f"Checkpoint layer '{module_id}' field 'bias_int32' must be null or a list of integers."
+                )
+            weight_shape = coerce_shape(metadata.get("weight_shape"), f"{module_id}.weight_shape")
+            write_signed_int8_hex(weight_values, weights_path)
+            resolved_bias_path: str | None = None
+            if bias_values is not None:
+                write_signed_int32_hex(bias_values, bias_path)
+                resolved_bias_path = bias_path.resolve().as_posix()
+            num_weights = len(weight_values)
+        else:
+            write_signed_int8_hex([], weights_path)
+            weight_shape = [1, 1, 1, 1]
+            resolved_bias_path = None
+            num_weights = 0
+
+        layer_payloads.append(
+            {
+                "module_id": module_id,
+                "op_type": op_type,
+                "input_shape": input_shape,
+                "output_shape": output_shape,
+                "weights_path": weights_path.resolve().as_posix(),
+                "bias_path": resolved_bias_path,
+                "weight_shape": weight_shape,
+                "num_weights": num_weights,
+                "scale_factor": scale_factor,
+                "zero_point": zero_point,
+                "pipeline_latency_cycles": PIPELINE_LATENCY_CYCLES[op_type],
+                "clock_period_ns": 20,
+                "input_width_bits": input_width_bits,
+                "output_width_bits": output_width_bits,
+                **SIGNAL_LITERALS,
+                "golden_inputs": [],
+                "golden_outputs": [],
+            }
+        )
+
+    return {
+        "model_name": "resnet50",
+        "quantization": "int8_symmetric_per_tensor",
+        "generated_at": generated_at,
+        "layers": layer_payloads,
+    }
+
+
+def build_fx_pipeline_ir_payload(
+    checkpoint: Mapping[str, Any],
+    repo_root: Path,
+    generated_at: str,
+) -> dict[str, Any]:
+    layers = require_layer_mapping(checkpoint)
+    model = load_residual_stack_model(checkpoint, layers)
+    traced_model = trace_residual_stack(model)
+    trace_layers = collect_trace_layers(traced_model, layers)
+    if not trace_layers:
+        raise GoldenGenerationError("No conv2d/relu/add nodes were found in the fx trace.")
+
+    first_input_shape = coerce_shape(
+        layers[trace_layers[0]["module_id"]]["input_shape"],
+        f"{trace_layers[0]['module_id']}.input_shape",
+    )
+    input_stream = build_deterministic_input_stream(first_input_shape)
+    captured_outputs = capture_golden_outputs(traced_model, trace_layers, layers, input_stream)
+
+    previous_vectors = [tensor_to_int8_list(vector) for vector in input_stream]
+    layer_payloads: list[dict[str, Any]] = []
+
+    for trace_layer in trace_layers:
+        module_id = trace_layer["module_id"]
+        op_type = trace_layer["op_type"]
+        metadata = layers[module_id]
+        weight_values, bias_values = write_layer_hex_artifacts(
+            repo_root=repo_root,
+            module_id=module_id,
+            op_type=op_type,
+            metadata=metadata,
+            traced_model=traced_model,
+        )
+
+        weights_path, bias_path = get_weight_artifact_paths(repo_root, module_id)
+        expected_num_weights = coerce_nonnegative_int(metadata["num_weights"], f"{module_id}.num_weights")
+        if expected_num_weights != len(weight_values):
+            raise GoldenGenerationError(
+                f"Layer '{module_id}' num_weights={expected_num_weights} but serialized {len(weight_values)} values."
+            )
+
+        layer_payload = {
+            "module_id": module_id,
+            "op_type": op_type,
+            "input_shape": coerce_shape(metadata["input_shape"], f"{module_id}.input_shape"),
+            "output_shape": coerce_shape(metadata["output_shape"], f"{module_id}.output_shape"),
+            "weights_path": weights_path.resolve().as_posix(),
+            "bias_path": None if op_type != "conv2d" else bias_path.resolve().as_posix(),
+            "weight_shape": coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape"),
+            "num_weights": expected_num_weights,
+            "scale_factor": float(metadata["scale_factor"]),
+            "zero_point": coerce_int(metadata["zero_point"], f"{module_id}.zero_point"),
+            "pipeline_latency_cycles": PIPELINE_LATENCY_CYCLES[op_type],
+            "clock_period_ns": 20,
+            "input_width_bits": 8,
+            "output_width_bits": 8,
+            **SIGNAL_LITERALS,
+            "golden_inputs": previous_vectors,
+            "golden_outputs": captured_outputs[module_id],
+        }
+        if op_type == "conv2d" and not bias_values:
+            raise GoldenGenerationError(f"Layer '{module_id}' did not serialize a bias vector.")
+        layer_payloads.append(layer_payload)
+        previous_vectors = captured_outputs[module_id]
+
+    return {
+        "model_name": "resnet50",
+        "quantization": "int8_symmetric_per_tensor",
+        "generated_at": generated_at,
+        "layers": layer_payloads,
+    }
+
+
+def load_residual_stack_model(
+    checkpoint: Mapping[str, Any],
+    layers: Mapping[str, Mapping[str, Any]],
+) -> nn.Module:
+    for key in ("quantized_residual_stack", "residual_stack", "model"):
+        candidate = checkpoint.get(key)
+        if isinstance(candidate, nn.Module):
+            return candidate.eval()
+
+    graph_spec = checkpoint.get("residual_stack_spec") or checkpoint.get("model_spec") or checkpoint.get("graph")
+    if graph_spec is None:
+        raise GoldenGenerationError(
+            "Checkpoint v2 must contain a residual_stack/model nn.Module or a residual_stack_spec graph."
+        )
+
+    if isinstance(graph_spec, Mapping):
+        operations = graph_spec.get("operations")
+        if not isinstance(operations, list) or not operations:
+            raise GoldenGenerationError("Checkpoint residual_stack_spec.operations must be a non-empty list.")
+        output_module_id = graph_spec.get("output_module_id")
+        input_name = str(graph_spec.get("input_name", "input"))
+    elif isinstance(graph_spec, list):
+        operations = graph_spec
+        output_module_id = None
+        input_name = "input"
+    else:
+        raise GoldenGenerationError("Checkpoint residual_stack_spec must be a dict or list.")
+
+    return CheckpointResidualStack(
+        operations=operations,
+        layers=layers,
+        output_module_id=None if output_module_id is None else str(output_module_id),
+        input_name=input_name,
+    ).eval()
+
+
+def trace_residual_stack(model: nn.Module) -> fx.GraphModule:
+    tracer = ResidualStackTracer()
+    graph = tracer.trace(model)
+    for node in graph.nodes:
+        if isinstance(node.type, str):
+            node.type = None
+    return fx.GraphModule(model, graph)
+
+
+def collect_trace_layers(
+    traced_model: fx.GraphModule,
+    layers: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    named_modules = dict(traced_model.named_modules())
+    used_module_ids: set[str] = set()
+    trace_layers: list[dict[str, str]] = []
+
+    for node in traced_model.graph.nodes:
+        module_id: str | None = None
+        op_type: str | None = None
+
+        if node.op == "call_module":
+            module_id = str(node.target)
+            module = named_modules[module_id]
+            if isinstance(module, (Int8Conv2d, nn.Conv2d)):
+                op_type = "conv2d"
+            elif isinstance(module, (Int8ReLU, nn.ReLU, nn.ReLU6)):
+                op_type = "relu"
+            elif isinstance(module, Int8Add) or module.__class__.__name__.lower() in {"residualadd", "int8add"}:
+                op_type = "add"
+        elif node.op == "call_function":
+            if node.target in (operator.add, torch.add):
+                op_type = "add"
+            elif node.target in (torch.relu, F.relu):
+                op_type = "relu"
+        elif node.op == "call_method":
+            if node.target == "add":
+                op_type = "add"
+            elif node.target == "relu":
+                op_type = "relu"
+
+        if op_type is None:
+            continue
+        if module_id is None:
+            module_id = resolve_functional_module_id(node, op_type, layers, used_module_ids)
+        if module_id not in layers:
+            raise GoldenGenerationError(
+                f"fx node '{node.name}' resolved to '{module_id}', which is missing from checkpoint['layers']."
+            )
+        trace_layers.append({"module_id": module_id, "op_type": op_type, "node_name": node.name})
+        used_module_ids.add(module_id)
+
+    return trace_layers
+
+
+def build_deterministic_input_stream(shape: Sequence[int], count: int = 8) -> list[torch.Tensor]:
+    torch.manual_seed(0)
+    return [
+        quantize_tensor_to_int8_range(torch.randint(-128, 128, tuple(shape), dtype=torch.int32))
+        for _ in range(count)
+    ]
+
+
+def capture_golden_outputs(
+    traced_model: fx.GraphModule,
+    trace_layers: Sequence[Mapping[str, str]],
+    layers: Mapping[str, Mapping[str, Any]],
+    input_stream: Sequence[torch.Tensor],
+) -> dict[str, list[list[int]]]:
+    outputs: dict[str, list[list[int]]] = {
+        trace_layer["module_id"]: [] for trace_layer in trace_layers
+    }
+
+    for input_tensor in input_stream:
+        interpreter = ActivationCaptureInterpreter(traced_model)
+        interpreter.run(input_tensor.clone())
+        for trace_layer in trace_layers:
+            module_id = trace_layer["module_id"]
+            node_name = trace_layer["node_name"]
+            if node_name not in interpreter.captured_outputs:
+                raise GoldenGenerationError(f"fx node '{node_name}' did not produce a runtime activation.")
+            value = interpreter.captured_outputs[node_name]
+            if not isinstance(value, torch.Tensor):
+                raise GoldenGenerationError(f"fx node '{node_name}' returned a non-tensor output.")
+            actual_shape = [int(dim) for dim in quantize_tensor_to_int8_range(value).shape]
+            expected_shape = coerce_shape(layers[module_id]["output_shape"], f"{module_id}.output_shape")
+            if actual_shape != expected_shape:
+                raise GoldenGenerationError(
+                    f"Layer '{module_id}' produced shape {actual_shape}, expected {expected_shape}."
+                )
+            outputs[module_id].append(tensor_to_int8_list(value))
+
+    return outputs
+
+
+def write_layer_hex_artifacts(
+    repo_root: Path,
+    module_id: str,
+    op_type: str,
+    metadata: Mapping[str, Any],
+    traced_model: fx.GraphModule,
+) -> tuple[list[int], list[int]]:
+    weights_path, bias_path = get_weight_artifact_paths(repo_root, module_id)
+    weight_values: list[int] = []
+    bias_values: list[int] = []
+
+    if op_type == "conv2d":
+        weight_tensor, bias_tensor = resolve_layer_parameters(
+            metadata,
+            traced_model=traced_model,
+            module_id=module_id,
+        )
+        if metadata.get("batch_norm") is not None and has_serialized_weight_values(metadata):
+            weight_tensor, bias_tensor = fold_batch_norm_from_metadata(
+                weight_tensor,
+                bias_tensor,
+                metadata["batch_norm"],
+            )
+        if bias_tensor is None:
+            bias_tensor = torch.zeros(weight_tensor.shape[0], dtype=torch.float32)
+        weight_values = tensor_to_int8_list(weight_tensor)
+        bias_values = tensor_to_int8_list(bias_tensor)
+
+    write_signed_int8_hex(weight_values, weights_path)
+    write_signed_int8_hex(bias_values, bias_path)
+    return weight_values, bias_values
+
+
+def resolve_layer_parameters(
+    metadata: Mapping[str, Any],
+    traced_model: fx.GraphModule | None = None,
+    module_id: str | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    weight_shape = coerce_shape(metadata["weight_shape"], "weight_shape")
+    weight_key = next((key for key in ("weights", "weight", "conv_weight") if key in metadata), None)
+    bias_key = next((key for key in ("bias", "conv_bias") if key in metadata), None)
+
+    if weight_key is not None:
+        weight_tensor = tensor_from_numeric_values(metadata[weight_key], weight_shape, weight_key)
+        bias_tensor = None
+        if bias_key is not None:
+            bias_tensor = tensor_from_numeric_values(metadata[bias_key], [weight_shape[0]], bias_key)
+        return weight_tensor, bias_tensor
+
+    if traced_model is None or module_id is None:
+        raise GoldenGenerationError(
+            "Checkpoint layer metadata is missing serialized weights and no traced module was provided."
+        )
+
+    module = get_module_by_path(traced_model, module_id)
+    raw_weight = getattr(module, "weight", None)
+    if not isinstance(raw_weight, torch.Tensor):
+        raise GoldenGenerationError(f"Layer '{module_id}' does not expose a tensor weight.")
+    raw_bias = getattr(module, "bias", None)
+    bias_tensor = raw_bias.detach().to(torch.float32) if isinstance(raw_bias, torch.Tensor) else None
+    return raw_weight.detach().to(torch.float32).reshape(tuple(weight_shape)), bias_tensor
+
+
+def fold_batch_norm_from_metadata(
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    batch_norm: Any,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if not isinstance(batch_norm, Mapping):
+        raise GoldenGenerationError("batch_norm metadata must be a dict.")
+    out_channels = weight.shape[0]
+    return fold_batch_norm_into_conv(
+        weight,
+        bias,
+        tensor_from_numeric_values(batch_norm.get("weight"), [out_channels], "batch_norm.weight"),
+        tensor_from_numeric_values(batch_norm.get("bias"), [out_channels], "batch_norm.bias"),
+        tensor_from_numeric_values(batch_norm.get("running_mean"), [out_channels], "batch_norm.running_mean"),
+        tensor_from_numeric_values(batch_norm.get("running_var"), [out_channels], "batch_norm.running_var"),
+        float(batch_norm.get("eps", 1e-5)),
+    )
+
+
+def require_layer_mapping(checkpoint: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_layers = checkpoint.get("layers")
+    if not isinstance(raw_layers, Mapping) or not raw_layers:
+        raise GoldenGenerationError("Checkpoint v2 must contain a non-empty 'layers' mapping.")
+    layers: dict[str, dict[str, Any]] = {}
+    for module_id, metadata in raw_layers.items():
+        if not isinstance(module_id, str):
+            raise GoldenGenerationError("Checkpoint layer keys must be strings.")
+        if not isinstance(metadata, Mapping):
+            raise GoldenGenerationError(f"Checkpoint layer '{module_id}' must map to a dict.")
+        for field in ("input_shape", "output_shape", "weight_shape", "num_weights", "scale_factor", "zero_point"):
+            if field not in metadata:
+                raise GoldenGenerationError(
+                    f"Checkpoint layer '{module_id}' is missing required field '{field}'."
+                )
+        layers[module_id] = dict(metadata)
+    return layers
+
+
+def resolve_functional_module_id(
+    node: fx.Node,
+    op_type: str,
+    layers: Mapping[str, Mapping[str, Any]],
+    used_module_ids: set[str],
+) -> str:
+    if node.name in layers and node.name not in used_module_ids:
+        return node.name
+
+    for module_id, metadata in layers.items():
+        if module_id in used_module_ids:
+            continue
+        if metadata.get("fx_node_name") == node.name:
+            return module_id
+
+    candidates = [
+        module_id
+        for module_id, metadata in layers.items()
+        if module_id not in used_module_ids and metadata.get("op_type") == op_type
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    raise GoldenGenerationError(
+        f"Unable to map fx node '{node.name}' ({op_type}) to a unique checkpoint layer key."
+    )
+
+
+def register_module_path(root: nn.Module, module_path: str, module: nn.Module) -> None:
+    parts = module_path.split(".")
+    container: nn.Module = root
+    for part in parts[:-1]:
+        child = container._modules.get(part)
+        if child is None:
+            child = nn.Module()
+            container.add_module(part, child)
+        container = child
+    container.add_module(parts[-1], module)
+
+
+def get_module_by_path(root: nn.Module, module_path: str) -> nn.Module:
+    current: nn.Module = root
+    for part in module_path.split("."):
+        current = getattr(current, part)
+    return current
+
+
+def tensor_from_numeric_values(value: Any, shape: Sequence[int], field_name: str) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().to(torch.float32)
+    elif isinstance(value, list):
+        expected_length = 1
+        for dimension in shape:
+            expected_length *= int(dimension)
+        if len(value) != expected_length:
+            raise GoldenGenerationError(
+                f"Field '{field_name}' must contain {expected_length} values, got {len(value)}."
+            )
+        tensor = torch.tensor(value, dtype=torch.float32)
+    else:
+        raise GoldenGenerationError(f"Field '{field_name}' must be a tensor or numeric list.")
+    return tensor.reshape(tuple(int(dimension) for dimension in shape))
+
+
+def has_serialized_weight_values(metadata: Mapping[str, Any]) -> bool:
+    return any(key in metadata for key in ("weights", "weight", "conv_weight"))
+
+
+def require_string(mapping: Mapping[str, Any], field: str, context: str) -> str:
+    value = mapping.get(field)
+    if not isinstance(value, str) or not value:
+        raise GoldenGenerationError(f"{context} field '{field}' must be a non-empty string.")
+    return value
+
+
+def require_op_type(mapping: Mapping[str, Any], context: str) -> str:
+    value = mapping.get("op_type")
+    if value not in SUPPORTED_OP_TYPES:
+        raise GoldenGenerationError(
+            f"{context} field 'op_type' must be one of {sorted(SUPPORTED_OP_TYPES)}, got {value!r}."
+        )
+    return str(value)
+
+
+def coerce_shape(value: Any, field_name: str) -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise GoldenGenerationError(f"Field '{field_name}' must be a non-empty list.")
+    if not all(isinstance(item, int) and item > 0 for item in value):
+        raise GoldenGenerationError(f"Field '{field_name}' must contain positive integers only.")
+    return [int(item) for item in value]
+
+
+def coerce_int_sequence(value: Any, field_name: str) -> list[int]:
+    if not isinstance(value, (list, tuple)) or not value or not all(isinstance(item, int) for item in value):
+        raise GoldenGenerationError(f"Field '{field_name}' must be a non-empty integer sequence.")
+    return [int(item) for item in value]
+
+
+def coerce_int(value: Any, field_name: str) -> int:
+    if not isinstance(value, int):
+        raise GoldenGenerationError(f"Field '{field_name}' must be an integer.")
+    return int(value)
+
+
+def coerce_nonnegative_int(value: Any, field_name: str) -> int:
+    if not isinstance(value, int) or value < 0:
+        raise GoldenGenerationError(f"Field '{field_name}' must be a non-negative integer.")
+    return int(value)
+
+
+def is_absolute_posix_path(path_value: str) -> bool:
+    # Must use forward slashes only (POSIX formatting).
+    if "\\" in path_value:
+        return False
+    # Native POSIX absolute (`/home/...`).
+    if PurePosixPath(path_value).is_absolute():
+        return True
+    # Windows drive-rooted path emitted by Path.resolve().as_posix() on
+    # Windows (e.g. `C:/Users/...`). The downstream TypeScript code uses
+    # path.isAbsolute() which treats these as absolute on win32, and the
+    # existing smoke fixtures use this exact form — accept it here so the
+    # Python validator matches the rest of the pipeline.
+    if (
+        len(path_value) >= 3
+        and path_value[1] == ":"
+        and path_value[2] == "/"
+        and path_value[0].isalpha()
+    ):
+        return True
+    return False

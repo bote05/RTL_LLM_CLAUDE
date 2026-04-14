@@ -2,6 +2,7 @@ import { appendFile, access, mkdir, readFile, writeFile } from "node:fs/promises
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import {
@@ -37,7 +38,6 @@ const repoRoot = path.resolve(sdkRoot, "..");
 const pluginPath = path.resolve(repoRoot, "nn2rtl-plugin");
 
 export const AGENT_SLUGS = {
-  Conductor: "conductor",
   Cartographer: "cartographer",
   Foundry: "foundry",
   Assayer: "assayer",
@@ -45,7 +45,6 @@ export const AGENT_SLUGS = {
 } as const satisfies Record<AgentName, string>;
 
 const AGENT_MCP_TOOLS = {
-  conductor: [] as string[],
   cartographer: ["mcp__nn2rtl-tools__read_weights"],
   foundry: ["mcp__nn2rtl-tools__write_verilog"],
   assayer: [
@@ -67,21 +66,26 @@ type AgentRunResult<T> = {
   result: SDKResultMessage;
   messages: SDKMessage[];
 };
-type FrontmatterRecord = Record<string, string>;
+type FrontmatterRecord = Record<string, unknown>;
+
+export type YosysFn = (module: VerilogModule) => Promise<SynthesisReport>;
 
 export type OrchestratorRuntime = {
   now: () => Date;
   queryFn: typeof query;
+  yosysFn: YosysFn;
 };
 
 export type RunPipelineOptions = {
   resume?: boolean;
   runtime?: Partial<OrchestratorRuntime>;
+  maxRetries?: number;
 };
 
 const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
   now: () => new Date(),
   queryFn: query,
+  yosysFn: (module) => invokeYosys(module),
 };
 
 function toOutputFormat(schema: z.ZodType): OutputFormat {
@@ -141,7 +145,26 @@ function evaluateSynthesis(
     };
   }
 
-  if (report.fmax_mhz > 0 && report.fmax_mhz < FMAX_TARGET_MHZ) {
+  if (report.fmax_mhz <= 0) {
+    // Yosys returned a valid report but neither abc9 delay nor an explicit
+    // MHz number could be parsed. Without a measurable critical path we
+    // cannot prove the timing gate — treat that as a synthesis-gate failure
+    // so the issue is visible rather than silently skipped.
+    return {
+      ...verifiedResult,
+      module_id: moduleId,
+      status: "fail",
+      failure_class: "synthesis_failed",
+      fix_hint: [
+        "Yosys synthesis completed but no Fmax could be measured from the report.",
+        "Rewrite the module so `synth_ice40 -abc9` emits an abc9 delay line, or remove constructs that prevent timing analysis.",
+        "Yosys output:",
+        report.report,
+      ].join("\n\n"),
+    };
+  }
+
+  if (report.fmax_mhz < FMAX_TARGET_MHZ) {
     // Synthesis succeeded but critical path is too long. Fix strategy:
     // insert a pipeline register in the longest combinational path.
     // Note the latency-contract implication — adding a register changes
@@ -196,44 +219,50 @@ export function normalizeAgentName(slug: AgentSlug): AgentName {
 export function parseFrontmatter(
   markdown: string,
 ): { frontmatter: FrontmatterRecord; body: string } {
-  const match = markdown.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) {
     throw new Error("Expected agent markdown to start with YAML frontmatter.");
   }
 
   const [, rawFrontmatter, body] = match;
+  const parsed: unknown = parseYaml(rawFrontmatter);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Agent frontmatter must be a YAML mapping.");
+  }
+
   const frontmatter: FrontmatterRecord = {};
-
-  for (const line of rawFrontmatter.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex === -1) {
-      throw new Error(`Invalid frontmatter line '${trimmed}'.`);
-    }
-
-    const key = trimmed.slice(0, separatorIndex).trim();
-    const value = trimmed.slice(separatorIndex + 1).trim();
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     frontmatter[key] = value;
   }
 
   return { frontmatter, body: body.trim() };
 }
 
-export function splitCsvField(value: string | undefined): string[] | undefined {
-  if (!value) {
+// Normalize a frontmatter value into the string list the dispatcher expects.
+// The parser accepts either an explicit YAML list (`tools: [Bash, Read]`) or
+// the legacy inline CSV form (`tools: Bash, Read`) used in the existing agent
+// markdown files.
+export function toStringList(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) {
     return undefined;
   }
 
-  const parts = value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : String(entry).trim()))
+      .filter(Boolean);
+    return parts.length > 0 ? parts : undefined;
+  }
 
-  return parts.length > 0 ? parts : undefined;
+  if (typeof value === "string") {
+    const parts = value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts : undefined;
+  }
+
+  throw new Error(`Unsupported frontmatter list value: ${JSON.stringify(value)}`);
 }
 
 function isResultMessage(message: SDKMessage): message is SDKResultMessage {
@@ -326,23 +355,23 @@ export async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentD
     : "";
   const parsedSkill = skillMarkdown ? parseFrontmatter(skillMarkdown) : null;
 
-  // TODO: If the plugin frontmatter becomes more expressive, replace this hand-rolled parser with a real YAML parser and shared schema validation.
-  const builtInTools = splitCsvField(frontmatter.tools) ?? [];
-  const disallowedTools = splitCsvField(frontmatter.disallowedTools);
+  const builtInTools = toStringList(frontmatter.tools) ?? [];
+  const disallowedTools = toStringList(frontmatter.disallowedTools);
   const mcpTools = [...AGENT_MCP_TOOLS[slug]];
   const combinedTools = [...new Set([...builtInTools, ...mcpTools])];
+  const skills = toStringList(frontmatter.skills);
   const prompt = parsedSkill
     ? `${body}\n\nSupplemental skill reference:\n\n${parsedSkill.body}`
     : body;
 
-  // TODO: Switch this back to AgentDefinition.skills once the published SDK typings expose the documented field and the installable package typechecks cleanly.
-  // TODO: Restore AgentDefinition.maxTurns once the published SDK typings match the documented field; for now the parent query's maxTurns acts as the guardrail.
   return {
     description: AGENT_CONFIG[agentName].description,
     prompt,
     tools: combinedTools.length > 0 ? combinedTools : undefined,
     disallowedTools,
     model: AGENT_CONFIG[agentName].model,
+    maxTurns: AGENT_CONFIG[agentName].maxTurns,
+    skills,
   };
 }
 
@@ -595,7 +624,7 @@ async function processYosysOutcome(
 ): Promise<void> {
   let report: SynthesisReport;
   try {
-    report = await invokeYosys(module);
+    report = await runtime.yosysFn(module);
   } catch (error: unknown) {
     // Tool itself crashed before producing a structured report. Treat as a
     // synthesis failure so Surgeon gets a chance to repair; the fix_hint
@@ -844,7 +873,8 @@ export async function runPipeline(
   const pipelineIr = layerIrBootstrap.pipelineIr;
   const moduleIds = pipelineIr.layers.map((layer) => layer.module_id);
   const statePath = resolveFromSdk(PIPELINE_CONFIG.pipeline_state_path);
-  const manager = new PipelineStateManager(moduleIds, PIPELINE_CONFIG.max_retries);
+  const maxRetries = options.maxRetries ?? PIPELINE_CONFIG.max_retries;
+  const manager = new PipelineStateManager(moduleIds, maxRetries);
 
   if (resume && (await pathExists(statePath))) {
     await manager.loadState(statePath);
@@ -1027,7 +1057,9 @@ export async function runPipeline(
       continue;
     }
 
-    // TODO: If the state machine is expanded to schedule Assayer as a first-class tick() action, implement that path here instead of throwing.
+    // tick() only emits invoke_foundry / invoke_surgeon; Assayer is always run
+    // inline after a generation step above. Reaching here means PipelineStateManager
+    // added a new action type that runPipeline was not updated to handle.
     throw new Error(`Unhandled pipeline action '${JSON.stringify(nextAction)}'.`);
   }
 
@@ -1042,24 +1074,60 @@ export async function runPipeline(
   );
 }
 
-export function parseCliArgs(argv: string[]): { checkpointPath: string; resume: boolean } {
-  const resume = argv.includes("--resume");
-  const positional = argv.filter((arg) => !arg.startsWith("--"));
+export function parseCliArgs(argv: string[]): {
+  checkpointPath: string;
+  resume: boolean;
+  maxRetries: number | undefined;
+} {
+  let resume = false;
+  let maxRetries: number | undefined;
+  const positional: string[] = [];
 
-  if (positional.length < 1) {
-    throw new Error("Usage: tsx main.ts <checkpoint-path> [--resume]");
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--resume") {
+      resume = true;
+    } else if (arg === "--max-retries") {
+      const next = argv[++i];
+      if (next === undefined) {
+        throw new Error("--max-retries requires a non-negative integer value.");
+      }
+      const parsed = Number(next);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error(`--max-retries must be a non-negative integer, got '${next}'.`);
+      }
+      maxRetries = parsed;
+    } else if (arg.startsWith("--max-retries=")) {
+      const raw = arg.slice("--max-retries=".length);
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error(`--max-retries must be a non-negative integer, got '${raw}'.`);
+      }
+      maxRetries = parsed;
+    } else if (arg.startsWith("--")) {
+      throw new Error(`Unknown flag '${arg}'.`);
+    } else {
+      positional.push(arg);
+    }
   }
 
-  // TODO: Extend CLI parsing if the pipeline grows knobs like alternate plugins, custom output roots, or per-run retry budgets.
+  if (positional.length < 1) {
+    throw new Error("Usage: tsx main.ts <checkpoint-path> [--resume] [--max-retries N]");
+  }
+
   return {
     checkpointPath: positional[0],
     resume,
+    maxRetries,
   };
 }
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const cli = parseCliArgs(argv);
-  await runPipeline(cli.checkpointPath, { resume: cli.resume });
+  await runPipeline(cli.checkpointPath, {
+    resume: cli.resume,
+    maxRetries: cli.maxRetries,
+  });
 }
 
 export async function handlePipelineError(

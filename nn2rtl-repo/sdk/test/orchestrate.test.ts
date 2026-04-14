@@ -16,7 +16,7 @@ import {
   parseFrontmatter,
   readJsonFile,
   requireStructuredOutput,
-  splitCsvField,
+  toStringList,
   writeJsonFile,
 } from "../orchestrate.js";
 import { layerIrSchema } from "../schemas.js";
@@ -41,9 +41,17 @@ describe("orchestrate helpers", () => {
     expect(() => parseFrontmatter("Hello")).toThrow("Expected agent markdown");
   });
 
-  it("splits CSV fields and trims whitespace", () => {
-    expect(splitCsvField("a, b, , c")).toEqual(["a", "b", "c"]);
-    expect(splitCsvField(undefined)).toBeUndefined();
+  it("normalizes frontmatter list values from CSV strings and YAML arrays", () => {
+    expect(toStringList("a, b, , c")).toEqual(["a", "b", "c"]);
+    expect(toStringList(["a", "b", "c"])).toEqual(["a", "b", "c"]);
+    expect(toStringList(undefined)).toBeUndefined();
+    expect(toStringList(null)).toBeUndefined();
+  });
+
+  it("parses YAML lists in frontmatter", () => {
+    const parsed = parseFrontmatter("---\nmodel: sonnet\ntools:\n  - Bash\n  - Read\n---\nBody");
+    expect(parsed.frontmatter).toEqual({ model: "sonnet", tools: ["Bash", "Read"] });
+    expect(parsed.body).toBe("Body");
   });
 
   it("builds delegation prompts with embedded JSON", () => {

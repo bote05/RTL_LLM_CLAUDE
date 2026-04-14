@@ -12,17 +12,19 @@
     "dev": "tsx watch main.ts",
     "pipeline": "tsx main.ts",
     "test": "vitest",
-    "test:fast": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --exclude=test/**/*.full.test.ts",
+    "test:fast": "cross-env TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --exclude=test/**/*.full.test.ts",
     "test:full": "vitest run",
-    "coverage": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --coverage"
+    "coverage": "cross-env TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --coverage"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.0",
+    "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
     "@vitest/coverage-v8": "^3.2.4",
+    "cross-env": "^10.1.0",
     "tsx": "^4.0.0",
     "typescript": "^5.4.5",
     "vitest": "^3.2.4"

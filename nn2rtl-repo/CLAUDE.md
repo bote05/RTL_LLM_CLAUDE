@@ -21,10 +21,10 @@ Read this file before touching the repo.
 
 ## Agents
 
-- `conductor`
-  - Role: pipeline orchestrator and state owner
-  - Model: `opus`
-  - Defined in `nn2rtl-plugin/agents/conductor.md`
+The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` plays the
+pipeline-coordinator role itself; the LLM agents below are the only ones
+dispatched via the SDK's `query()` path.
+
 - `cartographer`
   - Role: PyTorch checkpoint and layer IR extractor
   - Model: `sonnet`

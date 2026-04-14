@@ -10,10 +10,88 @@ from scripts.golden_impl import (
     build_pipeline_ir_payload,
     fold_batch_norm_into_conv,
     int8_to_hex,
+    is_absolute_posix_path,
     write_pipeline_ir,
     write_signed_int8_hex,
 )
-from scripts.quantize_impl import build_toy_quantized_checkpoint, get_quantized_checkpoint_path, write_quantized_checkpoint
+from scripts.quantize_impl import (
+    build_toy_quantized_checkpoint,
+    get_quantized_checkpoint_path,
+    write_quantized_checkpoint,
+)
+
+
+def build_fx_checkpoint_payload() -> dict[str, object]:
+    scalar_shape = [1, 1, 1, 1]
+    passthrough_shape = [1]
+    return {
+        "format_version": 2,
+        "model_name": "resnet50",
+        "quantization": "int8_symmetric_per_tensor",
+        "generated_at": "2026-04-14T12:00:00Z",
+        "residual_stack_spec": {
+            "input_name": "input",
+            "output_module_id": "relu2",
+            "operations": [
+                {"module_id": "conv1", "op_type": "conv2d", "input": "input"},
+                {"module_id": "relu1", "op_type": "relu", "input": "conv1"},
+                {"module_id": "conv2", "op_type": "conv2d", "input": "relu1"},
+                {"module_id": "add0", "op_type": "add", "lhs": "conv2", "rhs": "input"},
+                {"module_id": "relu2", "op_type": "relu", "input": "add0"},
+            ],
+        },
+        "layers": {
+            "conv1": {
+                "op_type": "conv2d",
+                "input_shape": list(scalar_shape),
+                "output_shape": list(scalar_shape),
+                "weight_shape": [1, 1, 1, 1],
+                "num_weights": 1,
+                "scale_factor": 0.125,
+                "zero_point": 0,
+                "weights": [2],
+                "bias": [1],
+            },
+            "relu1": {
+                "op_type": "relu",
+                "input_shape": list(scalar_shape),
+                "output_shape": list(scalar_shape),
+                "weight_shape": list(passthrough_shape),
+                "num_weights": 0,
+                "scale_factor": 1.0,
+                "zero_point": 0,
+            },
+            "conv2": {
+                "op_type": "conv2d",
+                "input_shape": list(scalar_shape),
+                "output_shape": list(scalar_shape),
+                "weight_shape": [1, 1, 1, 1],
+                "num_weights": 1,
+                "scale_factor": 0.25,
+                "zero_point": 0,
+                "weights": [-1],
+                "bias": [2],
+            },
+            "add0": {
+                "op_type": "add",
+                "input_shape": list(scalar_shape),
+                "output_shape": list(scalar_shape),
+                "weight_shape": list(passthrough_shape),
+                "num_weights": 0,
+                "scale_factor": 1.0,
+                "zero_point": 0,
+            },
+            "relu2": {
+                "op_type": "relu",
+                "input_shape": list(scalar_shape),
+                "output_shape": list(scalar_shape),
+                "weight_shape": list(passthrough_shape),
+                "num_weights": 0,
+                "scale_factor": 1.0,
+                "zero_point": 0,
+            },
+        },
+    }
 
 
 def test_int8_to_hex_serializes_signed_values() -> None:
@@ -57,7 +135,7 @@ def test_fold_batch_norm_into_conv_matches_the_standard_formula() -> None:
 
 
 @pytest.mark.full
-def test_build_pipeline_ir_payload_uses_canonical_signals_and_writes_artifacts(tmp_path: Path) -> None:
+def test_build_pipeline_ir_payload_keeps_legacy_toy_flow_working(tmp_path: Path) -> None:
     checkpoint_path = get_quantized_checkpoint_path(tmp_path)
     write_quantized_checkpoint(checkpoint_path, build_toy_quantized_checkpoint(checkpoint_path))
 
@@ -79,13 +157,62 @@ def test_build_pipeline_ir_payload_uses_canonical_signals_and_writes_artifacts(t
 
 
 @pytest.mark.full
-def test_write_pipeline_ir_creates_the_expected_json_output(tmp_path: Path) -> None:
+def test_build_pipeline_ir_payload_captures_fx_layers_in_topological_order(tmp_path: Path) -> None:
     checkpoint_path = get_quantized_checkpoint_path(tmp_path)
-    write_quantized_checkpoint(checkpoint_path, build_toy_quantized_checkpoint(checkpoint_path))
+    write_quantized_checkpoint(checkpoint_path, build_fx_checkpoint_payload())
 
-    output_path = write_pipeline_ir(tmp_path, checkpoint_path)
+    pipeline_ir = build_pipeline_ir_payload(
+        checkpoint_path,
+        tmp_path,
+        generated_at="2026-04-14T12:34:56Z",
+    )
+
+    assert pipeline_ir["model_name"] == "resnet50"
+    assert pipeline_ir["generated_at"] == "2026-04-14T12:34:56Z"
+    assert [layer["module_id"] for layer in pipeline_ir["layers"]] == [
+        "conv1",
+        "relu1",
+        "conv2",
+        "add0",
+        "relu2",
+    ]
+
+    for index, layer in enumerate(pipeline_ir["layers"]):
+        assert layer["ready_in_signal"] == "ready_in"
+        assert is_absolute_posix_path(layer["weights_path"])
+        assert Path(layer["weights_path"]).exists()
+        assert len(layer["golden_outputs"]) == 8
+        if index == 0:
+            assert len(layer["golden_inputs"]) == 8
+        else:
+            assert layer["golden_inputs"] == pipeline_ir["layers"][index - 1]["golden_outputs"]
+        if layer["bias_path"] is not None:
+            assert is_absolute_posix_path(layer["bias_path"])
+            assert Path(layer["bias_path"]).exists()
+
+    weights_dir = tmp_path / "output" / "weights"
+    assert (weights_dir / "conv1_weights.hex").read_text(encoding="utf8") == "02\n"
+    assert (weights_dir / "conv1_bias.hex").read_text(encoding="utf8") == "01\n"
+    assert (weights_dir / "conv2_weights.hex").read_text(encoding="utf8") == "FF\n"
+    assert (weights_dir / "conv2_bias.hex").read_text(encoding="utf8") == "02\n"
+    assert (weights_dir / "relu1_weights.hex").read_text(encoding="utf8") == ""
+    assert (weights_dir / "add0_bias.hex").read_text(encoding="utf8") == ""
+
+
+@pytest.mark.full
+def test_write_pipeline_ir_writes_layer_ir_and_legacy_mirror(tmp_path: Path) -> None:
+    checkpoint_path = get_quantized_checkpoint_path(tmp_path)
+    write_quantized_checkpoint(checkpoint_path, build_fx_checkpoint_payload())
+
+    output_path = write_pipeline_ir(
+        tmp_path,
+        checkpoint_path,
+        generated_at="2026-04-14T12:34:56Z",
+    )
     payload = json.loads(output_path.read_text(encoding="utf8"))
+    mirrored = json.loads((tmp_path / "output" / "golden_vectors.json").read_text(encoding="utf8"))
 
-    assert output_path == tmp_path / "output" / "golden_vectors.json"
-    assert payload["layers"][0]["weights_path"].endswith("toy_conv1x1_weights.hex")
-    assert payload["layers"][0]["bias_path"].endswith("toy_conv1x1_bias.hex")
+    assert output_path == tmp_path / "output" / "layer_ir.json"
+    assert mirrored == payload
+    assert payload["layers"][0]["weights_path"].endswith("conv1_weights.hex")
+    assert payload["layers"][0]["bias_path"].endswith("conv1_bias.hex")

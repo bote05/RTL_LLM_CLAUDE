@@ -23,7 +23,7 @@ nn2rtl-repo/
 ├── nn2rtl-plugin/             # Layer 1: Claude Code plugin (agent roles + skills)
 ├── sdk/                       # Layer 2: TypeScript orchestrator
 ├── mcp/                       # Layer 3: MCP server exposing hardware toolchain
-├── scripts/                   # Python pre-processing (quantization + golden vectors)
+├── scripts/                   # Python frontend prep (quantization + layer-IR / smoke harness)
 ├── tb/                        # Static C++ Verilator testbench
 ├── test/fixtures/             # Cross-language fixtures used by Python & TS tests
 └── output/                    # Runtime artifacts (git-ignored; empty subdirs kept)
@@ -64,16 +64,13 @@ Workspace permissions for Claude Code. Permits Bash invocations for `node`, `npm
 
 ## Layer 1 — Claude Code Plugin (`nn2rtl-plugin/`)
 
-Defines the five specialized agents and their supporting skill documentation. Loaded by the SDK orchestrator via `plugins: [{ type: "local", path: pluginPath }]`.
+Defines the four specialized agents (Cartographer, Foundry, Assayer, Surgeon) and their supporting skill documentation. The pipeline-coordinator role is played by the deterministic TypeScript orchestrator in `sdk/orchestrate.ts`, not by an LLM agent. Loaded by the SDK orchestrator via `plugins: [{ type: "local", path: pluginPath }]`.
 
 ### `.claude-plugin/plugin.json`
 Plugin manifest. Declares name, version, and paths to agent, skill, and MCP config directories.
 
 ### `.mcp.json`
 MCP server registration. Points to `../mcp/dist/server.js` with `OUTPUT_DIR=../output` and registers the server as `nn2rtl-tools`. Every MCP tool name is therefore prefixed `mcp__nn2rtl-tools__` in `allowedTools`.
-
-### `agents/conductor.md`
-Pipeline orchestrator definition. Model: `opus`. Describes the agent that would own `output/pipeline_state.json`, dispatch Foundry / Assayer / Surgeon, and enforce the 3-retry ceiling. **In the current codebase the Conductor agent is loaded into the agent registry but never dispatched** — orchestration is implemented deterministically in TypeScript by `PipelineStateManager.tick()` in `sdk/pipeline.ts` and `runPipeline()` in `sdk/orchestrate.ts`. The agent file is retained so a future agentic orchestration mode can be enabled without restructuring the plugin.
 
 ### `agents/cartographer.md`
 Model extractor. Model: `sonnet`. Runs once. Loads the quantized PyTorch checkpoint, traces via `torch.fx`, folds batch normalization into convolutions, writes weight/bias `.hex` files to `output/weights/`, emits `output/layer_ir.json`. The JSON schema enforces that signal-name fields are emitted as the canonical literals (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`).
@@ -87,7 +84,7 @@ Simulation runner. Model: `haiku`. Generates the JSON sidecar consumed by the st
 ### `agents/surgeon.md`
 Targeted repair specialist. Model: `opus`. Activated on failure. Receives the broken module, the `VerifResult`, and the original `LayerIR`. Must classify the failure into one of the 16 taxonomy classes, locate the exact faulty lines, and rewrite only those lines while preserving the module's port interface. Capped at 3 retries per module.
 
-### `skills/{conductor,cartographer,foundry,assayer,surgeon}/SKILL.md`
+### `skills/{cartographer,foundry,assayer,surgeon}/SKILL.md`
 Supplemental skill reference material loaded alongside the matching agent prompt. The orchestrator concatenates the skill markdown body onto the agent prompt at load time (see `loadPluginAgentDefinition` in `sdk/orchestrate.ts`). Contains schema reminders, RTL patterns, and canonical-signal-name reminders.
 
 ---
@@ -139,10 +136,10 @@ Constraint highlights:
   - Every `results[id].module_id` must equal `id`.
 
 ### `config.ts`
-`AGENT_CONFIG` maps each of the five agents to its model tier and description. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
+`AGENT_CONFIG` maps each of the four LLM subagents (Cartographer, Foundry, Assayer, Surgeon) to its model tier, per-agent `maxTurns`, and description. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
 
 ### `claude-agent-sdk-compat.ts`
-Compatibility shim around `@anthropic-ai/claude-agent-sdk`. Re-exports the types and `query()` function. Required because the published SDK currently ships without a usable root declaration file; this file is the single point that will be replaced when the SDK's typings are fixed.
+Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The published SDK's `AgentDefinition`, `SDKMessage`, and `query()` option types are large, include fields we do not use (`mcpServers`, `source`, `criticalSystemReminder_EXPERIMENTAL`, various policy-settings knobs), and `model` is typed as `string` so any model name compiles. This shim re-exports only the fields the orchestrator actually touches (`description`, `prompt`, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` on `AgentDefinition`; `cwd`, `tools`, `allowedTools`, `plugins`, `agents`, `outputFormat`, `maxTurns` on the `query()` options) and narrows `model` to the `"sonnet" | "opus" | "haiku" | "inherit"` union we support. The runtime `query` function is cast back to this narrower signature via `as unknown as ...` — since the SDK runtime accepts any superset of our shape, the cast is sound. Upside: adding a field to the SDK's types does not silently change our API, and unsupported fields fail at compile time instead of at runtime. The SDK itself is now fully typed, so the shim is no longer a declarations workaround; removing it would mean accepting the SDK's wider surface, which we do not want.
 
 ### `pipeline.ts`
 `PipelineStateManager` — the state machine. Constructor seeds all modules as `pending` with zero attempts.
@@ -170,7 +167,7 @@ Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus man
 5. On a passing module, invoke `run_yosys` via a direct SDK call and write `output/reports/<module_id>.yosys.json`. If Yosys reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"` and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
 6. On terminal state, write `output/reports/pipeline_summary.json`.
 
-**Runtime injection** via `OrchestratorRuntime = { now, queryFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks and mock `query()` implementations. The default is `{ now: () => new Date(), queryFn: query }`.
+**Runtime injection** via `OrchestratorRuntime = { now, queryFn, yosysFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks, a mock `query()` implementation, and a mock Yosys invocation. The default is `{ now: () => new Date(), queryFn: query, yosysFn: invokeYosys }` where `invokeYosys` dynamically imports `run_yosys` from the MCP package and validates the report against `synthesisReportSchema`.
 
 Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resultSchema, runtime)`. Both the SDK `outputFormat` (JSON Schema, generated from Zod via `z.toJSONSchema`) and the local `resultSchema` (Zod) are derived from the same schema export, so drift is structurally impossible.
 
@@ -202,7 +199,7 @@ Same shape as the SDK's. Coverage includes `schemas.ts`, `server.ts`, `tools.ts`
 Tiny wrapper that calls `startServer()` from `server.ts` and logs fatal errors. Separation of concerns: keeps `server.ts` testable without side effects.
 
 ### `types.ts`
-Mirror of `sdk/types.ts`. Kept in sync manually so the MCP server can build and type-check without depending on `sdk/`. If the two diverge, local validation drifts silently — treat them as one logical file in two places.
+Byte-for-byte mirror of `sdk/types.ts`. The two packages have separate `rootDir`s so neither can import from the other; each keeps a local copy of the shared data contracts. Drift is prevented by `scripts/check-twins.mjs`, which runs as the first step of `npm run test:fast` / `test:full` / `coverage` and exits non-zero if the files diverge (also enforces the shared Zod exports between the two `schemas.ts` files). Treat these files as one logical file in two places, and rely on the twin check to catch accidental single-sided edits.
 
 ### `schemas.ts`
 Single source of truth for MCP-side schemas. Exports:
@@ -221,7 +218,7 @@ Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `
 - `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o <os.devNull> -g2012`, returns `{ success, stderr }`. **Implemented.**
 - `run_verilator(verilog_source, module_name, sidecar_path)` — loads and validates the sidecar via `readSidecarIfPresent` (Zod-checked), rejects relative `golden_inputs_path` / `golden_outputs_path` / `results_path`, copies the static testbench plus vendored `third_party/json.hpp` into a temp build dir, invokes `VERILATOR_COMMAND --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS`, runs the produced binary with the sidecar path, reads `sidecar.results_path`, validates it through `verifResultSchema`, and maps build / execution failures into well-formed `VerifResult` payloads. **Implemented.**
 - `run_yosys(verilog_source, module_name)` — runs `yosys -p "synth_ice40 -abc9; stat"`, uses the exported `parseYosysReport` helper to extract LUT count and an `MHz` figure, returns `{ success, lut_count, fmax_mhz, report }`. **Implemented.**
-- `read_weights(checkpoint_path, quantization_config)` — spawns `PYTHON_COMMAND scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. The current implementation is deterministic and local-first: it drives the toy-model checkpoint/golden-vector flow under `scripts/`, not the final ResNet-50 extraction pipeline.
+- `read_weights(checkpoint_path, quantization_config)` — spawns `PYTHON_COMMAND scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. `generate_golden.py` now writes the canonical artifact to `output/layer_ir.json` and mirrors the same JSON to `output/golden_vectors.json` for MCP compatibility, so `read_weights` still sees a valid `PipelineIR` without any TypeScript changes.
 - `write_verilog(module, output_dir)` — the persistence path agents are expected to use. Writes `<output_dir>/rtl/<module_id>.v` and `<module_id>.meta.json`, returns the absolute `.v` path. The orchestrator also has a `persistVerilogModule()` safety net in `sdk/orchestrate.ts` for cases where an agent returns valid structured RTL but skipped the MCP tool call. **Implemented.**
 - `readSidecarIfPresent(filePath)` — returns the parsed `VerificationSidecar` or `null` if the file is missing (ENOENT). Any other error, or a schema mismatch, throws with a field-level message.
 
@@ -240,7 +237,7 @@ Each handler parses its arguments through the matching Zod schema before invokin
 
 ## Python Pre-Processing (`scripts/`)
 
-Single-use utilities the human runs once before the autonomous pipeline. Split into thin CLI wrappers plus importable `*_impl.py` modules so pytest can exercise the helpers without depending on the eventual full ResNet-50 extraction path.
+Single-use utilities the human runs once before the autonomous pipeline. Split into thin CLI wrappers plus importable `*_impl.py` modules so pytest can exercise the helpers while keeping the local test flow deterministic. `prepare_pipeline.py` is the top-level no-argument smoke harness for the full frontend.
 
 ### `__init__.py`
 Makes `scripts/` an importable package so `pytest` (and future tests) can `from scripts.golden_impl import ...`.
@@ -249,28 +246,39 @@ Makes `scripts/` an importable package so `pytest` (and future tests) can `from 
 `detect_repo_root(current_file)` — resolves the repo root, honoring a `NN2RTL_REPO_ROOT` env override so tests can point the scripts at a temp dir.
 
 ### `quantize_impl.py`
-Importable helpers for the deterministic automated test flow. Core pieces:
+Importable helpers for the ResNet-50 PTQ checkpoint flow. Core pieces:
 
 - `resolve_checkpoint_path(...)`, `get_quantized_checkpoint_path(...)` — canonical checkpoint path resolution.
-- `build_toy_quantized_checkpoint(...)`, `write_quantized_checkpoint(...)`, `load_quantized_checkpoint(...)` — create, persist, and validate the toy checkpoint format.
-- `ToyPointwiseModel`, `create_toy_model(...)`, `run_toy_model(...)` — a tiny deterministic INT8-friendly model used by the automated suite.
+- `build_resnet50_quantized_checkpoint(...)` — loads torchvision ResNet-50, seeds PyTorch with `0`, runs deterministic synthetic calibration on 32 random `1×3×224×224` tensors, folds batch norm into conv parameters, and exports the fused stem conv plus the three `layer1` bottlenecks as a `format_version: 2` checkpoint with stable `layer0_0_conv1` / `layer1_<block>_<op>` module IDs.
+- Quantization is symmetric INT8 per tensor (`zero_point = 0`, `scale = max(|w|) / 127`) with INT32 bias export derived from the observed activation range during calibration.
+- `write_quantized_checkpoint(...)`, `load_quantized_checkpoint(...)` — persist and validate the new flattened v2 checkpoint schema. Validation is eager and raises `CheckpointValidationError` on malformed metadata.
+- Legacy helpers (`build_toy_quantized_checkpoint(...)`, `ToyPointwiseModel`, `create_toy_model(...)`, `run_toy_model(...)`) are still present for older local fixtures and compatibility tests.
 - `build_quantization_summary(...)` — machine-readable summary emitted by the CLI.
 
-The helper layer validates checkpoint structure eagerly and raises `CheckpointValidationError` for malformed metadata.
+The current export scope is intentionally constrained to the initial stem convolution plus `layer1` (16 modules total) so the downstream RTL path can be exercised incrementally. The CLI and summary text explicitly note that real users should swap the synthetic calibration tensors for ImageNet samples.
 
 ### `quantize_model.py`
-Thin CLI wrapper over `quantize_impl.py`. Today it writes a deterministic toy checkpoint at `checkpoints/resnet50_int8.pth` and prints a stable summary JSON for local testing. This is intentionally a local-first stand-in for the eventual real PTQ flow.
+Thin CLI wrapper over `quantize_impl.py`. The CLI shape is unchanged: `python scripts/quantize_model.py [checkpoint_path]`. It now writes a real ResNet-50 INT8 checkpoint to `checkpoints/resnet50_int8.pth` by default and prints a JSON summary describing the constrained export scope plus per-layer scale metadata.
 
 ### `golden_impl.py`
-Importable helpers for the deterministic golden-vector flow. Core pieces:
+Importable helpers for the golden-vector / layer-IR extraction flow. Core pieces:
 
 - `get_output_paths(...)`, `get_weight_artifact_paths(...)` — canonical output/weights layout.
-- `int8_to_hex(...)`, `write_signed_int8_hex(...)` — `$readmemh`-compatible signed INT8 serialization.
-- `fold_batch_norm_into_conv(...)` — folds BN parameters into the toy convolution weights/bias.
-- `build_pipeline_ir_payload(...)`, `write_pipeline_ir(...)` — produce a valid one-layer `PipelineIR` plus emitted `.hex` weight/bias artifacts.
+- `int8_to_hex(...)`, `int32_to_hex(...)`, `write_signed_int8_hex(...)`, `write_signed_int32_hex(...)` — `$readmemh`-compatible signed INT8/INT32 serialization.
+- `fold_batch_norm_into_conv(...)` — folds BN parameters into convolution weights/bias.
+- `CheckpointResidualStack`, `ResidualStackTracer`, `ActivationCaptureInterpreter` — rebuild or load the residual stack, preserve module IDs through `torch.fx`, and capture per-node activations.
+- `build_deterministic_input_stream(...)`, `capture_golden_outputs(...)` — generate the required 8 seeded INT8 vectors and record golden inputs/outputs per traced node in topological order.
+- `build_pipeline_ir_payload(...)`, `validate_pipeline_ir_payload(...)`, `write_pipeline_ir(...)` — produce a schema-shaped `PipelineIR`, write canonical `output/layer_ir.json`, and mirror it to `output/golden_vectors.json` for existing MCP consumers.
+- Format-version-2 checkpoints now have two paths:
+  - Flat PTQ checkpoints from `quantize_model.py` are bridged directly into `PipelineIR` by writing the stored INT8/INT32 tensors back out to `output/weights/`.
+  - Richer residual-stack checkpoints that carry graph/module information still go through the existing `torch.fx` activation-capture path.
+- Legacy format-version-1 toy checkpoints are still supported so the older local tests and fixtures continue to work.
 
 ### `generate_golden.py`
-Thin CLI wrapper over `golden_impl.py`. Today it reads the toy checkpoint, emits a valid deterministic `output/golden_vectors.json`, and writes matching `.hex` weight and bias files under `output/weights/`. This is intentionally a local-first stand-in for the eventual real `torch.fx` extraction path.
+Thin CLI wrapper over `golden_impl.py`. It resolves the checkpoint path, generates `output/layer_ir.json`, mirrors the same JSON to `output/golden_vectors.json`, emits per-module weight/bias hex files under `output/weights/`, and prints a compact JSON summary (`status`, `model_name`, `num_layers`, `checkpoint_path`, `pipeline_ir_path`). The current path supports both the flat PTQ ResNet-50 checkpoint written by `quantize_model.py` and the richer format-version-2 residual-stack checkpoints used by the `torch.fx` tests, while retaining the legacy toy checkpoint fallback.
+
+### `prepare_pipeline.py`
+No-argument frontend smoke harness. It runs `quantize_model.py`, runs `generate_golden.py`, validates the resulting `output/layer_ir.json` against `pipelineIrSchema` from `mcp/schemas.ts` by shelling out to Node with `--experimental-strip-types`, prints a fixed-width summary table (`module_id | op_type | shape | num_weights | pipeline_latency_cycles`), and exits non-zero on the first failed step. The helper surface is intentionally small: subprocess chaining, TypeScript-schema validation, and table rendering.
 
 ---
 
@@ -314,7 +322,7 @@ Shared fixtures used by both vitest suites and pytest. Today:
 - `verif_pass.json`, `verif_fail.json` — sample `VerifResult` payloads for both outcomes.
 - `verilator/stream_passthrough.v`, `stream_offset.v`, `stream_latency2.v`, `stream_stall.v`, `stream_bubble.v` — real DUT fixtures for the full MCP integration suite, covering happy-path streaming, numerical mismatch, exact-latency mismatch, `ready_in` backpressure, and `valid_out` bubbles.
 
-Actual suites now live in `sdk/test/`, `mcp/test/`, and `scripts/test_*.py`. The fast path is mostly mocked and deterministic; the full path exercises real `iverilog`, `verilator`, `yosys`, and the toy Python extraction flow.
+Actual suites now live in `sdk/test/`, `mcp/test/`, and `scripts/test_*.py`. The fast path is mostly mocked and deterministic; the full path exercises real `iverilog`, `verilator`, `yosys`, and the Python frontend scripts, including the `prepare_pipeline.py` smoke harness and its failure-path coverage in `scripts/test_prepare_pipeline.py`.
 
 ---
 
@@ -329,9 +337,9 @@ All runtime artifacts live here. The four subdirectories (`rtl/`, `tb/`, `report
 - `output/reports/run_log.jsonl` — JSONL event stream for the full run, produced by `appendRunLog`.
 - `output/reports/<module_id>.yosys.json` — Yosys synthesis report per passing module.
 - `output/reports/pipeline_summary.json` — final summary including total cost and model usage.
-- `output/layer_ir.json` — Cartographer's canonical `PipelineIR`, Zod-validated on load.
+- `output/layer_ir.json` — Cartographer's canonical `PipelineIR`, Zod-validated on load. `scripts/generate_golden.py` now writes this file directly.
 - `output/pipeline_state.json` — authoritative `PipelineState`, updated after every transition, Zod-validated (with `superRefine` cross-field checks) on resume.
-- `output/golden_vectors.json` — raw Python output before it is promoted to `layer_ir.json`.
+- `output/golden_vectors.json` — compatibility mirror of `output/layer_ir.json` kept because `mcp/tools.ts` `read_weights` still reads this filename.
 
 ---
 
@@ -363,23 +371,19 @@ Entries reference exact file and line of the current work. In future revisions, 
 
 These require external tools and ML libraries; they cannot be completed in pure TypeScript.
 
-- **`scripts/quantize_model.py` — replace the toy checkpoint flow with the real PTQ path**: load torchvision ResNet-50, run calibration, convert with `torch.quantization`, persist the INT8 checkpoint, and print real per-layer scale factors as JSON. Today the script intentionally writes a deterministic toy checkpoint so the automated suite stays local and reproducible.
-- **`scripts/generate_golden.py` — replace the toy golden-vector flow with real residual-block capture**: load the quantized checkpoint, trace via `torch.fx`, fold batch normalization into preceding convolutions, serialize real weights and biases to `$readmemh`-compatible hex files, and emit a full `PipelineIR` for the target model. Today the script intentionally emits a deterministic one-layer toy `PipelineIR`.
-- **Manual smoke test on the intended checkpoint**: the automated suite covers the toy model end-to-end, but the final thesis path still needs an opt-in smoke command against the actual ResNet-50 checkpoint and artifact set.
+- **Extend the current PTQ export beyond stem + `layer1`**: the real torchvision ResNet-50 PTQ path is now implemented, but the checkpoint intentionally stops after the fused stem conv and first residual stack so the downstream RTL pipeline can expand in controlled increments.
+- **Emit real activation traces for the flat v2 PTQ bridge**: `generate_golden.py` can already turn the flattened ResNet-50 checkpoint into a valid `PipelineIR`, but the direct bridge currently focuses on weight/bias artifact emission rather than per-layer captured `golden_inputs` / `golden_outputs`.
+- **Manual smoke test on the intended checkpoint**: the automated suite now covers the deterministic frontend harness end-to-end, but the final thesis path still needs an opt-in smoke command against the actual ResNet-50 checkpoint and artifact set.
 
 ### Blocked on External Dependencies
 
-- **`sdk/claude-agent-sdk-compat.ts`**: remove the compatibility shim once `@anthropic-ai/claude-agent-sdk` ships a valid root declaration file.
-- **`sdk/orchestrate.ts:289–290`**: restore `AgentDefinition.skills` and `AgentDefinition.maxTurns` once the published SDK typings expose them; today the parent query's `maxTurns: 6` is the only guardrail.
+- *(none currently)* — the earlier `claude-agent-sdk-compat.ts` entry has been removed. The shim is no longer a workaround; it is load-bearing by design (see the `claude-agent-sdk-compat.ts` section above for what it narrows and why), so it does not belong on a TODO list.
 
 ### Design Decisions Deferred
 
 Intentional "maybe later" notes, not bugs.
 
-- **`sdk/orchestrate.ts:280`**: replace the hand-rolled frontmatter parser with a real YAML parser (e.g. `yaml` or `gray-matter`) if plugin frontmatter grows more expressive.
-- **`sdk/orchestrate.ts:988`**: promote Assayer into a first-class `tick()` action if the state machine grows beyond the current Foundry-or-Surgeon binary choice.
-- **`sdk/orchestrate.ts:1011`**: extend CLI argument parsing when the pipeline grows knobs — alternate plugins, custom output roots, per-run retry budgets.
-- **Dispatch the Conductor agent (or remove it)**: `nn2rtl-plugin/agents/conductor.md` is loaded by `loadAllAgentDefinitions` but never invoked. Either wire it into the orchestration path as an optional agentic-mode switch, or drop the agent file so the plugin matches the deterministic TypeScript orchestration that actually runs.
+- **Custom output roots / alternate plugin paths in the CLI**: `parseCliArgs` now accepts `--resume` and `--max-retries`; adding `--output-dir` or `--plugin` is still deferred because both currently come from `PIPELINE_CONFIG` / the plugin path constant in `orchestrate.ts`.
 
 ### Done (removed from the outstanding list)
 
@@ -400,8 +404,18 @@ For the record, these items from earlier revisions are complete:
 - Entry points separated: `sdk/main.ts` and `mcp/main.ts` are the runnable CLIs, leaving `orchestrate.ts` / `server.ts` as library code importable by tests.
 - Dependency injection seams in place: `OrchestratorRuntime` (`now`, `queryFn`) in the SDK, `ToolsRuntime` (`commandRunner`, `cwd`, `env`, `tmpDirRoot`) in the MCP tools, `ToolImplementations` in the MCP server — all testable without touching the real toolchain, real clock, or real Claude API.
 - Test infrastructure implemented: root `package.json` with `test:fast` / `test:full` / `coverage`, `pytest.ini` with markers, per-package `vitest.config.ts` with coverage thresholds, SDK and MCP test suites, Python helper tests, and shared fixtures under `test/fixtures/`.
-- Python preprocessing split into importable `*_impl.py` helpers (`paths.py`, `quantize_impl.py`, `golden_impl.py`), with a deterministic toy checkpoint / golden-vector flow that exercises checkpoint validation, BN folding, hex serialization, and `PipelineIR` emission end-to-end.
+- Python preprocessing split into importable `*_impl.py` helpers (`paths.py`, `quantize_impl.py`, `golden_impl.py`), with a real ResNet-50 PTQ export path, a flat format-version-2 `PipelineIR` bridge, the richer `torch.fx` golden-capture path, and the older deterministic toy compatibility path.
+- **Real PTQ path implemented**: `scripts/quantize_model.py` / `scripts/quantize_impl.py` now load torchvision ResNet-50, run deterministic synthetic calibration, fold BN into conv weights, quantize to symmetric INT8 per tensor, and persist the flattened `format_version: 2` checkpoint schema validated by `load_quantized_checkpoint`.
 - Yosys policy decided and implemented: a failed post-pass Yosys synthesis report now feeds back into the retry loop as `failure_class: "synthesis_failed"` instead of being recorded as a degraded-but-still-passing module.
+- **Fmax gate tightened**: `parseYosysReport` now extracts abc9's `Delay = X ns` / `Delay = X ps` lines in addition to explicit `MHz` numbers, and the Yosys invocation is `synth_ice40 -abc9 -top <module>; stat; tee -o /dev/stdout ltp -noff`. `evaluateSynthesis` no longer silently skips the timing gate when `fmax_mhz === 0` — that path now emits a `synthesis_failed` VerifResult with `fix_hint` explaining that timing could not be measured, so Surgeon is forced to address the issue instead of the gate being quietly bypassed.
+- **Surgeon retry loop tested**: `test/orchestrate-flow.test.ts` now exercises two forced-failure yosys paths end-to-end — `fmax_mhz === 0` (synthesis_failed) and `fmax_mhz` below the PPA target (missing_pipeline_register). Both route through `applyVerifResult` into a Surgeon dispatch and a second Assayer + Yosys round. A new `yosysFn` runtime seam on `OrchestratorRuntime` makes these tests possible without invoking the real toolchain.
+- **Frontmatter parser replaced**: the hand-rolled `---`-delimited parser in `orchestrate.ts` is gone; frontmatter now goes through the `yaml` package. A new `toStringList` helper accepts both CSV strings (`tools: Bash, Read`) and YAML lists (`tools: [Bash, Read]`), and the legacy `splitCsvField` export was deleted.
+- **SDK typing hacks resolved**: `@anthropic-ai/claude-agent-sdk@0.2.107` exposes `AgentDefinition.skills` and `AgentDefinition.maxTurns`, so the local compat shim now advertises both fields and `loadPluginAgentDefinition` propagates them from `AGENT_CONFIG` (per-agent `maxTurns`) and from agent-markdown frontmatter (`skills`). The parent `query()` call keeps its own `maxTurns: 6` as an outer safety cap.
+- **Conductor agent removed**: there is no LLM "Conductor" anymore. The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` owns the role directly, and `nn2rtl-plugin/agents/conductor.md` plus `nn2rtl-plugin/skills/conductor/` were deleted. `AGENT_CONFIG` and `AGENT_SLUGS` now list only the four real subagents (Cartographer, Foundry, Assayer, Surgeon).
+- **CLI knobs extended**: `parseCliArgs` accepts `--max-retries N` (with both `--max-retries N` and `--max-retries=N` forms) and rejects unknown `--flag` arguments with a clear error. `runPipeline` / `RunPipelineOptions` gained an optional `maxRetries` field that overrides `PIPELINE_CONFIG.max_retries`. Unknown flags now error instead of being silently ignored.
+- **Unreachable Assayer action comment cleaned up**: `runPipeline`'s fall-through `throw` no longer carries a stale "TODO: first-class Assayer action" note; the comment now correctly documents that the branch is a defensive guard for a future `PipelineStateManager.tick()` action type.
+- **Golden generation widened for v2 checkpoints**: `scripts/golden_impl.py` and `scripts/generate_golden.py` now support both flattened PTQ checkpoints from `quantize_model.py` and richer format-version-2 residual-stack checkpoints. The flat bridge writes stored INT8/INT32 tensors back out to hex and emits strict `PipelineIR` under `output/layer_ir.json`, while the `torch.fx` path still handles graph-backed activation capture. `output/golden_vectors.json` remains a compatibility mirror for MCP `read_weights`.
+- **Frontend smoke harness added**: `scripts/prepare_pipeline.py` now chains quantization, golden generation, TypeScript-schema validation of `output/layer_ir.json`, and a human-readable pipeline summary table. `scripts/test_prepare_pipeline.py` covers the success path, missing-checkpoint failure, and schema-invalid revalidation path.
 
 ---
 
@@ -411,7 +425,7 @@ From [CLAUDE.md](./CLAUDE.md), reiterated here for convenience:
 
 - Never write `.v` files directly — always use `write_verilog`.
 - Before any pipeline run: `npm run typecheck` in both `sdk/` and `mcp/`.
-- Before the first pipeline run ever: run `scripts/quantize_model.py`, then `scripts/generate_golden.py`.
+- Before the first pipeline run ever: run `scripts/prepare_pipeline.py` (or equivalently `scripts/quantize_model.py`, then `scripts/generate_golden.py`).
 - The SDK package is `@anthropic-ai/claude-agent-sdk`, not `@anthropic-ai/claude-code`.
 - The static Verilator testbench at `tb/static_verilator_tb.cpp` is handwritten infrastructure; never let an agent regenerate it.
 - Keep `output/pipeline_state.json` updated after every state transition so the pipeline is resumable.

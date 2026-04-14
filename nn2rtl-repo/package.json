@@ -2,8 +2,9 @@
   "name": "nn2rtl",
   "private": true,
   "scripts": {
-    "test:fast": "npm --prefix sdk run test:fast && npm --prefix mcp run test:fast && pytest -m \"not full\"",
-    "test:full": "npm --prefix sdk run test:full && npm --prefix mcp run test:full && pytest -m \"not manual\"",
-    "coverage": "npm --prefix sdk run coverage && npm --prefix mcp run coverage && pytest -m \"not manual\" --cov=scripts --cov-branch --cov-fail-under=90"
+    "check:twins": "node scripts/check-twins.mjs",
+    "test:fast": "npm run check:twins && npm --prefix sdk run test:fast && npm --prefix mcp run test:fast && python -m pytest -m \"not full\"",
+    "test:full": "npm run check:twins && npm --prefix sdk run test:full && npm --prefix mcp run test:full && python -m pytest -m \"not manual\"",
+    "coverage": "npm run check:twins && npm --prefix sdk run coverage && npm --prefix mcp run coverage && python -m pytest -m \"not manual\" --cov=scripts --cov-branch --cov-fail-under=90"
   }
 }

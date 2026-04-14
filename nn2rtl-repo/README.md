@@ -248,22 +248,23 @@ Provides the tool boundary between agents and the external toolchain:
 - weight extraction,
 - Verilog persistence.
 
-## The Five Agents
+## The Orchestrator and Four Agents
 
-### Conductor
+### Orchestrator (formerly an LLM "Conductor")
 
-- Model: Opus
-- Effort: High
-
-Conductor owns the pipeline state. It never generates Verilog and never directly edits RTL. Its job is to:
+The pipeline-coordinator role lives in the deterministic TypeScript orchestrator
+in `sdk/orchestrate.ts`, not in an LLM agent. It is the only component that
+sees the whole pipeline simultaneously, and its job is to:
 
 - maintain `output/pipeline_state.json`,
 - select the next action,
-- dispatch agents,
+- dispatch the four LLM agents below,
 - enforce retry limits,
-- and write final summary reports.
+- run Yosys directly on every Assayer-passed module, and
+- write final summary reports.
 
-It is the only agent that sees the whole pipeline simultaneously.
+Keeping the coordinator deterministic makes the run reproducible and avoids
+burning model calls on state-machine bookkeeping.
 
 ### Cartographer
 
@@ -346,20 +347,20 @@ Human-run one-time steps before the autonomous loop:
 
 ### Autonomous Pipeline Run
 
-1. Conductor starts.
+1. The orchestrator starts.
 2. If `output/layer_ir.json` does not exist, it invokes Cartographer.
 3. Cartographer emits Layer IR and writes weight files.
-4. Conductor initializes pipeline state with all modules set to `pending`.
-5. Conductor selects the first pending module and invokes Foundry.
+4. The orchestrator initializes pipeline state with all modules set to `pending`.
+5. The orchestrator selects the first pending module and invokes Foundry.
 6. Foundry generates Verilog and persists it via `write_verilog`.
-7. Conductor marks the module `verifying` and invokes Assayer.
+7. The orchestrator marks the module `verifying` and invokes Assayer.
 8. Assayer runs syntax and simulation checks and returns a `VerifResult`.
-9. If the module passes, Conductor records success and runs Yosys for synthesis metrics.
-10. If the module fails and retries remain, Conductor invokes Surgeon.
+9. If the module passes, the orchestrator records success and runs Yosys for synthesis metrics.
+10. If the module fails and retries remain, the orchestrator invokes Surgeon.
 11. Surgeon repairs the module and returns a replacement `VerilogModule`.
 12. Assayer verifies the repaired module.
 13. If retries are exhausted, the module becomes `fail_abort` and the pipeline continues.
-14. When all modules are terminal, Conductor writes `output/reports/pipeline_summary.json`.
+14. When all modules are terminal, the orchestrator writes `output/reports/pipeline_summary.json`.
 
 ### Resume Behavior
 
@@ -443,7 +444,7 @@ Produced by Assayer:
 
 ### PipelineState
 
-Maintained by Conductor:
+Maintained by the orchestrator:
 
 - `run_id`
 - `started_at`
