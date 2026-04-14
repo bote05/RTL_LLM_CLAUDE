@@ -3,6 +3,28 @@ node_modules/
 
 # Build output
 dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Simulator artifacts (Verilator / Icarus / Yosys / GTKWave)
+obj_dir/
+*.vcd
+*.fst
+*.vvp
+*.blif
+
+# Python virtualenvs
+.venv/
+venv/
+*.egg-info/
 
 # Runtime artifacts
 output/rtl/
