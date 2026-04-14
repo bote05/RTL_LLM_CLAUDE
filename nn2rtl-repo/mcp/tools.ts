@@ -5,7 +5,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import type { PipelineIR, VerificationSidecar, VerifResult, VerilogModule } from "./types.js";
+import { pipelineIrSchema, verificationSidecarSchema } from "./schemas.js";
+import type { PipelineIR, VerifResult, VerilogModule } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,7 +49,6 @@ export async function run_iverilog(
   verilog_source: string,
   module_name: string,
 ): Promise<{ success: boolean; stderr: string }> {
-  // TODO: Write verilog_source to a temp file, run `iverilog -o /dev/null -g2012 <tempfile>`, capture stderr, and return success based on the exit code.
   return withTempDir("nn2rtl-iverilog-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
@@ -73,7 +73,7 @@ export async function run_verilator(
   return withTempDir("nn2rtl-verilator-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
-    const sidecar = await readJsonFileIfPresent<VerificationSidecar>(sidecar_path);
+    const sidecar = await readSidecarIfPresent(sidecar_path);
 
     try {
       await execFileAsync("verilator", ["--lint-only", verilogPath], { cwd: tempDir });
@@ -97,8 +97,6 @@ export async function run_verilator(
       timing_expected_cycles: sidecar?.pipeline_latency_cycles ?? 0,
       expected: [],
       got: [],
-      max_error: Number.POSITIVE_INFINITY,
-      mean_error: Number.POSITIVE_INFINITY,
       failure_class: null,
       fix_hint:
         "run_verilator is scaffolded but still needs the static testbench copy, sidecar-driven build, binary execution, and results parser.",
@@ -110,7 +108,6 @@ export async function run_yosys(
   verilog_source: string,
   module_name: string,
 ): Promise<{ success: boolean; lut_count: number; fmax_mhz: number; report: string }> {
-  // TODO: Write verilog_source to a temp file, run `yosys -p "synth_ice40 -abc9; stat" <tempfile>`, parse the report for LUT count and critical-path-derived Fmax, and return the raw report text alongside the parsed metrics.
   return withTempDir("nn2rtl-yosys-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
@@ -159,14 +156,20 @@ export async function read_weights(
   });
 
   const raw = await readFile(outputPath, "utf8");
-  return JSON.parse(raw) as PipelineIR;
+  const parsed: unknown = JSON.parse(raw);
+  const validated = pipelineIrSchema.safeParse(parsed);
+  if (!validated.success) {
+    throw new Error(
+      `read_weights: '${outputPath}' is not a valid PipelineIR:\n${JSON.stringify(validated.error.issues, null, 2)}`,
+    );
+  }
+  return validated.data as PipelineIR;
 }
 
 export async function write_verilog(
   module: VerilogModule,
   output_dir: string,
 ): Promise<string> {
-  // TODO: Compute the file path as `<output_dir>/rtl/<module.module_id>.v`, write the Verilog source there, emit the metadata JSON alongside it, and return the absolute RTL file path.
   const outputRoot = resolveOutputRoot(output_dir);
   const rtlDir = path.join(outputRoot, "rtl");
   const verilogPath = path.join(rtlDir, `${module.module_id}.v`);
@@ -179,11 +182,30 @@ export async function write_verilog(
   return verilogPath;
 }
 
-async function readJsonFileIfPresent<T>(filePath: string): Promise<T | null> {
+async function readSidecarIfPresent(
+  filePath: string,
+): Promise<ReturnType<typeof verificationSidecarSchema.parse> | null> {
+  let raw: string;
   try {
-    const raw = await readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
+    raw = await readFile(filePath, "utf8");
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw error;
   }
+
+  const parsed: unknown = JSON.parse(raw);
+  const validated = verificationSidecarSchema.safeParse(parsed);
+  if (!validated.success) {
+    throw new Error(
+      `run_verilator: '${filePath}' is not a valid VerificationSidecar:\n${JSON.stringify(validated.error.issues, null, 2)}`,
+    );
+  }
+  return validated.data;
 }

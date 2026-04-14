@@ -15,10 +15,13 @@ export interface LayerIR {
   clock_period_ns: number;
   input_width_bits: number;
   output_width_bits: number;
-  valid_in_signal: string;
-  valid_out_signal: string;
-  clock_signal: string;
-  reset_signal: string;
+  clock_signal: "clk";
+  reset_signal: "rst_n";
+  valid_in_signal: "valid_in";
+  valid_out_signal: "valid_out";
+  ready_in_signal: "ready_in";
+  data_in_signal: "data_in";
+  data_out_signal: "data_out";
   golden_inputs: number[][];
   golden_outputs: number[][];
 }
@@ -89,6 +92,9 @@ export interface VerificationSidecar {
   reset_signal: string;
   valid_in_signal: string;
   valid_out_signal: string;
+  ready_in_signal: string;
+  data_in_signal: string;
+  data_out_signal: string;
   input_width_bits: number;
   output_width_bits: number;
   pipeline_latency_cycles: number;
