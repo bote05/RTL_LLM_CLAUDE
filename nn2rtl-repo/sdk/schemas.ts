@@ -76,22 +76,28 @@ export const verilogModuleSchema = z
   })
   .strict();
 
+// Agents (Assayer in particular) sometimes emit `null` for optional string
+// fields instead of omitting them. Coerce null → undefined at parse time so
+// downstream TS code stays on the original `T | undefined` contract.
+const nullToUndef = <S extends z.ZodTypeAny>(schema: S) =>
+  z.preprocess((v) => (v === null ? undefined : v), schema.optional());
+
 export const verifResultSchema = z
   .object({
     module_id: z.string(),
     status: z.enum(["pass", "fail", "syntax_error"]),
-    timing_pass: z.boolean().optional(),
-    timing_actual_cycles: z.number().optional(),
-    timing_expected_cycles: z.number().optional(),
-    mismatch_layer: z.string().optional(),
-    expected: z.array(z.number()).optional(),
-    got: z.array(z.number()).optional(),
-    max_error: z.number().optional(),
-    mean_error: z.number().optional(),
-    failure_class: failureClassSchema.nullable().optional(),
-    fix_hint: z.string().optional(),
-    iverilog_stderr: z.string().optional(),
-    verilator_stderr: z.string().optional(),
+    timing_pass: nullToUndef(z.boolean()),
+    timing_actual_cycles: nullToUndef(z.number()),
+    timing_expected_cycles: nullToUndef(z.number()),
+    mismatch_layer: nullToUndef(z.string()),
+    expected: nullToUndef(z.array(z.number())),
+    got: nullToUndef(z.array(z.number())),
+    max_error: nullToUndef(z.number()),
+    mean_error: nullToUndef(z.number()),
+    failure_class: nullToUndef(failureClassSchema),
+    fix_hint: nullToUndef(z.string()),
+    iverilog_stderr: nullToUndef(z.string()),
+    verilator_stderr: nullToUndef(z.string()),
   })
   .strict();
 

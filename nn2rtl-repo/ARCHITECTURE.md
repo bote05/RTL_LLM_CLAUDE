@@ -55,7 +55,7 @@ Thin monorepo aggregator. No dependencies of its own. Exposes three scripts that
 Default pytest options (`-ra` report) and registered markers: `full` (heavy / slow tests) and `manual` (opt-in smoke tests that require user-supplied external artifacts).
 
 ### `.gitignore`
-Ignores `node_modules/`, `dist/`, `*.tsbuildinfo`, log files, IDE dirs, simulator artifacts (`obj_dir/`, `*.vcd`, `*.fst`, `*.vvp`, `*.blif`), Python virtualenvs (`.venv/`, `venv/`, `*.egg-info/`), runtime outputs under `output/`, `checkpoints/`, `__pycache__/`, `.env*`, and OS junk.
+Ignores `node_modules/`, `dist/`, `*.tsbuildinfo`, log files, IDE dirs, simulator artifacts (`obj_dir/`, `*.vcd`, `*.fst`, `*.vvp`, `*.blif`), Python virtualenvs (`.venv/`, `venv/`, `*.egg-info/`), test/coverage caches (`.pytest_cache/`, `.coverage*`, `coverage/`, `htmlcov/`, `.mypy_cache/`, `.ruff_cache/`), local Codex state, runtime outputs under `output/`, `checkpoints/`, `__pycache__/`, `.env*`, and OS junk.
 
 ### `.claude/settings.json`
 Workspace permissions for Claude Code. Permits Bash invocations for `node`, `npm`, `python3`, `iverilog`, `verilator`, and `yosys`.
@@ -97,7 +97,7 @@ Supplemental skill reference material loaded alongside the matching agent prompt
 The deterministic control plane. Not a prompt — a real state machine that reads state from disk, decides the next action, dispatches agents via the Claude Agent SDK's `query()`, validates their structured outputs through Zod, and updates state on disk after every transition. Resumable, auditable, measurable.
 
 ### `package.json`
-Dependencies: `@anthropic-ai/claude-agent-sdk`, `zod`. Dev: `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Scripts: `build`, `typecheck`, `start` (runs `dist/main.js`), `dev` (watches `main.ts`), `pipeline`, `test`, `test:fast`, `test:full`, `coverage`.
+Dependencies: `@anthropic-ai/claude-agent-sdk`, `zod`. Dev: `@types/node`, `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Scripts: `build`, `typecheck`, `start` (runs `dist/main.js`), `dev` (watches `main.ts`), `pipeline`, `test`, `test:fast`, `test:full`, `coverage`.
 
 ### `package-lock.json`
 npm lockfile; pins the dependency graph. Not hand-edited.
@@ -174,6 +174,8 @@ Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus man
 
 Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resultSchema, runtime)`. Both the SDK `outputFormat` (JSON Schema, generated from Zod via `z.toJSONSchema`) and the local `resultSchema` (Zod) are derived from the same schema export, so drift is structurally impossible.
 
+`invokeFoundry()` and `invokeSurgeon()` also call `persistVerilogModule()` after a successful structured return. This is a defensive fallback: agents are still instructed to use `write_verilog`, but the orchestrator force-persists the returned `{ module_id, verilog_source, ... }` payload so disk state is not lost if a model skips the MCP tool call to save turns.
+
 `requireStructuredOutput` unwraps the SDK's `structured_output`, falls back to `JSON.parse(result.result)` if missing, validates through the supplied Zod schema, and throws a field-level error on mismatch.
 
 Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, Assayer, Surgeon, and direct Yosys invocations.
@@ -185,7 +187,7 @@ Cost tracking accumulates over every agent call including Cartographer's bootstr
 The boundary between agents and the external Verilog toolchain. Five tools, a stdio transport, strict input validation.
 
 ### `package.json`
-Dependencies: `@modelcontextprotocol/sdk`, `zod`. Dev: `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Scripts match the SDK package. Compiled output `dist/main.js` is the CLI entry; `dist/server.js` is what `.mcp.json` points to.
+Dependencies: `@modelcontextprotocol/sdk`, `zod`. Dev: `@types/node`, `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Script shape mirrors the SDK package, with temp-dir environment overrides on the Vitest commands used in this workspace. Compiled output `dist/main.js` is the CLI entry; `dist/server.js` is what `.mcp.json` points to.
 
 ### `package-lock.json`
 npm lockfile; committed for reproducibility.
@@ -212,15 +214,15 @@ Single source of truth for MCP-side schemas. Exports:
 `server.ts` advertises each tool's `inputSchema` and `outputSchema` via `z.toJSONSchema(...)` from these Zod definitions — no hand-written JSON Schema.
 
 ### `tools.ts`
-Tool implementations. Each exposes a `ToolsRuntime` override parameter so tests can supply a mock `commandRunner`, `cwd`, `env`, and `tmpDirRoot`. The default runtime uses `execFile`, `process.cwd()`, `process.env`, and a writable system temp root (`/tmp` on non-Windows, `os.tmpdir()` on Windows). It does not set an explicit child-process timeout; that is intentional because real Verilator builds can take minutes. If a timeout is added later, production runs should use a generous ceiling (roughly 10 minutes, not smoke-test scale).
+Tool implementations. Each exposes a `ToolsRuntime` override parameter so tests can supply a mock `commandRunner`, `cwd`, `env`, and `tmpDirRoot`. The default runtime uses `execFile`, the repo root as `cwd`, `process.env`, and a writable temp root chosen by `resolveTmpDirRoot()` (`os.tmpdir()` on Windows, otherwise an absolute `TMPDIR` or `/tmp`). It also exposes platform-aware `VERILATOR_COMMAND` and `PYTHON_COMMAND` constants so Windows callers can avoid the broken Perl/MS Store launcher paths that frequently show up in default installs. It does not set an explicit child-process timeout; that is intentional because real Verilator builds can take minutes. If a timeout is added later, production runs should use a generous ceiling (roughly 10 minutes, not smoke-test scale).
 
-Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `stderrFromUnknown`, `parseYosysReport`, `resolveOutputRoot`, `TB_SOURCE_PATH`, `TB_JSON_HPP_PATH`, `run_iverilog`, `run_verilator`, `run_yosys`, `read_weights`, `write_verilog`, `readSidecarIfPresent`.
+Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `stderrFromUnknown`, `parseYosysReport`, `resolveOutputRoot`, `resolveRepoRootFromEnv`, `TB_SOURCE_PATH`, `TB_JSON_HPP_PATH`, `VERILATOR_COMMAND`, `PYTHON_COMMAND`, `run_iverilog`, `run_verilator`, `run_yosys`, `read_weights`, `write_verilog`, `readSidecarIfPresent`.
 
-- `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o /dev/null -g2012`, returns `{ success, stderr }`. **Implemented.**
-- `run_verilator(verilog_source, module_name, sidecar_path)` — loads and validates the sidecar via `readSidecarIfPresent` (Zod-checked), rejects relative `golden_inputs_path` / `golden_outputs_path` / `results_path`, copies the static testbench plus vendored `third_party/json.hpp` into a temp build dir, invokes `verilator --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS`, runs the produced binary with the sidecar path, reads `sidecar.results_path`, validates it through `verifResultSchema`, and maps build / execution failures into well-formed `VerifResult` payloads. **Implemented.**
+- `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o <os.devNull> -g2012`, returns `{ success, stderr }`. **Implemented.**
+- `run_verilator(verilog_source, module_name, sidecar_path)` — loads and validates the sidecar via `readSidecarIfPresent` (Zod-checked), rejects relative `golden_inputs_path` / `golden_outputs_path` / `results_path`, copies the static testbench plus vendored `third_party/json.hpp` into a temp build dir, invokes `VERILATOR_COMMAND --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS`, runs the produced binary with the sidecar path, reads `sidecar.results_path`, validates it through `verifResultSchema`, and maps build / execution failures into well-formed `VerifResult` payloads. **Implemented.**
 - `run_yosys(verilog_source, module_name)` — runs `yosys -p "synth_ice40 -abc9; stat"`, uses the exported `parseYosysReport` helper to extract LUT count and an `MHz` figure, returns `{ success, lut_count, fmax_mhz, report }`. **Implemented.**
-- `read_weights(checkpoint_path, quantization_config)` — spawns `python3 scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. The current implementation is deterministic and local-first: it drives the toy-model checkpoint/golden-vector flow under `scripts/`, not the final ResNet-50 extraction pipeline.
-- `write_verilog(module, output_dir)` — the only way Verilog reaches disk. Writes `<output_dir>/rtl/<module_id>.v` and `<module_id>.meta.json`, returns the absolute `.v` path. **Implemented.**
+- `read_weights(checkpoint_path, quantization_config)` — spawns `PYTHON_COMMAND scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. The current implementation is deterministic and local-first: it drives the toy-model checkpoint/golden-vector flow under `scripts/`, not the final ResNet-50 extraction pipeline.
+- `write_verilog(module, output_dir)` — the persistence path agents are expected to use. Writes `<output_dir>/rtl/<module_id>.v` and `<module_id>.meta.json`, returns the absolute `.v` path. The orchestrator also has a `persistVerilogModule()` safety net in `sdk/orchestrate.ts` for cases where an agent returns valid structured RTL but skipped the MCP tool call. **Implemented.**
 - `readSidecarIfPresent(filePath)` — returns the parsed `VerificationSidecar` or `null` if the file is missing (ENOENT). Any other error, or a schema mismatch, throws with a field-level message.
 
 ### `server.ts`
@@ -318,9 +320,9 @@ Actual suites now live in `sdk/test/`, `mcp/test/`, and `scripts/test_*.py`. The
 
 ## Runtime Output Layout (`output/`)
 
-All runtime artifacts live here. The four subdirectories (`rtl/`, `tb/`, `reports/`, `weights/`) exist on disk but are empty and git-ignored. `ensureOutputLayout()` in `sdk/orchestrate.ts` re-creates them at every pipeline start; nothing under `output/` is source-controlled.
+All runtime artifacts live here. The four subdirectories (`rtl/`, `tb/`, `reports/`, `weights/`) are kept in the repo with `.gitkeep` files so the layout survives a fresh clone; the generated contents inside them are git-ignored and may be present locally after any run. `ensureOutputLayout()` in `sdk/orchestrate.ts` re-creates the directory layout at every pipeline start.
 
-- `output/rtl/<module_id>.v` — Foundry / Surgeon output, written exclusively through `write_verilog`.
+- `output/rtl/<module_id>.v` — Foundry / Surgeon output, normally written through `write_verilog` and force-persisted by `persistVerilogModule()` as a safety net.
 - `output/rtl/<module_id>.meta.json` — sidecar metadata for each generated module.
 - `output/tb/<module_id>.sidecar.json` — Assayer's per-run sidecar for the static testbench.
 - `output/weights/<module_id>_weights.hex`, `<module_id>_bias.hex` — Cartographer's hex-format tensors.
@@ -368,15 +370,15 @@ These require external tools and ML libraries; they cannot be completed in pure 
 ### Blocked on External Dependencies
 
 - **`sdk/claude-agent-sdk-compat.ts`**: remove the compatibility shim once `@anthropic-ai/claude-agent-sdk` ships a valid root declaration file.
-- **`sdk/orchestrate.ts:267–268`**: restore `AgentDefinition.skills` and `AgentDefinition.maxTurns` once the published SDK typings expose them; today the parent query's `maxTurns: 6` is the only guardrail.
+- **`sdk/orchestrate.ts:289–290`**: restore `AgentDefinition.skills` and `AgentDefinition.maxTurns` once the published SDK typings expose them; today the parent query's `maxTurns: 6` is the only guardrail.
 
 ### Design Decisions Deferred
 
 Intentional "maybe later" notes, not bugs.
 
-- **`sdk/orchestrate.ts:258`**: replace the hand-rolled frontmatter parser with a real YAML parser (e.g. `yaml` or `gray-matter`) if plugin frontmatter grows more expressive.
-- **`sdk/orchestrate.ts:872`**: promote Assayer into a first-class `tick()` action if the state machine grows beyond the current Foundry-or-Surgeon binary choice.
-- **`sdk/orchestrate.ts:895`**: extend CLI argument parsing when the pipeline grows knobs — alternate plugins, custom output roots, per-run retry budgets.
+- **`sdk/orchestrate.ts:280`**: replace the hand-rolled frontmatter parser with a real YAML parser (e.g. `yaml` or `gray-matter`) if plugin frontmatter grows more expressive.
+- **`sdk/orchestrate.ts:988`**: promote Assayer into a first-class `tick()` action if the state machine grows beyond the current Foundry-or-Surgeon binary choice.
+- **`sdk/orchestrate.ts:1011`**: extend CLI argument parsing when the pipeline grows knobs — alternate plugins, custom output roots, per-run retry budgets.
 - **Dispatch the Conductor agent (or remove it)**: `nn2rtl-plugin/agents/conductor.md` is loaded by `loadAllAgentDefinitions` but never invoked. Either wire it into the orchestration path as an optional agentic-mode switch, or drop the agent file so the plugin matches the deterministic TypeScript orchestration that actually runs.
 
 ### Done (removed from the outstanding list)

@@ -55,10 +55,6 @@ const AGENT_MCP_TOOLS = {
   surgeon: ["mcp__nn2rtl-tools__write_verilog"],
 } as const;
 
-const DIRECT_MCP_TOOLS = {
-  run_yosys: "mcp__nn2rtl-tools__run_yosys",
-} as const;
-
 const GLOBAL_ALLOWED_TOOLS = [
   "Agent",
   ...new Set(Object.values(AGENT_MCP_TOOLS).flat()),
@@ -98,7 +94,6 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
 const pipelineIrOutputFormat = toOutputFormat(pipelineIrZod);
 const verilogModuleOutputFormat = toOutputFormat(verilogModuleZod);
 const verifResultOutputFormat = toOutputFormat(verifResultZod);
-const synthesisReportOutputFormat = toOutputFormat(synthesisReportZod);
 
 export function createOrchestratorRuntime(
   overrides: Partial<OrchestratorRuntime> = {},
@@ -113,22 +108,76 @@ export function resolveFromSdk(relativePath: string): string {
   return path.resolve(sdkRoot, relativePath);
 }
 
-function buildYosysFailureResult(
+// PPA gates — a module that passes functional verification but fails these
+// is treated as a real hardware failure and routed back to Surgeon via a
+// synthesized VerifResult. Thresholds come from the README's FPGA targets.
+const FMAX_TARGET_MHZ = 50;
+const MAX_LUT_COUNT_PER_MODULE = 5000;
+
+// Maps a Yosys outcome to either a pass (null) or a synthesized VerifResult
+// with the correct failure_class. The classification matters because Surgeon
+// uses it to pick the repair strategy — "add a pipeline register" is very
+// different from "remove a non-synthesizable construct."
+function evaluateSynthesis(
   moduleId: string,
   verifiedResult: VerifResult,
-  synthesisReport: SynthesisReport,
-): VerifResult {
-  return {
-    ...verifiedResult,
-    module_id: moduleId,
-    status: "fail",
-    failure_class: "synthesis_failed",
-    fix_hint: [
-      "Yosys synthesis failed after functional verification passed.",
-      "Repair the RTL so `synth_ice40 -abc9; stat` succeeds.",
-      synthesisReport.report,
-    ].join("\n\n"),
-  };
+  report: SynthesisReport,
+): VerifResult | null {
+  if (!report.success) {
+    // Yosys crashed, emitted a syntax/elaboration error, or hit a construct
+    // iverilog's linter accepted but Yosys refuses. Fix strategy: rewrite
+    // the offending construct so synth_ice40 accepts it.
+    return {
+      ...verifiedResult,
+      module_id: moduleId,
+      status: "fail",
+      failure_class: "synthesis_failed",
+      fix_hint: [
+        "Yosys synthesis failed after functional verification passed.",
+        "Repair the RTL so `synth_ice40 -abc9; stat` succeeds.",
+        "Yosys output:",
+        report.report,
+      ].join("\n\n"),
+    };
+  }
+
+  if (report.fmax_mhz > 0 && report.fmax_mhz < FMAX_TARGET_MHZ) {
+    // Synthesis succeeded but critical path is too long. Fix strategy:
+    // insert a pipeline register in the longest combinational path.
+    // Note the latency-contract implication — adding a register changes
+    // pipeline_latency_cycles, so Surgeon also has to update the handshake.
+    return {
+      ...verifiedResult,
+      module_id: moduleId,
+      status: "fail",
+      failure_class: "missing_pipeline_register",
+      fix_hint: [
+        `Synthesis passed but Fmax ${report.fmax_mhz.toFixed(2)} MHz is below the ${FMAX_TARGET_MHZ} MHz target.`,
+        "Insert a pipeline register to break the critical path, and update pipeline_latency_cycles to match.",
+        "Yosys output:",
+        report.report,
+      ].join("\n\n"),
+    };
+  }
+
+  if (report.lut_count > MAX_LUT_COUNT_PER_MODULE) {
+    // Design synthesizes but burns absurd area. Fix strategy: simplify /
+    // factor shared terms; this is not the same bug as a timing failure.
+    return {
+      ...verifiedResult,
+      module_id: moduleId,
+      status: "fail",
+      failure_class: "synthesis_failed",
+      fix_hint: [
+        `Synthesis passed but LUT count ${report.lut_count} exceeds the ${MAX_LUT_COUNT_PER_MODULE} per-module ceiling.`,
+        "Rewrite the module to share arithmetic or collapse redundant logic.",
+        "Yosys output:",
+        report.report,
+      ].join("\n\n"),
+    };
+  }
+
+  return null;
 }
 
 function reportPath(fileName: string): string {
@@ -308,16 +357,40 @@ export async function loadAllAgentDefinitions(): Promise<Record<string, AgentDef
 }
 
 export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
-  return [
+  const lines = [
     `Invoke the \`${slug}\` subagent immediately.`,
     "Do not solve the task yourself.",
     "Do not use any other subagent.",
     "Return only the subagent's final JSON object.",
     "The only data channel into the subagent is this prompt string, so the payload is embedded below as JSON.",
-    "",
-    "Payload JSON:",
-    JSON.stringify(payload, null, 2),
-  ].join("\n");
+  ];
+
+  if (slug === "foundry" || slug === "surgeon") {
+    lines.push(
+      "",
+      "HARD CONTRACT for this subagent — do not accept any other output:",
+      "1. The subagent MUST call the mcp__nn2rtl-tools__write_verilog tool exactly once to persist the RTL before returning.",
+      "2. The subagent's final message MUST be a single JSON object with exactly these five fields and NOTHING else:",
+      '   { "module_id": string, "spec_hash": string, "verilog_source": string, "generated_by": "Foundry"|"Surgeon", "attempt": integer >= 1 }',
+      "3. `verilog_source` MUST be the full Verilog source code as a single string (the same string passed to write_verilog).",
+      "4. Do NOT invent other keys (no `source_path`, no `port_list`, no `module_name`). Do NOT wrap the JSON in markdown fences.",
+      "5. If the subagent cannot comply, it must still return the five-field JSON with a best-effort `verilog_source`.",
+    );
+  }
+
+  lines.push("", "Payload JSON:", JSON.stringify(payload, null, 2));
+  return lines.join("\n");
+}
+
+function stripJsonFences(text: string): string {
+  // Agents sometimes wrap JSON in ```json ... ``` fences even when the
+  // prompt asks for a bare object. Strip fences and any leading prose before
+  // the first '{' so the final JSON.parse stays permissive about wrappers.
+  const trimmed = text.trim();
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = fenceMatch ? fenceMatch[1].trim() : trimmed;
+  const firstBrace = candidate.indexOf("{");
+  return firstBrace > 0 ? candidate.slice(firstBrace) : candidate;
 }
 
 export function requireStructuredOutput<T>(
@@ -332,7 +405,7 @@ export function requireStructuredOutput<T>(
   const raw: unknown =
     result.structured_output !== undefined
       ? result.structured_output
-      : JSON.parse(result.result);
+      : JSON.parse(stripJsonFences(result.result));
 
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
@@ -484,58 +557,32 @@ export async function ensureLayerIr(
   };
 }
 
-async function invokeYosys(
-  module: VerilogModule,
-  runtime: OrchestratorRuntime,
-): Promise<AgentRunResult<SynthesisReport>> {
-  const messages: SDKMessage[] = [];
-  let finalResult: SDKResultMessage | null = null;
+// Deterministic, LLM-free Yosys invocation. The previous design routed this
+// through query() with an allowedTool of run_yosys and let Claude mediate
+// the tool call; that mediator could refuse for content-filter reasons and
+// produced "I cannot comply" responses on modules with absolute host paths
+// in $readmemh. Yosys is pure infrastructure — no reasoning needed — so it
+// goes through the MCP tool impl directly, validated against the same
+// synthesisReportSchema the SDK path used.
+// Resolved as a runtime string so tsc does not analyze the target module
+// (it lives in sibling package `mcp/`, outside this package's rootDir).
+const MCP_TOOLS_MODULE_PATH = "../mcp/tools.js";
 
-  for await (const message of runtime.queryFn({
-    prompt: [
-      "Call the run_yosys MCP tool exactly once with the payload below.",
-      "Do not use built-in tools.",
-      "Return only the tool result as JSON.",
-      "",
-      "Payload JSON:",
-      JSON.stringify(
-        {
-          verilog_source: module.verilog_source,
-          module_name: module.module_id,
-        },
-        null,
-        2,
-      ),
-    ].join("\n"),
-    options: {
-      cwd: repoRoot,
-      tools: [],
-      allowedTools: [DIRECT_MCP_TOOLS.run_yosys],
-      plugins: [{ type: "local", path: pluginPath }],
-      outputFormat: synthesisReportOutputFormat,
-      maxTurns: 3,
-    },
-  })) {
-    messages.push(message);
-
-    if (isResultMessage(message)) {
-      finalResult = message;
-    }
-  }
-
-  if (!finalResult) {
-    throw new Error(`No final result message was received for run_yosys on '${module.module_id}'.`);
-  }
-
-  return {
-    payload: requireStructuredOutput<SynthesisReport>(
-      finalResult,
-      "run_yosys",
-      synthesisReportZod,
-    ),
-    result: finalResult,
-    messages,
+async function invokeYosys(module: VerilogModule): Promise<SynthesisReport> {
+  const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
+    run_yosys: (
+      verilog_source: string,
+      module_name: string,
+    ) => Promise<SynthesisReport>;
   };
+  const raw = await mcpTools.run_yosys(module.verilog_source, module.module_id);
+  const parsed = synthesisReportZod.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `run_yosys returned invalid output:\n${JSON.stringify(parsed.error.issues, null, 2)}`,
+    );
+  }
+  return parsed.data;
 }
 
 async function processYosysOutcome(
@@ -546,20 +593,39 @@ async function processYosysOutcome(
   statePath: string,
   runtime: OrchestratorRuntime,
 ): Promise<void> {
-  const yosysResult = await invokeYosys(module, runtime);
-  recordUsageFromResult(manager, yosysResult.result);
-  await writeJsonFile(reportPath(`${moduleId}.yosys.json`), yosysResult.payload);
+  let report: SynthesisReport;
+  try {
+    report = await invokeYosys(module);
+  } catch (error: unknown) {
+    // Tool itself crashed before producing a structured report. Treat as a
+    // synthesis failure so Surgeon gets a chance to repair; the fix_hint
+    // carries whatever error message the runner surfaced.
+    report = {
+      success: false,
+      lut_count: 0,
+      fmax_mhz: 0,
+      report: error instanceof Error ? error.message : String(error),
+    };
+  }
 
-  if (yosysResult.payload.success) {
+  await writeJsonFile(reportPath(`${moduleId}.yosys.json`), report);
+
+  const synthesisFailure = evaluateSynthesis(moduleId, verifiedResult, report);
+  if (!synthesisFailure) {
+    // Genuine pass — RTL simulates correctly, synthesizes, and hits the PPA gates.
+    await appendRunLog(
+      {
+        event: "yosys_pass",
+        module_id: moduleId,
+        lut_count: report.lut_count,
+        fmax_mhz: report.fmax_mhz,
+      },
+      runtime,
+    );
     await manager.saveState(statePath);
     return;
   }
 
-  const synthesisFailure = buildYosysFailureResult(
-    moduleId,
-    verifiedResult,
-    yosysResult.payload,
-  );
   const statusBeforeApply = manager.getState().modules[moduleId];
   manager.applyVerifResult(moduleId, synthesisFailure);
   const statusAfterApply = manager.getState().modules[moduleId];
@@ -568,7 +634,7 @@ async function processYosysOutcome(
     moduleId,
     statusBeforeApply,
     statusAfterApply,
-    "yosys_fail",
+    `yosys_${synthesisFailure.failure_class ?? "fail"}`,
     runtime,
   );
   await manager.saveState(statePath);
@@ -583,6 +649,19 @@ async function processYosysOutcome(
       runtime,
     );
   }
+}
+
+async function persistVerilogModule(module: VerilogModule): Promise<void> {
+  // Agents are supposed to call the write_verilog MCP tool themselves, but
+  // Sonnet/Opus under outputFormat: json_schema sometimes skip tool calls
+  // to save turns. Orchestrator owns disk state, so ensure the .v and
+  // .meta.json files exist regardless of whether the agent persisted them.
+  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const verilogPath = path.join(rtlDir, `${module.module_id}.v`);
+  const metaPath = path.join(rtlDir, `${module.module_id}.meta.json`);
+  await mkdir(rtlDir, { recursive: true });
+  await writeFile(verilogPath, module.verilog_source, "utf8");
+  await writeFile(metaPath, `${JSON.stringify(module, null, 2)}\n`, "utf8");
 }
 
 async function invokeFoundry(
@@ -605,6 +684,8 @@ async function invokeFoundry(
     verilogModuleZod,
     runtime,
   );
+
+  await persistVerilogModule(result.payload);
 
   await appendRunLog(
     {
@@ -690,6 +771,8 @@ async function invokeSurgeon(
     verilogModuleZod,
     runtime,
   );
+
+  await persistVerilogModule(result.payload);
 
   await appendRunLog(
     {

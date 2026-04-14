@@ -1,11 +1,14 @@
 {
+  "forceLoginMethod": "claudeai",
   "permissions": {
     "allow": [
       "Bash(node:*)",
       "Bash(npm:*)",
+      "Bash(python:*)",
       "Bash(python3:*)",
       "Bash(iverilog:*)",
       "Bash(verilator:*)",
+      "Bash(verilator_bin:*)",
       "Bash(yosys:*)"
     ]
   }
