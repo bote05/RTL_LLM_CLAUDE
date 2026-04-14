@@ -11,10 +11,17 @@ import {
   type SDKResultMessage,
 } from "./claude-agent-sdk-compat.js";
 
+import { z } from "zod";
+
 import { AGENT_CONFIG, PIPELINE_CONFIG, type AgentName } from "./config.js";
 import { PipelineStateManager } from "./pipeline.js";
+import {
+  pipelineIrSchema as pipelineIrZod,
+  synthesisReportSchema as synthesisReportZod,
+  verifResultSchema as verifResultZod,
+  verilogModuleSchema as verilogModuleZod,
+} from "./schemas.js";
 import type {
-  FailureClass,
   LayerIR,
   ModelUsageEntry,
   PipelineIR,
@@ -60,190 +67,19 @@ const GLOBAL_ALLOWED_TOOLS = [
   ...new Set(Object.values(AGENT_MCP_TOOLS).flat()),
 ];
 
-const FAILURE_CLASSES = [
-  "integer_overflow",
-  "sign_extension_error",
-  "bit_shift_wrong",
-  "rounding_mode_wrong",
-  "saturation_missing",
-  "loop_bounds_incorrect",
-  "array_indexing_error",
-  "port_width_mismatch",
-  "residual_addition_overflow",
-  "missing_pipeline_register",
-  "pipeline_latency_wrong",
-  "reset_logic_broken",
-  "enable_signal_ignored",
-  "scale_factor_misapplied",
-  "bias_term_missing",
-  "batch_norm_not_folded",
-] as const satisfies readonly FailureClass[];
+type SynthesisReport = z.infer<typeof synthesisReportZod>;
 
-type SynthesisReport = {
-  success: boolean;
-  lut_count: number;
-  fmax_mhz: number;
-  report: string;
-};
+function toOutputFormat(schema: z.ZodType): OutputFormat {
+  return {
+    type: "json_schema",
+    schema: z.toJSONSchema(schema) as Record<string, unknown>,
+  };
+}
 
-const verifResultSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["module_id", "status"],
-  properties: {
-    module_id: { type: "string" },
-    status: { type: "string", enum: ["pass", "fail", "syntax_error"] },
-    timing_pass: { type: "boolean" },
-    timing_actual_cycles: { type: "number" },
-    timing_expected_cycles: { type: "number" },
-    mismatch_layer: { type: "string" },
-    expected: { type: "array", items: { type: "number" } },
-    got: { type: "array", items: { type: "number" } },
-    max_error: { type: "number" },
-    mean_error: { type: "number" },
-    failure_class: {
-      anyOf: [
-        { type: "string", enum: [...FAILURE_CLASSES] },
-        { type: "null" },
-      ],
-    },
-    fix_hint: { type: "string" },
-    iverilog_stderr: { type: "string" },
-    verilator_stderr: { type: "string" },
-  },
-} as const;
-
-const layerIrSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "module_id",
-    "op_type",
-    "input_shape",
-    "output_shape",
-    "weights_path",
-    "bias_path",
-    "weight_shape",
-    "num_weights",
-    "scale_factor",
-    "zero_point",
-    "pipeline_latency_cycles",
-    "clock_period_ns",
-    "input_width_bits",
-    "output_width_bits",
-    "valid_in_signal",
-    "valid_out_signal",
-    "clock_signal",
-    "reset_signal",
-    "golden_inputs",
-    "golden_outputs",
-  ],
-  properties: {
-    module_id: { type: "string" },
-    op_type: { type: "string", enum: ["conv2d", "relu", "add"] },
-    input_shape: { type: "array", items: { type: "number" } },
-    output_shape: { type: "array", items: { type: "number" } },
-    weights_path: { type: "string" },
-    bias_path: {
-      anyOf: [
-        { type: "string" },
-        { type: "null" },
-      ],
-    },
-    weight_shape: { type: "array", items: { type: "number" } },
-    num_weights: { type: "number" },
-    scale_factor: { type: "number" },
-    zero_point: { type: "number" },
-    pipeline_latency_cycles: { type: "number" },
-    clock_period_ns: { type: "number" },
-    input_width_bits: { type: "number" },
-    output_width_bits: { type: "number" },
-    valid_in_signal: { type: "string" },
-    valid_out_signal: { type: "string" },
-    clock_signal: { type: "string" },
-    reset_signal: { type: "string" },
-    golden_inputs: {
-      type: "array",
-      items: {
-        type: "array",
-        items: { type: "number" },
-      },
-    },
-    golden_outputs: {
-      type: "array",
-      items: {
-        type: "array",
-        items: { type: "number" },
-      },
-    },
-  },
-} as const;
-
-const pipelineIrSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["model_name", "quantization", "generated_at", "layers"],
-  properties: {
-    model_name: { type: "string" },
-    quantization: { type: "string", const: "int8_symmetric_per_tensor" },
-    generated_at: { type: "string" },
-    layers: {
-      type: "array",
-      items: layerIrSchema,
-    },
-  },
-} as const;
-
-const verilogModuleSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "module_id",
-    "spec_hash",
-    "verilog_source",
-    "generated_by",
-    "attempt",
-  ],
-  properties: {
-    module_id: { type: "string" },
-    spec_hash: { type: "string" },
-    verilog_source: { type: "string" },
-    generated_by: { type: "string", enum: ["Foundry", "Surgeon"] },
-    attempt: { type: "number", minimum: 1 },
-  },
-} as const;
-
-const synthesisReportSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["success", "lut_count", "fmax_mhz", "report"],
-  properties: {
-    success: { type: "boolean" },
-    lut_count: { type: "number" },
-    fmax_mhz: { type: "number" },
-    report: { type: "string" },
-  },
-} as const;
-
-const pipelineIrOutputFormat: OutputFormat = {
-  type: "json_schema",
-  schema: pipelineIrSchema,
-};
-
-const verilogModuleOutputFormat: OutputFormat = {
-  type: "json_schema",
-  schema: verilogModuleSchema,
-};
-
-const verifResultOutputFormat: OutputFormat = {
-  type: "json_schema",
-  schema: verifResultSchema,
-};
-
-const synthesisReportOutputFormat: OutputFormat = {
-  type: "json_schema",
-  schema: synthesisReportSchema,
-};
+const pipelineIrOutputFormat     = toOutputFormat(pipelineIrZod);
+const verilogModuleOutputFormat  = toOutputFormat(verilogModuleZod);
+const verifResultOutputFormat    = toOutputFormat(verifResultZod);
+const synthesisReportOutputFormat = toOutputFormat(synthesisReportZod);
 
 type AgentSlug = (typeof AGENT_SLUGS)[AgentName];
 
@@ -330,12 +166,24 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T> {
+async function readJsonFile<T>(
+  filePath: string,
+  schema?: z.ZodType<T>,
+): Promise<T> {
   const raw = await readFile(filePath, "utf8");
-  const parsed = JSON.parse(raw) as T;
+  const parsed: unknown = JSON.parse(raw);
 
-  // TODO: Replace this cast-only helper with schema-backed validation so resume and artifact loading fail deterministically on malformed JSON.
-  return parsed;
+  if (schema) {
+    const result = schema.safeParse(parsed);
+    if (!result.success) {
+      throw new Error(
+        `Invalid JSON at '${filePath}':\n${JSON.stringify(result.error.issues, null, 2)}`,
+      );
+    }
+    return result.data;
+  }
+
+  return parsed as T;
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
@@ -426,24 +274,35 @@ function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
   ].join("\n");
 }
 
-function requireStructuredOutput<T>(result: SDKResultMessage, label: string): T {
+function requireStructuredOutput<T>(
+  result: SDKResultMessage,
+  label: string,
+  schema: z.ZodType<T>,
+): T {
   if (result.subtype !== "success") {
     throw new Error(`${label} query did not succeed: ${result.subtype}`);
   }
 
-  if (result.structured_output !== undefined) {
-    // TODO: Validate structured_output with AJV or Zod against the canonical schema so SDK validation and local validation cannot drift silently.
-    return result.structured_output as T;
+  const raw: unknown =
+    result.structured_output !== undefined
+      ? result.structured_output
+      : JSON.parse(result.result);
+
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `${label} returned invalid output:\n${JSON.stringify(parsed.error.issues, null, 2)}`,
+    );
   }
 
-  // TODO: Keep this JSON.parse fallback only until every agent call is enforced with outputFormat and the result path is covered by tests.
-  return JSON.parse(result.result) as T;
+  return parsed.data;
 }
 
 async function runDelegatedAgent<T>(
   slug: AgentSlug,
   payload: unknown,
   outputFormat: OutputFormat,
+  resultSchema: z.ZodType<T>,
 ): Promise<AgentRunResult<T>> {
   const agents = await loadAllAgentDefinitions();
   const messages: SDKMessage[] = [];
@@ -473,7 +332,7 @@ async function runDelegatedAgent<T>(
   }
 
   return {
-    payload: requireStructuredOutput<T>(finalResult, slug),
+    payload: requireStructuredOutput<T>(finalResult, slug, resultSchema),
     result: finalResult,
     messages,
   };
@@ -490,7 +349,7 @@ function findLayer(pipelineIr: PipelineIR, moduleId: string): LayerIR {
 
 async function loadPersistedVerilogModule(moduleId: string): Promise<VerilogModule> {
   const metaPath = path.join(resolveFromSdk(PIPELINE_CONFIG.rtl_dir), `${moduleId}.meta.json`);
-  return readJsonFile<VerilogModule>(metaPath);
+  return readJsonFile<VerilogModule>(metaPath, verilogModuleZod);
 }
 
 async function logStateTransition(
@@ -523,7 +382,7 @@ async function ensureLayerIr(
 
   if (await pathExists(layerIrPath)) {
     return {
-      pipelineIr: await readJsonFile<PipelineIR>(layerIrPath),
+      pipelineIr: await readJsonFile<PipelineIR>(layerIrPath, pipelineIrZod),
     };
   }
 
@@ -541,7 +400,12 @@ async function ensureLayerIr(
     payload,
   });
 
-  const result = await runDelegatedAgent<PipelineIR>("cartographer", payload, pipelineIrOutputFormat);
+  const result = await runDelegatedAgent<PipelineIR>(
+    "cartographer",
+    payload,
+    pipelineIrOutputFormat,
+    pipelineIrZod,
+  );
 
   await appendRunLog({
     event: "agent_result",
@@ -602,7 +466,7 @@ async function invokeYosys(module: VerilogModule): Promise<AgentRunResult<Synthe
   }
 
   return {
-    payload: requireStructuredOutput<SynthesisReport>(finalResult, "run_yosys"),
+    payload: requireStructuredOutput<SynthesisReport>(finalResult, "run_yosys", synthesisReportZod),
     result: finalResult,
     messages,
   };
@@ -619,6 +483,7 @@ async function invokeFoundry(layerIr: LayerIR): Promise<AgentRunResult<VerilogMo
     "foundry",
     { layer_ir: layerIr },
     verilogModuleOutputFormat,
+    verilogModuleZod,
   );
 
   await appendRunLog({
@@ -653,6 +518,7 @@ async function invokeAssayer(
       testbench_template_path: resolveFromSdk(PIPELINE_CONFIG.static_testbench_path),
     },
     verifResultOutputFormat,
+    verifResultZod,
   );
 
   await appendRunLog({
@@ -686,6 +552,7 @@ async function invokeSurgeon(
       layer_ir: layerIr,
     },
     verilogModuleOutputFormat,
+    verilogModuleZod,
   );
 
   await appendRunLog({

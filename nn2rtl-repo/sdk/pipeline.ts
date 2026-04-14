@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { pipelineStateSchema } from "./schemas.js";
 import type {
   ModelUsageEntry,
   ModuleStatus,
@@ -136,14 +137,49 @@ export class PipelineStateManager {
 
   async loadState(filePath: string): Promise<void> {
     const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as PipelineState;
+    const parsed: unknown = JSON.parse(raw);
+    const validated = pipelineStateSchema.safeParse(parsed);
 
-    // TODO: Add schema validation here so corrupted resume files fail with clear, field-level errors before mutating in-memory state.
-    this.state = parsed;
+    if (!validated.success) {
+      throw new Error(
+        `Corrupted pipeline state at '${filePath}':\n${JSON.stringify(validated.error.issues, null, 2)}`,
+      );
+    }
 
-    const loadedOrder = Object.keys(parsed.modules);
+    this.state = validated.data as PipelineState;
+
+    const loadedOrder = Object.keys(this.state.modules);
     if (loadedOrder.length > 0) {
       this.moduleOrder.splice(0, this.moduleOrder.length, ...loadedOrder);
+    }
+
+    // Transient statuses ('generating', 'verifying') mean the previous run
+    // crashed mid-step. Recover to the nearest resumable status so tick()
+    // can make progress, and roll back the attempts counter for Surgeon-path
+    // crashes so tick()'s re-increment does not over-bill the retry budget.
+    //
+    // The four crash points the orchestrator can persist:
+    //   generating + no prior result  -> Foundry crashed.    Resume: pending.
+    //   generating + prior result     -> Surgeon crashed.    Resume: fail_retry, attempts-1.
+    //   verifying  + no prior result  -> Assayer crashed after Foundry.
+    //                                    Resume: pending (re-run Foundry; Assayer is not a
+    //                                    first-class tick() action today).
+    //   verifying  + prior result     -> Assayer crashed after Surgeon.
+    //                                    Resume: fail_retry, attempts-1 (re-run Surgeon).
+    for (const moduleId of this.moduleOrder) {
+      const status = this.state.modules[moduleId];
+      if (status !== "generating" && status !== "verifying") {
+        continue;
+      }
+
+      const hasPriorResult = moduleId in this.state.results;
+      if (hasPriorResult) {
+        this.state.modules[moduleId] = "fail_retry";
+        const attempts = this.state.attempts[moduleId] ?? 0;
+        this.state.attempts[moduleId] = Math.max(0, attempts - 1);
+      } else {
+        this.state.modules[moduleId] = "pending";
+      }
     }
   }
 
