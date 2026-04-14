@@ -287,19 +287,28 @@ def build_pipeline_ir_payload(
         checkpoint = load_quantized_checkpoint(checkpoint_path)
         payload = build_legacy_pipeline_ir_payload(checkpoint, repo_root)
     elif format_version == 2:
-        if is_flat_checkpoint_v2(raw_checkpoint):
-            checkpoint = load_quantized_checkpoint(checkpoint_path)
-            payload = build_flat_checkpoint_pipeline_ir_payload(
-                checkpoint=checkpoint,
-                repo_root=repo_root,
-                generated_at=generated_at or checkpoint["generated_at"],
+        # The fx path needs either a pickled nn.Module or a residual_stack_spec
+        # describing how the `layers` dict wires together. A v2 checkpoint that
+        # ships only a flat `layers` dict cannot be traced and cannot produce
+        # real golden activations — earlier revisions silently fell back to
+        # empty golden_inputs/golden_outputs, which passed schema validation
+        # but made every downstream Assayer verification a false positive.
+        if not _v2_has_traceable_spec(raw_checkpoint):
+            raise GoldenGenerationError(
+                "format_version=2 checkpoint lacks a traceable model spec. "
+                "The `layers` dict alone is not sufficient to capture per-module "
+                "golden activations — the checkpoint must also embed one of: "
+                "a pickled nn.Module under `quantized_residual_stack` / "
+                "`residual_stack` / `model`, OR a `residual_stack_spec` / "
+                "`model_spec` / `graph` describing how the layers wire together "
+                "(see CheckpointResidualStack for the expected operations "
+                "schema). See ARCHITECTURE.md for why this is a hard error."
             )
-        else:
-            payload = build_fx_pipeline_ir_payload(
-                checkpoint=raw_checkpoint,
-                repo_root=repo_root,
-                generated_at=generated_at or utc_now_iso8601(),
-            )
+        payload = build_fx_pipeline_ir_payload(
+            checkpoint=raw_checkpoint,
+            repo_root=repo_root,
+            generated_at=generated_at or utc_now_iso8601(),
+        )
     else:
         raise GoldenGenerationError(f"Unsupported checkpoint format_version: {format_version}")
 
@@ -424,99 +433,21 @@ def build_legacy_pipeline_ir_payload(
     }
 
 
-def is_flat_checkpoint_v2(checkpoint: Mapping[str, Any]) -> bool:
-    if any(
+def _v2_has_traceable_spec(checkpoint: Mapping[str, Any]) -> bool:
+    # build_fx_pipeline_ir_payload needs one of these to reconstruct the
+    # network for tracing + golden activation capture. A flat `layers` dict
+    # alone is not enough.
+    return any(
         key in checkpoint
-        for key in ("quantized_residual_stack", "residual_stack", "model", "residual_stack_spec", "model_spec", "graph")
-    ):
-        return False
-
-    raw_layers = checkpoint.get("layers")
-    if not isinstance(raw_layers, Mapping) or not raw_layers:
-        return False
-
-    first_layer = next(iter(raw_layers.values()))
-    return isinstance(first_layer, Mapping) and "num_weights" not in first_layer
-
-
-def build_flat_checkpoint_pipeline_ir_payload(
-    checkpoint: Mapping[str, Any],
-    repo_root: Path,
-    generated_at: str,
-) -> dict[str, Any]:
-    raw_layers = checkpoint.get("layers")
-    if not isinstance(raw_layers, Mapping) or not raw_layers:
-        raise GoldenGenerationError("Checkpoint v2 must contain a non-empty 'layers' mapping.")
-
-    layer_payloads: list[dict[str, Any]] = []
-
-    for module_id, metadata in raw_layers.items():
-        if not isinstance(module_id, str) or not isinstance(metadata, Mapping):
-            raise GoldenGenerationError("Checkpoint v2 layers must map string ids to dict metadata.")
-
-        op_type = require_op_type(metadata, f"checkpoint layer '{module_id}'")
-        input_shape = coerce_shape(metadata.get("input_shape"), f"{module_id}.input_shape")
-        output_shape = coerce_shape(metadata.get("output_shape"), f"{module_id}.output_shape")
-        scale_factor = float(metadata.get("scale_factor"))
-        zero_point = coerce_int(metadata.get("zero_point"), f"{module_id}.zero_point")
-        input_width_bits = coerce_int(metadata.get("input_width_bits"), f"{module_id}.input_width_bits")
-        output_width_bits = coerce_int(metadata.get("output_width_bits"), f"{module_id}.output_width_bits")
-
-        weights_path, bias_path = get_weight_artifact_paths(repo_root, module_id)
-        if op_type == "conv2d":
-            weight_values = metadata.get("weight_int8")
-            if not isinstance(weight_values, list) or not all(isinstance(value, int) for value in weight_values):
-                raise GoldenGenerationError(
-                    f"Checkpoint layer '{module_id}' field 'weight_int8' must be a list of integers."
-                )
-            bias_values = metadata.get("bias_int32")
-            if bias_values is not None and (
-                not isinstance(bias_values, list) or not all(isinstance(value, int) for value in bias_values)
-            ):
-                raise GoldenGenerationError(
-                    f"Checkpoint layer '{module_id}' field 'bias_int32' must be null or a list of integers."
-                )
-            weight_shape = coerce_shape(metadata.get("weight_shape"), f"{module_id}.weight_shape")
-            write_signed_int8_hex(weight_values, weights_path)
-            resolved_bias_path: str | None = None
-            if bias_values is not None:
-                write_signed_int32_hex(bias_values, bias_path)
-                resolved_bias_path = bias_path.resolve().as_posix()
-            num_weights = len(weight_values)
-        else:
-            write_signed_int8_hex([], weights_path)
-            weight_shape = [1, 1, 1, 1]
-            resolved_bias_path = None
-            num_weights = 0
-
-        layer_payloads.append(
-            {
-                "module_id": module_id,
-                "op_type": op_type,
-                "input_shape": input_shape,
-                "output_shape": output_shape,
-                "weights_path": weights_path.resolve().as_posix(),
-                "bias_path": resolved_bias_path,
-                "weight_shape": weight_shape,
-                "num_weights": num_weights,
-                "scale_factor": scale_factor,
-                "zero_point": zero_point,
-                "pipeline_latency_cycles": PIPELINE_LATENCY_CYCLES[op_type],
-                "clock_period_ns": 20,
-                "input_width_bits": input_width_bits,
-                "output_width_bits": output_width_bits,
-                **SIGNAL_LITERALS,
-                "golden_inputs": [],
-                "golden_outputs": [],
-            }
+        for key in (
+            "quantized_residual_stack",
+            "residual_stack",
+            "model",
+            "residual_stack_spec",
+            "model_spec",
+            "graph",
         )
-
-    return {
-        "model_name": "resnet50",
-        "quantization": "int8_symmetric_per_tensor",
-        "generated_at": generated_at,
-        "layers": layer_payloads,
-    }
+    )
 
 
 def build_fx_pipeline_ir_payload(
@@ -762,8 +693,18 @@ def resolve_layer_parameters(
     module_id: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     weight_shape = coerce_shape(metadata["weight_shape"], "weight_shape")
-    weight_key = next((key for key in ("weights", "weight", "conv_weight") if key in metadata), None)
-    bias_key = next((key for key in ("bias", "conv_bias") if key in metadata), None)
+    # `weight_int8` / `bias_int32` is the v2 real-PTQ schema emitted by
+    # scripts/quantize_impl.py. The legacy keys (`weights`, `weight`,
+    # `conv_weight`, `bias`, `conv_bias`) are kept for the toy v1 checkpoint
+    # and for hand-crafted test fixtures.
+    weight_key = next(
+        (key for key in ("weight_int8", "weights", "weight", "conv_weight") if key in metadata),
+        None,
+    )
+    bias_key = next(
+        (key for key in ("bias_int32", "bias", "conv_bias") if key in metadata),
+        None,
+    )
 
     if weight_key is not None:
         weight_tensor = tensor_from_numeric_values(metadata[weight_key], weight_shape, weight_key)

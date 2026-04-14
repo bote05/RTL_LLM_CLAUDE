@@ -122,7 +122,15 @@ def test_quantize_model_cli_writes_a_real_checkpoint_and_summary(tmp_path: Path)
 
 
 @pytest.mark.full
-def test_generate_golden_cli_writes_pipeline_ir_and_weight_artifacts(tmp_path: Path) -> None:
+def test_generate_golden_cli_rejects_flat_v2_checkpoint_from_real_ptq(tmp_path: Path) -> None:
+    # scripts/quantize_model.py currently writes a flat format_version=2
+    # checkpoint (a `layers` dict only, no nn.Module or residual_stack_spec).
+    # scripts/generate_golden.py cannot fx-trace that, so it must fail loudly
+    # with the documented error rather than quietly emitting empty
+    # golden_inputs/golden_outputs (the old behavior was a silent false-pass
+    # on the downstream Assayer stage). This test locks in the loud-failure
+    # contract until Prompt 1 is extended to emit a traceable model spec.
+    # See ARCHITECTURE.md "PTQ ↔ fx golden capture wiring" for the gap.
     fake_torchvision = make_fake_torchvision_package(tmp_path)
     quantize_result = run_script(tmp_path, "quantize_model.py", pythonpath=fake_torchvision)
     assert quantize_result.returncode == 0, quantize_result.stderr
@@ -134,18 +142,8 @@ def test_generate_golden_cli_writes_pipeline_ir_and_weight_artifacts(tmp_path: P
         pythonpath=fake_torchvision,
     )
 
-    assert result.returncode == 0, result.stderr
-    payload = json.loads((tmp_path / "output" / "layer_ir.json").read_text(encoding="utf8"))
-    summary = json.loads(result.stdout)
-    layer = payload["layers"][0]
-
-    assert summary["status"] == "ok"
-    assert Path(summary["pipeline_ir_path"]).as_posix().endswith("output/layer_ir.json")
-    assert layer["module_id"] == "layer0_0_conv1"
-    assert layer["ready_in_signal"] == "ready_in"
-    assert Path(layer["weights_path"]).exists()
-    assert Path(layer["bias_path"]).exists()
-    assert json.loads((tmp_path / "output" / "golden_vectors.json").read_text(encoding="utf8")) == payload
+    assert result.returncode != 0
+    assert "lacks a traceable model spec" in result.stderr
 
 
 @pytest.mark.full

@@ -15,7 +15,7 @@ nn2rtl-repo/
 ├── README.md                  # Canonical design specification
 ├── CLAUDE.md                  # Operational rules for working in the repo
 ├── ARCHITECTURE.md            # This file — file-level reference
-├── package.json               # Monorepo test scripts (test:fast / test:full / coverage)
+├── package.json               # Monorepo contract-check, test, and coverage scripts
 ├── pytest.ini                 # Python test config (markers, default flags)
 ├── .gitignore
 ├── .claude/settings.json      # Claude Code workspace permissions
@@ -23,7 +23,7 @@ nn2rtl-repo/
 ├── nn2rtl-plugin/             # Layer 1: Claude Code plugin (agent roles + skills)
 ├── sdk/                       # Layer 2: TypeScript orchestrator
 ├── mcp/                       # Layer 3: MCP server exposing hardware toolchain
-├── scripts/                   # Python frontend prep (quantization + layer-IR / smoke harness)
+├── scripts/                   # Frontend prep plus shared maintenance checks
 ├── tb/                        # Static C++ Verilator testbench
 ├── test/fixtures/             # Cross-language fixtures used by Python & TS tests
 └── output/                    # Runtime artifacts (git-ignored; empty subdirs kept)
@@ -36,7 +36,7 @@ The three layers map directly to the README's architecture section: agents in th
 ## Root-Level Files
 
 ### `README.md`
-The canonical specification. Describes the research thesis, scope decisions, architectural choices (weights via `$readmemh`, pipelined modules with timing contracts, static testbench), the five-agent roster, pipeline flow, data contracts, verification strategy, failure-mode taxonomy, and known risks. Source of truth when the code and docs disagree.
+The design-spec document. Describes the research thesis, intended scope, architectural choices (weights via `$readmemh`, pipelined modules with timing contracts, static testbench), the agent roster, pipeline flow, data contracts, verification strategy, failure-mode taxonomy, and known risks. Treat it as the target architecture; use this file for the current implementation status when the code is ahead of or behind the original spec wording.
 
 ### `CLAUDE.md`
 Tactical operational rules surfaced to Claude Code on every session start. Core rules: never write `.v` files directly; always run `npm run typecheck` before the pipeline; run the Python pre-processing scripts once before the first run; the SDK package is `@anthropic-ai/claude-agent-sdk`.
@@ -45,11 +45,12 @@ Tactical operational rules surfaced to Claude Code on every session start. Core 
 This file.
 
 ### `package.json` *(root)*
-Thin monorepo aggregator. No dependencies of its own. Exposes three scripts that fan out into both TypeScript packages and the Python suite:
+Thin monorepo aggregator. No dependencies of its own. Exposes one shared contract check plus the cross-package test/coverage entrypoints:
 
-- `test:fast` — vitest in `sdk/` and `mcp/` plus `pytest -m "not full"` (skip heavy markers).
-- `test:full` — vitest in both packages plus `pytest -m "not manual"` (includes heavy tests, skips only opt-in manual smoke tests).
-- `coverage` — per-package vitest coverage followed by `pytest -m "not manual" --cov=scripts --cov-branch --cov-fail-under=90`.
+- `check:twins` — runs `scripts/check-twins.mjs` to enforce that shared SDK/MCP types and shared Zod schema exports stay in sync.
+- `test:fast` — `check:twins`, then vitest in `sdk/` and `mcp/`, then `pytest -m "not full"` (skip heavy markers).
+- `test:full` — `check:twins`, then vitest in both packages, then `pytest -m "not manual"` (includes heavy tests, skips only opt-in manual smoke tests).
+- `coverage` — `check:twins`, per-package vitest coverage, then `pytest -m "not manual" --cov=scripts --cov-branch --cov-fail-under=90`.
 
 ### `pytest.ini`
 Default pytest options (`-ra` report) and registered markers: `full` (heavy / slow tests) and `manual` (opt-in smoke tests that require user-supplied external artifacts).
@@ -73,7 +74,7 @@ Plugin manifest. Declares name, version, and paths to agent, skill, and MCP conf
 MCP server registration. Points to `../mcp/dist/server.js` with `OUTPUT_DIR=../output` and registers the server as `nn2rtl-tools`. Every MCP tool name is therefore prefixed `mcp__nn2rtl-tools__` in `allowedTools`.
 
 ### `agents/cartographer.md`
-Model extractor. Model: `sonnet`. Runs once. Loads the quantized PyTorch checkpoint, traces via `torch.fx`, folds batch normalization into convolutions, writes weight/bias `.hex` files to `output/weights/`, emits `output/layer_ir.json`. The JSON schema enforces that signal-name fields are emitted as the canonical literals (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`).
+Model extractor. Model: `sonnet`. Runs once. The prompt tells Cartographer to invoke the `read_weights` MCP tool, and that tool delegates into the Python frontend (`scripts/generate_golden.py`) to load the quantized checkpoint, fold batch norm into convolutions, rebuild/trace the graph when available, write weight/bias `.hex` files to `output/weights/`, and emit a schema-valid `PipelineIR`. Cartographer then returns that `PipelineIR`, which the orchestrator persists to `output/layer_ir.json`. The JSON schema enforces that signal-name fields are emitted as the canonical literals (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`).
 
 ### `agents/foundry.md`
 Primary Verilog generator. Model: `sonnet`. Receives one `LayerIR`, produces one synthesizable `VerilogModule`. Hard rules: INT8 fixed-point, `8×8 → 16-bit` multipliers, signed datapath, saturating residual adds, `$readmemh` for weights, exact `pipeline_latency_cycles` from first `valid_in` to first `valid_out`, no simulation-only constructs. Canonical port names are mandatory (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`); `ready_in` is a module **output** (upstream backpressure) that may be tied high if stalling is not needed. Must call `write_verilog` to persist.
@@ -94,7 +95,7 @@ Supplemental skill reference material loaded alongside the matching agent prompt
 The deterministic control plane. Not a prompt — a real state machine that reads state from disk, decides the next action, dispatches agents via the Claude Agent SDK's `query()`, validates their structured outputs through Zod, and updates state on disk after every transition. Resumable, auditable, measurable.
 
 ### `package.json`
-Dependencies: `@anthropic-ai/claude-agent-sdk`, `zod`. Dev: `@types/node`, `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Scripts: `build`, `typecheck`, `start` (runs `dist/main.js`), `dev` (watches `main.ts`), `pipeline`, `test`, `test:fast`, `test:full`, `coverage`.
+Dependencies: `@anthropic-ai/claude-agent-sdk`, `yaml`, `zod`. Dev: `@types/node`, `cross-env`, `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Scripts: `build`, `typecheck`, `start` (runs `dist/main.js`), `dev` (watches `main.ts`), `pipeline`, `test`, `test:fast`, `test:full`, `coverage`. In this workspace, `test:fast` and `coverage` use `cross-env` to pin temp-dir environment variables for deterministic cross-platform test runs.
 
 ### `package-lock.json`
 npm lockfile; pins the dependency graph. Not hand-edited.
@@ -184,7 +185,7 @@ Cost tracking accumulates over every agent call including Cartographer's bootstr
 The boundary between agents and the external Verilog toolchain. Five tools, a stdio transport, strict input validation.
 
 ### `package.json`
-Dependencies: `@modelcontextprotocol/sdk`, `zod`. Dev: `@types/node`, `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Script shape mirrors the SDK package, with temp-dir environment overrides on the Vitest commands used in this workspace. Compiled output `dist/main.js` is the CLI entry; `dist/server.js` is what `.mcp.json` points to.
+Dependencies: `@modelcontextprotocol/sdk`, `zod`. Dev: `@types/node`, `cross-env`, `tsx`, `typescript`, `vitest`, `@vitest/coverage-v8`. Script shape mirrors the SDK package, with temp-dir environment overrides on the Vitest commands used in this workspace. Compiled output `dist/main.js` is the CLI entry; `dist/server.js` is what `.mcp.json` points to.
 
 ### `package-lock.json`
 npm lockfile; committed for reproducibility.
@@ -217,7 +218,7 @@ Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `
 
 - `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o <os.devNull> -g2012`, returns `{ success, stderr }`. **Implemented.**
 - `run_verilator(verilog_source, module_name, sidecar_path)` — loads and validates the sidecar via `readSidecarIfPresent` (Zod-checked), rejects relative `golden_inputs_path` / `golden_outputs_path` / `results_path`, copies the static testbench plus vendored `third_party/json.hpp` into a temp build dir, invokes `VERILATOR_COMMAND --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS`, runs the produced binary with the sidecar path, reads `sidecar.results_path`, validates it through `verifResultSchema`, and maps build / execution failures into well-formed `VerifResult` payloads. **Implemented.**
-- `run_yosys(verilog_source, module_name)` — runs `yosys -p "synth_ice40 -abc9; stat"`, uses the exported `parseYosysReport` helper to extract LUT count and an `MHz` figure, returns `{ success, lut_count, fmax_mhz, report }`. **Implemented.**
+- `run_yosys(verilog_source, module_name)` — runs `yosys -p "synth_ice40 -abc9 -top <module_name>; stat; tee -o /dev/stdout ltp -noff"`, uses the exported `parseYosysReport` helper to extract LUT count and an `MHz` figure (including abc9 delay lines), and returns `{ success, lut_count, fmax_mhz, report }`. **Implemented.**
 - `read_weights(checkpoint_path, quantization_config)` — spawns `PYTHON_COMMAND scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. `generate_golden.py` now writes the canonical artifact to `output/layer_ir.json` and mirrors the same JSON to `output/golden_vectors.json` for MCP compatibility, so `read_weights` still sees a valid `PipelineIR` without any TypeScript changes.
 - `write_verilog(module, output_dir)` — the persistence path agents are expected to use. Writes `<output_dir>/rtl/<module_id>.v` and `<module_id>.meta.json`, returns the absolute `.v` path. The orchestrator also has a `persistVerilogModule()` safety net in `sdk/orchestrate.ts` for cases where an agent returns valid structured RTL but skipped the MCP tool call. **Implemented.**
 - `readSidecarIfPresent(filePath)` — returns the parsed `VerificationSidecar` or `null` if the file is missing (ENOENT). Any other error, or a schema mismatch, throws with a field-level message.
@@ -235,9 +236,9 @@ Each handler parses its arguments through the matching Zod schema before invokin
 
 ---
 
-## Python Pre-Processing (`scripts/`)
+## Scripts (`scripts/`)
 
-Single-use utilities the human runs once before the autonomous pipeline. Split into thin CLI wrappers plus importable `*_impl.py` modules so pytest can exercise the helpers while keeping the local test flow deterministic. `prepare_pipeline.py` is the top-level no-argument smoke harness for the full frontend.
+Mostly frontend-prep utilities plus one repo-maintenance contract check. The Python side is split into thin CLI wrappers plus importable `*_impl.py` modules so pytest can exercise the helpers while keeping the local test flow deterministic. `prepare_pipeline.py` is the top-level no-argument smoke harness for the full frontend.
 
 ### `__init__.py`
 Makes `scripts/` an importable package so `pytest` (and future tests) can `from scripts.golden_impl import ...`.
@@ -279,6 +280,9 @@ Thin CLI wrapper over `golden_impl.py`. It resolves the checkpoint path, generat
 
 ### `prepare_pipeline.py`
 No-argument frontend smoke harness. It runs `quantize_model.py`, runs `generate_golden.py`, validates the resulting `output/layer_ir.json` against `pipelineIrSchema` from `mcp/schemas.ts` by shelling out to Node with `--experimental-strip-types`, prints a fixed-width summary table (`module_id | op_type | shape | num_weights | pipeline_latency_cycles`), and exits non-zero on the first failed step. The helper surface is intentionally small: subprocess chaining, TypeScript-schema validation, and table rendering.
+
+### `check-twins.mjs`
+Small Node maintenance script invoked by the root `check:twins` script before the repo-wide test and coverage commands. It enforces the "twin file" contract between `sdk/` and `mcp/`: `types.ts` must remain byte-identical, while the shared schema exports in `schemas.ts` (`failureClassSchema`, `layerIrSchema`, `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`) must remain byte-identical even though each package also has local-only schemas.
 
 ---
 
@@ -322,7 +326,7 @@ Shared fixtures used by both vitest suites and pytest. Today:
 - `verif_pass.json`, `verif_fail.json` — sample `VerifResult` payloads for both outcomes.
 - `verilator/stream_passthrough.v`, `stream_offset.v`, `stream_latency2.v`, `stream_stall.v`, `stream_bubble.v` — real DUT fixtures for the full MCP integration suite, covering happy-path streaming, numerical mismatch, exact-latency mismatch, `ready_in` backpressure, and `valid_out` bubbles.
 
-Actual suites now live in `sdk/test/`, `mcp/test/`, and `scripts/test_*.py`. The fast path is mostly mocked and deterministic; the full path exercises real `iverilog`, `verilator`, `yosys`, and the Python frontend scripts, including the `prepare_pipeline.py` smoke harness and its failure-path coverage in `scripts/test_prepare_pipeline.py`.
+Actual suites now live in `sdk/test/`, `mcp/test/`, and the Python files under `scripts/` (`test_paths.py`, `test_quantize_impl.py`, `test_golden_impl.py`, `test_cli.py`, `test_prepare_pipeline.py`). The fast path is mostly mocked and deterministic; the full path exercises real `iverilog`, `verilator`, `yosys`, and the Python frontend scripts, including the `prepare_pipeline.py` smoke harness and its failure-path coverage in `scripts/test_prepare_pipeline.py`.
 
 ---
 
@@ -372,7 +376,7 @@ Entries reference exact file and line of the current work. In future revisions, 
 These require external tools and ML libraries; they cannot be completed in pure TypeScript.
 
 - **Extend the current PTQ export beyond stem + `layer1`**: the real torchvision ResNet-50 PTQ path is now implemented, but the checkpoint intentionally stops after the fused stem conv and first residual stack so the downstream RTL pipeline can expand in controlled increments.
-- **Emit real activation traces for the flat v2 PTQ bridge**: `generate_golden.py` can already turn the flattened ResNet-50 checkpoint into a valid `PipelineIR`, but the direct bridge currently focuses on weight/bias artifact emission rather than per-layer captured `golden_inputs` / `golden_outputs`.
+- **Wire the PTQ output into the fx golden-capture path** *(load-bearing for any ResNet-50 run)*: `scripts/quantize_model.py` writes a `format_version=2` checkpoint whose top level is just `{model_name, quantization, generated_at, layers: {...}}`. `scripts/generate_golden.py`'s fx path needs a `residual_stack_spec` (or a pickled `nn.Module` / `model_spec` / `graph`) describing how the layers wire together — without it the fx trace cannot reproduce the network, and per-module `golden_inputs` / `golden_outputs` cannot be captured. `scripts/golden_impl.py` now raises `GoldenGenerationError("format_version=2 checkpoint lacks a traceable model spec. ...")` instead of silently emitting empty vector lists, so the Assayer can no longer false-pass on an untestable LayerIR. Fix direction: extend `build_resnet50_quantized_checkpoint` in `scripts/quantize_impl.py` to emit a `residual_stack_spec` alongside `layers` that encodes the stem→maxpool→layer1 topology, including the `downsample` conv on `layer1[0]` (currently absent from the layers dict) and the `lhs`/`rhs` wiring for each `layer1_{i}_add`. The fx bridge already understands `weight_int8` / `bias_int32` via `resolve_layer_parameters`, so only the spec + downsample emission are missing.
 - **Manual smoke test on the intended checkpoint**: the automated suite now covers the deterministic frontend harness end-to-end, but the final thesis path still needs an opt-in smoke command against the actual ResNet-50 checkpoint and artifact set.
 
 ### Blocked on External Dependencies
