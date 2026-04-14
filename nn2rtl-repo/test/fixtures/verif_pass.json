@@ -1,0 +1,12 @@
+{
+  "module_id": "unit_module",
+  "status": "pass",
+  "timing_pass": true,
+  "timing_actual_cycles": 1,
+  "timing_expected_cycles": 1,
+  "expected": [0],
+  "got": [0],
+  "max_error": 0,
+  "mean_error": 0,
+  "failure_class": null
+}

@@ -29,8 +29,12 @@ import type {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..");
-const pluginPath = path.resolve(__dirname, "../nn2rtl-plugin");
+const sdkRoot = path.resolve(
+  __dirname,
+  path.basename(__dirname) === "dist" ? ".." : ".",
+);
+const repoRoot = path.resolve(sdkRoot, "..");
+const pluginPath = path.resolve(repoRoot, "nn2rtl-plugin");
 
 export const AGENT_SLUGS = {
   Conductor: "conductor",
@@ -106,7 +110,7 @@ export function createOrchestratorRuntime(
 }
 
 export function resolveFromSdk(relativePath: string): string {
-  return path.resolve(__dirname, relativePath);
+  return path.resolve(sdkRoot, relativePath);
 }
 
 function reportPath(fileName: string): string {

@@ -12,9 +12,9 @@
     "dev": "tsx watch main.ts",
     "pipeline": "tsx main.ts",
     "test": "vitest",
-    "test:fast": "vitest run",
+    "test:fast": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --exclude=test/**/*.full.test.ts",
     "test:full": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --coverage"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.0",

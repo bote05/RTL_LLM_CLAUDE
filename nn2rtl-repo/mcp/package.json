@@ -12,9 +12,9 @@
     "start": "node dist/main.js",
     "dev": "tsx watch main.ts",
     "test": "vitest",
-    "test:fast": "vitest run",
-    "test:full": "vitest run",
-    "coverage": "vitest run --coverage"
+    "test:fast": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --exclude=test/**/*.full.test.ts",
+    "test:full": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run",
+    "coverage": "TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --coverage"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

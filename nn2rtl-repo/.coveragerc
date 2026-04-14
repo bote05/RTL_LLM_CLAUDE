@@ -1,0 +1,10 @@
+[run]
+branch = True
+omit =
+    scripts/__init__.py
+    scripts/generate_golden.py
+    scripts/quantize_model.py
+    scripts/test_*.py
+
+[report]
+fail_under = 90

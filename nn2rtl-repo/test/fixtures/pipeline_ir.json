@@ -1,0 +1,32 @@
+{
+  "model_name": "fixture-net",
+  "quantization": "int8_symmetric_per_tensor",
+  "generated_at": "2026-04-14T00:00:00Z",
+  "layers": [
+    {
+      "module_id": "unit_module",
+      "op_type": "conv2d",
+      "input_shape": [1, 1, 1, 1],
+      "output_shape": [1, 1, 1, 1],
+      "weights_path": "/tmp/unit_module_weights.hex",
+      "bias_path": "/tmp/unit_module_bias.hex",
+      "weight_shape": [1, 1, 1, 1],
+      "num_weights": 1,
+      "scale_factor": 0.125,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 8,
+      "output_width_bits": 8,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs": [[0]],
+      "golden_outputs": [[0]]
+    }
+  ]
+}

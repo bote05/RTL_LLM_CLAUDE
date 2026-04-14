@@ -1,0 +1,13 @@
+{
+  "module_id": "unit_module",
+  "status": "fail",
+  "timing_pass": false,
+  "timing_actual_cycles": 2,
+  "timing_expected_cycles": 1,
+  "expected": [0],
+  "got": [7],
+  "max_error": 7,
+  "mean_error": 7,
+  "failure_class": "pipeline_latency_wrong",
+  "fix_hint": "Add the missing register stage."
+}

@@ -1,42 +1,61 @@
 #!/usr/bin/env python3
-"""Quantize a torchvision ResNet-50 checkpoint for the nn2rtl pipeline."""
+"""Create a deterministic toy quantized checkpoint for the automated nn2rtl flow."""
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
-import torch
-import torchvision
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from scripts.paths import detect_repo_root
+from scripts.quantize_impl import (
+    build_quantization_summary,
+    build_toy_quantized_checkpoint,
+    resolve_checkpoint_path,
+    write_quantized_checkpoint,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Write a deterministic toy quantized checkpoint used by the local nn2rtl tests.",
+    )
+    parser.add_argument(
+        "checkpoint_path",
+        nargs="?",
+        default=None,
+        help="Optional checkpoint path. Relative paths are resolved against the repository root.",
+    )
+    return parser.parse_args()
+
+
+def load_quantization_config() -> dict[str, object]:
+    raw = os.environ.get("NN2RTL_QUANTIZATION_CONFIG")
+    if not raw:
+        return {}
+
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("NN2RTL_QUANTIZATION_CONFIG must decode to a JSON object.")
+    return parsed
 
 
 def main() -> None:
-    repo_root = Path(__file__).resolve().parent.parent
-    checkpoints_dir = repo_root / "checkpoints"
-    checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoints_dir / "resnet50_int8.pth"
+    args = parse_args()
+    repo_root = detect_repo_root(__file__)
+    checkpoint_path = resolve_checkpoint_path(repo_root, args.checkpoint_path)
 
-    # TODO: Load the canonical torchvision ResNet-50 weights and prepare the model for post-training static quantization with symmetric per-tensor INT8 settings.
-    # TODO: Run the required calibration flow, convert the model with torch.quantization, and persist the quantized checkpoint to checkpoints/resnet50_int8.pth.
-    # TODO: Collect the final per-layer scale factors and print them to stdout as machine-readable JSON so the rest of the pipeline can reuse the same calibration metadata.
-
-    placeholder_scales = {
-        "model_name": "resnet50",
-        "quantization": "int8_symmetric_per_tensor",
-        "checkpoint_path": str(checkpoint_path),
-        "layers": {},
-        "note": "TODO: replace this placeholder with real PTQ output.",
-    }
-
-    checkpoint_path.write_text(
-        json.dumps({"note": "TODO: replace with quantized model state_dict."}, indent=2) + "\n",
-        encoding="utf8",
+    payload = build_toy_quantized_checkpoint(
+        checkpoint_path,
+        quantization_config=load_quantization_config(),
     )
-    print(json.dumps(placeholder_scales, indent=2))
-
-    raise NotImplementedError(
-        "quantize_model.py is scaffolded but not implemented; replace the TODO blocks with a real PTQ pipeline."
-    )
+    write_quantized_checkpoint(checkpoint_path, payload)
+    print(json.dumps(build_quantization_summary(checkpoint_path, payload), indent=2))
 
 
 if __name__ == "__main__":

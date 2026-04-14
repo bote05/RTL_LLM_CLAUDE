@@ -4,6 +4,8 @@ node_modules/
 # Build output
 dist/
 *.tsbuildinfo
+coverage/
+.coverage
 
 # Logs
 *.log
@@ -42,6 +44,10 @@ checkpoints/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
 
 # Environment
 .env

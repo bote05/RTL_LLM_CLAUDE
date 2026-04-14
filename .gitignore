@@ -1,6 +1,14 @@
 # Claude Code local settings (user-specific, do not commit)
 .claude/settings.local.json
 .claude/**/*.local.json
+.codex
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
 
 # OS
 .DS_Store
