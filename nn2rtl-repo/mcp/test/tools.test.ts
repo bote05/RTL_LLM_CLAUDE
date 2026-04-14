@@ -62,8 +62,16 @@ async function writeSidecar(
     ...overrides,
   };
 
-  await writeFile(sidecar.golden_inputs_path, JSON.stringify([[0, 1, 2]]), "utf8");
-  await writeFile(sidecar.golden_outputs_path, JSON.stringify([[0, 1, 2]]), "utf8");
+  // Only materialize the vector files when the sidecar points at absolute
+  // paths — the "rejects relative path" test deliberately supplies a bare
+  // filename like `relative-inputs.json`, and writing to it would leak into
+  // the test's cwd (which is the mcp package root on Windows runs).
+  if (path.isAbsolute(sidecar.golden_inputs_path)) {
+    await writeFile(sidecar.golden_inputs_path, JSON.stringify([[0, 1, 2]]), "utf8");
+  }
+  if (path.isAbsolute(sidecar.golden_outputs_path)) {
+    await writeFile(sidecar.golden_outputs_path, JSON.stringify([[0, 1, 2]]), "utf8");
+  }
   await writeFile(sidecarPath, JSON.stringify(sidecar), "utf8");
   return sidecarPath;
 }

@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import torch
+
 if __package__ is None or __package__ == "":
     repo_root = str(Path(__file__).resolve().parent.parent)
     if repo_root not in sys.path:
@@ -32,6 +34,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    torch.manual_seed(0)
     args = parse_args()
     repo_root = detect_repo_root(__file__)
     checkpoint_path = resolve_checkpoint_path(repo_root, args.checkpoint_path)

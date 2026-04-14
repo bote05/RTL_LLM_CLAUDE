@@ -78,8 +78,12 @@ def build_fx_checkpoint_payload() -> dict[str, object]:
                 "output_shape": list(scalar_shape),
                 "weight_shape": list(passthrough_shape),
                 "num_weights": 0,
-                "scale_factor": 1.0,
+                "scale_factor": 0.5,
+                "lhs_scale_factor": 0.25,
+                "rhs_scale_factor": 0.5,
                 "zero_point": 0,
+                "input_width_bits": 16,
+                "output_width_bits": 8,
             },
             "relu2": {
                 "op_type": "relu",
@@ -87,11 +91,18 @@ def build_fx_checkpoint_payload() -> dict[str, object]:
                 "output_shape": list(scalar_shape),
                 "weight_shape": list(passthrough_shape),
                 "num_weights": 0,
-                "scale_factor": 1.0,
+                "scale_factor": 0.5,
                 "zero_point": 0,
             },
         },
     }
+
+
+def pack_int8_pair(lhs: int, rhs: int) -> int:
+    packed = (int(lhs) & 0xFF) | ((int(rhs) & 0xFF) << 8)
+    if packed >= 2**15:
+        packed -= 2**16
+    return packed
 
 
 def test_int8_to_hex_serializes_signed_values() -> None:
@@ -184,11 +195,33 @@ def test_build_pipeline_ir_payload_captures_fx_layers_in_topological_order(tmp_p
         assert len(layer["golden_outputs"]) == 8
         if index == 0:
             assert len(layer["golden_inputs"]) == 8
-        else:
+        elif layer["module_id"] != "add0":
             assert layer["golden_inputs"] == pipeline_ir["layers"][index - 1]["golden_outputs"]
         if layer["bias_path"] is not None:
             assert is_absolute_posix_path(layer["bias_path"])
             assert Path(layer["bias_path"]).exists()
+
+    add_layer = next(layer for layer in pipeline_ir["layers"] if layer["module_id"] == "add0")
+    conv2_layer = next(layer for layer in pipeline_ir["layers"] if layer["module_id"] == "conv2")
+    input_vectors = pipeline_ir["layers"][0]["golden_inputs"]
+    expected_packed_inputs = [
+        [pack_int8_pair(lhs, rhs) for lhs, rhs in zip(lhs_vector, rhs_vector)]
+        for lhs_vector, rhs_vector in zip(conv2_layer["golden_outputs"], input_vectors)
+    ]
+    expected_add_outputs = [
+        [
+            max(-128, min(127, round((lhs * 0.25 + rhs * 0.5) / 0.5)))
+            for lhs, rhs in zip(lhs_vector, rhs_vector)
+        ]
+        for lhs_vector, rhs_vector in zip(conv2_layer["golden_outputs"], input_vectors)
+    ]
+
+    assert add_layer["input_width_bits"] == 16
+    assert add_layer["lhs_scale_factor"] == pytest.approx(0.25)
+    assert add_layer["rhs_scale_factor"] == pytest.approx(0.5)
+    assert add_layer["golden_inputs"] == expected_packed_inputs
+    assert add_layer["golden_outputs"] == expected_add_outputs
+    assert pipeline_ir["layers"][-1]["golden_inputs"] == add_layer["golden_outputs"]
 
     weights_dir = tmp_path / "output" / "weights"
     assert (weights_dir / "conv1_weights.hex").read_text(encoding="utf8") == "02\n"

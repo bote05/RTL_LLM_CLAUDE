@@ -18,6 +18,8 @@ Use this skill when generating synthesizable Verilog from a single `LayerIR`.
 - `ready_in` is a module **output** (backpressure upstream). If stalling is not needed, tie high after reset.
 - `valid_out` must assert exactly `pipeline_latency_cycles` cycles after the first `valid_in` of a vector.
 - `data_out` is sampled by the bench only when `valid_out == 1`, so bubbles are allowed between valid outputs.
+- For `op_type=add` modules, `data_in` is a packed wide bus: `data_in[W-1:0] = lhs`, `data_in[2W-1:W] = rhs`, where `W = input_width_bits / 2`. Unpack internally, apply the INT8 quantized-add formula using `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`, saturate to INT8, and drive the result on `data_out[W-1:0]`.
+- For the module_id `layer0_0_conv1` specifically, implement Conv2d + folded BatchNorm + ReLU + `3x3` stride-2 MaxPool as a single fused pipelined unit. The MaxPool is a sliding-window max across the `3x3` neighborhood with stride 2 in both spatial dimensions, and `pipeline_latency_cycles` already reflects the fused contract.
 
 ## Output Requirements
 

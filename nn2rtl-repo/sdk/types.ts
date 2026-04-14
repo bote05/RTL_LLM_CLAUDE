@@ -10,6 +10,8 @@ export interface LayerIR {
   weight_shape: number[];
   num_weights: number;
   scale_factor: number;
+  lhs_scale_factor?: number;
+  rhs_scale_factor?: number;
   zero_point: number;
   pipeline_latency_cycles: number;
   clock_period_ns: number;

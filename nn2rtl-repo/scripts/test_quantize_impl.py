@@ -98,8 +98,14 @@ def expected_module_ids() -> list[str]:
                 f"layer1_{block_index}_conv1",
                 f"layer1_{block_index}_conv2",
                 f"layer1_{block_index}_conv3",
+            ]
+        )
+        if block_index == 0:
+            ids.append("layer1_0_downsample")
+        ids.extend(
+            [
                 f"layer1_{block_index}_add",
-                f"layer1_{block_index}_relu",
+                f"layer1_{block_index}_post_add_relu",
             ]
         )
     return ids
@@ -131,14 +137,19 @@ def test_resnet50_checkpoint_round_trip_preserves_new_schema(tmp_path: Path) -> 
     assert loaded["model_name"] == "resnet50"
     assert loaded["quantization"] == "int8_symmetric_per_tensor"
     assert list(loaded["layers"]) == expected_module_ids()
-    assert len(loaded["layers"]) == 16
+    assert len(loaded["layers"]) == 17
     assert summary["export_scope"] == "stem_plus_layer1"
     assert "ImageNet samples" in summary["notes"][0]
+    assert loaded["residual_stack_spec"]["input_name"] == "input"
+    assert loaded["residual_stack_spec"]["output_module_id"] == "layer1_2_post_add_relu"
+    assert [
+        operation["module_id"] for operation in loaded["residual_stack_spec"]["operations"]
+    ] == expected_module_ids()
 
     stem = loaded["layers"]["layer0_0_conv1"]
     assert stem["op_type"] == "conv2d"
     assert stem["input_shape"] == [1, 3, 224, 224]
-    assert stem["output_shape"] == [1, 4, 112, 112]
+    assert stem["output_shape"] == [1, 4, 56, 56]
     assert stem["zero_point"] == 0
     assert stem["input_width_bits"] == 8
     assert stem["output_width_bits"] == 8
@@ -146,18 +157,25 @@ def test_resnet50_checkpoint_round_trip_preserves_new_schema(tmp_path: Path) -> 
     assert len(stem["bias_int32"]) == stem["weight_shape"][0]
     assert stem["scale_factor"] > 0.0
 
+    downsample = loaded["layers"]["layer1_0_downsample"]
+    assert downsample["op_type"] == "conv2d"
+    assert downsample["input_shape"] == [1, 4, 56, 56]
+    assert downsample["output_shape"] == [1, 4, 56, 56]
+    assert downsample["num_weights"] == math.prod(downsample["weight_shape"])
+
     add_layer = loaded["layers"]["layer1_0_add"]
-    assert add_layer == {
-        "op_type": "add",
-        "input_shape": [1, 4, 56, 56],
-        "output_shape": [1, 4, 56, 56],
-        "scale_factor": 1.0,
-        "zero_point": 0,
-        "input_width_bits": 8,
-        "output_width_bits": 8,
-    }
+    assert add_layer["op_type"] == "add"
+    assert add_layer["input_shape"] == [1, 4, 56, 56]
+    assert add_layer["output_shape"] == [1, 4, 56, 56]
+    assert add_layer["weight_shape"] == [1]
+    assert add_layer["num_weights"] == 0
+    assert add_layer["scale_factor"] > 0.0
+    assert add_layer["lhs_scale_factor"] > 0.0
+    assert add_layer["rhs_scale_factor"] > 0.0
+    assert add_layer["input_width_bits"] == 16
+    assert add_layer["output_width_bits"] == 8
     assert summary["layers"]["layer1_0_conv1"]["weight_shape"] == [2, 4, 1, 1]
-    assert summary["layers"]["layer1_0_relu"]["op_type"] == "relu"
+    assert summary["layers"]["layer1_0_post_add_relu"]["op_type"] == "relu"
 
 
 def test_resnet50_checkpoint_generation_is_deterministic_for_fake_model(tmp_path: Path) -> None:
@@ -206,6 +224,7 @@ def test_load_quantized_checkpoint_rejects_malformed_resnet50_metadata(tmp_path:
                     "weight_int8": [1, 2],
                     "bias_int32": [0, 0, 0, 0],
                     "weight_shape": [4, 3, 3, 3],
+                    "num_weights": 108,
                     "scale_factor": 0.1,
                     "zero_point": 0,
                     "input_width_bits": 8,

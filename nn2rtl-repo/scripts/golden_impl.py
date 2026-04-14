@@ -68,19 +68,70 @@ class Int8Conv2d(nn.Module):
         return quantize_tensor_to_int8_range(y)
 
 
+class Int8FusedStemConv2d(nn.Module):
+    def __init__(
+        self,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None,
+        stride: Sequence[int] = (1, 1),
+        padding: Sequence[int] = (0, 0),
+        dilation: Sequence[int] = (1, 1),
+        groups: int = 1,
+    ) -> None:
+        super().__init__()
+        self.register_buffer("weight", weight.to(torch.float32))
+        if bias is None:
+            self.bias = None
+        else:
+            self.register_buffer("bias", bias.to(torch.float32))
+        self.stride = tuple(int(v) for v in stride)
+        self.padding = tuple(int(v) for v in padding)
+        self.dilation = tuple(int(v) for v in dilation)
+        self.groups = int(groups)
+
+    def forward(self, x):
+        y = F.conv2d(
+            x.to(torch.float32),
+            self.weight,
+            self.bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+        )
+        y = torch.relu(y)
+        y = F.max_pool2d(y, kernel_size=3, stride=2, padding=1)
+        return quantize_tensor_to_int8_range(y)
+
+
 class Int8ReLU(nn.Module):
     def forward(self, x):
         return quantize_tensor_to_int8_range(torch.relu(x.to(torch.float32)))
 
 
 class Int8Add(nn.Module):
+    def __init__(
+        self,
+        lhs_scale_factor: float,
+        rhs_scale_factor: float,
+        output_scale_factor: float,
+    ) -> None:
+        super().__init__()
+        self.lhs_scale_factor = float(lhs_scale_factor)
+        self.rhs_scale_factor = float(rhs_scale_factor)
+        self.output_scale_factor = float(output_scale_factor)
+
     def forward(self, lhs, rhs):
-        return quantize_tensor_to_int8_range(lhs.to(torch.float32) + rhs.to(torch.float32))
+        summed = (
+            lhs.to(torch.float32) * self.lhs_scale_factor
+            + rhs.to(torch.float32) * self.rhs_scale_factor
+        )
+        return requantize_tensor_with_scale(summed, self.output_scale_factor)
 
 
 class ResidualStackTracer(fx.Tracer):
     def is_leaf_module(self, module: nn.Module, qualname: str) -> bool:
-        if isinstance(module, (Int8Conv2d, Int8ReLU, Int8Add)):
+        if isinstance(module, (Int8Conv2d, Int8FusedStemConv2d, Int8ReLU, Int8Add)):
             return True
         return super().is_leaf_module(module, qualname)
 
@@ -125,7 +176,8 @@ class CheckpointResidualStack(nn.Module):
                         bias_tensor,
                         metadata["batch_norm"],
                     )
-                module = Int8Conv2d(
+                conv_cls = Int8FusedStemConv2d if module_id == "layer0_0_conv1" else Int8Conv2d
+                module = conv_cls(
                     weight=weight_tensor,
                     bias=bias_tensor,
                     stride=coerce_int_sequence(operation.get("stride", [1, 1]), "stride"),
@@ -136,7 +188,11 @@ class CheckpointResidualStack(nn.Module):
             elif op_type == "relu":
                 module = Int8ReLU()
             else:
-                module = Int8Add()
+                module = Int8Add(
+                    lhs_scale_factor=float(metadata.get("lhs_scale_factor", 1.0)),
+                    rhs_scale_factor=float(metadata.get("rhs_scale_factor", 1.0)),
+                    output_scale_factor=float(metadata.get("scale_factor", 1.0)),
+                )
             register_module_path(self, module_id, module)
 
     def forward(self, x):
@@ -246,6 +302,16 @@ def quantize_tensor_to_int8_range(tensor: torch.Tensor) -> torch.Tensor:
     if isinstance(working, torch.Tensor) and working.is_quantized:
         working = working.dequantize()
     return torch.clamp(working.to(torch.float32).round(), -128, 127)
+
+
+def requantize_tensor_with_scale(tensor: torch.Tensor, scale_factor: float) -> torch.Tensor:
+    if scale_factor <= 0.0:
+        raise GoldenGenerationError(f"scale_factor must be positive, got {scale_factor}.")
+    working = tensor.detach() if isinstance(tensor, torch.Tensor) else tensor
+    if isinstance(working, torch.Tensor) and working.is_quantized:
+        working = working.dequantize()
+    scaled = torch.round(working.to(torch.float32) / float(scale_factor))
+    return torch.clamp(scaled, -128, 127)
 
 
 def tensor_to_int8_list(tensor: torch.Tensor) -> list[int]:
@@ -374,6 +440,14 @@ def validate_pipeline_ir_payload(payload: Mapping[str, Any]) -> None:
                 f"Layer '{module_id}' bias_path must be null or an absolute POSIX path."
             )
 
+        if layer["op_type"] == "add":
+            for field_name in ("lhs_scale_factor", "rhs_scale_factor"):
+                value = layer.get(field_name)
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or float(value) <= 0.0:
+                    raise GoldenGenerationError(
+                        f"Layer '{module_id}' field '{field_name}' must be a positive number for add layers."
+                    )
+
 
 def build_legacy_pipeline_ir_payload(
     checkpoint: Mapping[str, Any],
@@ -468,11 +542,11 @@ def build_fx_pipeline_ir_payload(
     )
     input_stream = build_deterministic_input_stream(first_input_shape)
     captured_outputs = capture_golden_outputs(traced_model, trace_layers, layers, input_stream)
-
-    previous_vectors = [tensor_to_int8_list(vector) for vector in input_stream]
+    operation_map, input_name = extract_operation_map(checkpoint)
+    input_vectors = [tensor_to_int8_list(vector) for vector in input_stream]
     layer_payloads: list[dict[str, Any]] = []
 
-    for trace_layer in trace_layers:
+    for index, trace_layer in enumerate(trace_layers):
         module_id = trace_layer["module_id"]
         op_type = trace_layer["op_type"]
         metadata = layers[module_id]
@@ -491,6 +565,16 @@ def build_fx_pipeline_ir_payload(
                 f"Layer '{module_id}' num_weights={expected_num_weights} but serialized {len(weight_values)} values."
             )
 
+        layer_input_vectors = resolve_golden_inputs(
+            module_id=module_id,
+            op_type=op_type,
+            trace_layers=trace_layers,
+            trace_index=index,
+            operation_map=operation_map,
+            input_name=input_name,
+            input_vectors=input_vectors,
+            captured_outputs=captured_outputs,
+        )
         layer_payload = {
             "module_id": module_id,
             "op_type": op_type,
@@ -504,16 +588,24 @@ def build_fx_pipeline_ir_payload(
             "zero_point": coerce_int(metadata["zero_point"], f"{module_id}.zero_point"),
             "pipeline_latency_cycles": PIPELINE_LATENCY_CYCLES[op_type],
             "clock_period_ns": 20,
-            "input_width_bits": 8,
-            "output_width_bits": 8,
+            "input_width_bits": coerce_int(
+                metadata.get("input_width_bits", 16 if op_type == "add" else 8),
+                f"{module_id}.input_width_bits",
+            ),
+            "output_width_bits": coerce_int(
+                metadata.get("output_width_bits", 8),
+                f"{module_id}.output_width_bits",
+            ),
             **SIGNAL_LITERALS,
-            "golden_inputs": previous_vectors,
+            "golden_inputs": layer_input_vectors,
             "golden_outputs": captured_outputs[module_id],
         }
         if op_type == "conv2d" and not bias_values:
             raise GoldenGenerationError(f"Layer '{module_id}' did not serialize a bias vector.")
+        if op_type == "add":
+            layer_payload["lhs_scale_factor"] = float(metadata["lhs_scale_factor"])
+            layer_payload["rhs_scale_factor"] = float(metadata["rhs_scale_factor"])
         layer_payloads.append(layer_payload)
-        previous_vectors = captured_outputs[module_id]
 
     return {
         "model_name": "resnet50",
@@ -583,7 +675,7 @@ def collect_trace_layers(
         if node.op == "call_module":
             module_id = str(node.target)
             module = named_modules[module_id]
-            if isinstance(module, (Int8Conv2d, nn.Conv2d)):
+            if isinstance(module, (Int8Conv2d, Int8FusedStemConv2d, nn.Conv2d)):
                 op_type = "conv2d"
             elif isinstance(module, (Int8ReLU, nn.ReLU, nn.ReLU6)):
                 op_type = "relu"
@@ -615,6 +707,11 @@ def collect_trace_layers(
 
 
 def build_deterministic_input_stream(shape: Sequence[int], count: int = 8) -> list[torch.Tensor]:
+    # These inline vectors are convenient while the pipeline is still small, but
+    # they grow quickly for real ResNet activations. If MCP argument-size limits
+    # become a problem, move golden vectors to per-layer binary artifacts and
+    # store `golden_inputs_path` / `golden_outputs_path` references in LayerIR
+    # instead of embedding the arrays inline.
     torch.manual_seed(0)
     return [
         quantize_tensor_to_int8_range(torch.randint(-128, 128, tuple(shape), dtype=torch.int32))
@@ -685,6 +782,122 @@ def write_layer_hex_artifacts(
     write_signed_int8_hex(weight_values, weights_path)
     write_signed_int8_hex(bias_values, bias_path)
     return weight_values, bias_values
+
+
+def extract_operation_map(
+    checkpoint: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, Any]], str]:
+    graph_spec = checkpoint.get("residual_stack_spec") or checkpoint.get("model_spec") or checkpoint.get("graph")
+    if graph_spec is None:
+        return {}, "input"
+
+    if isinstance(graph_spec, Mapping):
+        operations = graph_spec.get("operations")
+        if not isinstance(operations, list):
+            raise GoldenGenerationError("Checkpoint residual_stack_spec.operations must be a list.")
+        input_name = str(graph_spec.get("input_name", "input"))
+    elif isinstance(graph_spec, list):
+        operations = graph_spec
+        input_name = "input"
+    else:
+        raise GoldenGenerationError("Checkpoint residual_stack_spec must be a dict or list.")
+
+    operation_map: dict[str, dict[str, Any]] = {}
+    for operation in operations:
+        if not isinstance(operation, Mapping):
+            raise GoldenGenerationError("Checkpoint graph operations must be dicts.")
+        module_id = require_string(operation, "module_id", "operation")
+        operation_map[module_id] = dict(operation)
+    return operation_map, input_name
+
+
+def pack_int8_pair(lhs: int, rhs: int) -> int:
+    packed = (int(lhs) & 0xFF) | ((int(rhs) & 0xFF) << 8)
+    if packed >= 2**15:
+        packed -= 2**16
+    return packed
+
+
+def pack_paired_vectors(
+    lhs_vectors: Sequence[Sequence[int]],
+    rhs_vectors: Sequence[Sequence[int]],
+) -> list[list[int]]:
+    if len(lhs_vectors) != len(rhs_vectors):
+        raise GoldenGenerationError(
+            f"Packed add inputs require matching vector counts, got {len(lhs_vectors)} and {len(rhs_vectors)}."
+        )
+
+    packed_vectors: list[list[int]] = []
+    for lhs_vector, rhs_vector in zip(lhs_vectors, rhs_vectors):
+        if len(lhs_vector) != len(rhs_vector):
+            raise GoldenGenerationError(
+                f"Packed add inputs require matching element counts, got {len(lhs_vector)} and {len(rhs_vector)}."
+            )
+        packed_vectors.append(
+            [pack_int8_pair(lhs_value, rhs_value) for lhs_value, rhs_value in zip(lhs_vector, rhs_vector)]
+        )
+    return packed_vectors
+
+
+def resolve_vector_ref(
+    ref: str,
+    *,
+    input_name: str,
+    input_vectors: Sequence[Sequence[int]],
+    captured_outputs: Mapping[str, list[list[int]]],
+) -> list[list[int]]:
+    if ref == input_name:
+        return [list(vector) for vector in input_vectors]
+    if ref not in captured_outputs:
+        raise GoldenGenerationError(f"Checkpoint graph references unknown vector source '{ref}'.")
+    return captured_outputs[ref]
+
+
+def resolve_golden_inputs(
+    *,
+    module_id: str,
+    op_type: str,
+    trace_layers: Sequence[Mapping[str, str]],
+    trace_index: int,
+    operation_map: Mapping[str, Mapping[str, Any]],
+    input_name: str,
+    input_vectors: Sequence[Sequence[int]],
+    captured_outputs: Mapping[str, list[list[int]]],
+) -> list[list[int]]:
+    operation = operation_map.get(module_id)
+    if operation is None:
+        if op_type == "add":
+            raise GoldenGenerationError(
+                f"Layer '{module_id}' requires graph wiring metadata to build packed add inputs."
+            )
+        if trace_index == 0:
+            return [list(vector) for vector in input_vectors]
+        return captured_outputs[trace_layers[trace_index - 1]["module_id"]]
+
+    if op_type == "add":
+        lhs = require_string(operation, "lhs", f"operation '{module_id}'")
+        rhs = require_string(operation, "rhs", f"operation '{module_id}'")
+        lhs_vectors = resolve_vector_ref(
+            lhs,
+            input_name=input_name,
+            input_vectors=input_vectors,
+            captured_outputs=captured_outputs,
+        )
+        rhs_vectors = resolve_vector_ref(
+            rhs,
+            input_name=input_name,
+            input_vectors=input_vectors,
+            captured_outputs=captured_outputs,
+        )
+        return pack_paired_vectors(lhs_vectors, rhs_vectors)
+
+    input_ref = require_string(operation, "input", f"operation '{module_id}'")
+    return resolve_vector_ref(
+        input_ref,
+        input_name=input_name,
+        input_vectors=input_vectors,
+        captured_outputs=captured_outputs,
+    )
 
 
 def resolve_layer_parameters(

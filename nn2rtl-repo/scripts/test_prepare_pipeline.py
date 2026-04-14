@@ -9,14 +9,22 @@ from pathlib import Path
 import pytest
 
 from scripts import prepare_pipeline as prepare_pipeline_module
+from scripts.test_cli import make_fake_torchvision_package
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_prepare_pipeline(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def run_prepare_pipeline(
+    tmp_path: Path,
+    *,
+    pythonpath: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["NN2RTL_REPO_ROOT"] = str(tmp_path)
+    if pythonpath is not None:
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = str(pythonpath) if not existing else f"{pythonpath}{os.pathsep}{existing}"
     return subprocess.run(
         [sys.executable, str(REPO_ROOT / "scripts" / "prepare_pipeline.py")],
         cwd=REPO_ROOT,
@@ -27,21 +35,48 @@ def run_prepare_pipeline(tmp_path: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def parse_summary_table(stdout: str) -> dict[str, dict[str, str]]:
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    data_lines = lines[2:]
+    rows: dict[str, dict[str, str]] = {}
+    for line in data_lines:
+        module_id, op_type, shape, num_weights, pipeline_latency_cycles = [
+            cell.strip() for cell in line.split(" | ")
+        ]
+        rows[module_id] = {
+            "op_type": op_type,
+            "shape": shape,
+            "num_weights": num_weights,
+            "pipeline_latency_cycles": pipeline_latency_cycles,
+        }
+    return rows
+
+
 @pytest.mark.full
-def test_prepare_pipeline_cli_surfaces_flat_v2_failure_instead_of_silent_empty_goldens(
+def test_prepare_pipeline_cli_runs_full_frontend_and_prints_all_17_modules(
     tmp_path: Path,
 ) -> None:
-    # Same contract as test_generate_golden_cli_rejects_flat_v2_checkpoint_from_real_ptq:
-    # the prepare_pipeline smoke harness must propagate the loud flat-v2
-    # failure from generate_golden.py instead of producing a LayerIR with
-    # empty golden vectors. Remove this test (and restore the success-path
-    # assertion) once Prompt 1 emits a residual_stack_spec and the fx path
-    # succeeds end-to-end.
-    result = run_prepare_pipeline(tmp_path)
+    fake_torchvision = make_fake_torchvision_package(tmp_path)
+    result = run_prepare_pipeline(tmp_path, pythonpath=fake_torchvision)
 
-    assert result.returncode != 0
-    combined = result.stdout + result.stderr
-    assert "lacks a traceable model spec" in combined or "generate_golden.py failed" in combined
+    assert result.returncode == 0, result.stderr
+
+    payload = json.loads((tmp_path / "output" / "layer_ir.json").read_text(encoding="utf8"))
+    assert len(payload["layers"]) == 17
+
+    table_rows = parse_summary_table(result.stdout)
+    assert len(table_rows) == 17
+
+    for layer in payload["layers"]:
+        assert layer["module_id"] in table_rows
+        row = table_rows[layer["module_id"]]
+        assert row["op_type"] == layer["op_type"]
+        assert row["pipeline_latency_cycles"] == str(layer["pipeline_latency_cycles"])
+
+    assert table_rows["layer0_0_conv1"]["op_type"] == "conv2d"
+    assert table_rows["layer1_0_downsample"]["op_type"] == "conv2d"
+    assert table_rows["layer1_0_add"]["pipeline_latency_cycles"] == "1"
+    assert table_rows["layer1_2_post_add_relu"]["pipeline_latency_cycles"] == "1"
 
 
 @pytest.mark.full
@@ -69,12 +104,6 @@ def test_prepare_pipeline_fails_when_checkpoint_disappears_between_steps(
 
 @pytest.mark.full
 def test_validate_pipeline_ir_rejects_schema_invalid_output(tmp_path: Path) -> None:
-    # prepare_pipeline() currently fails at the generate_golden step for the
-    # flat v2 checkpoint (see the test above), so we exercise the schema
-    # validator directly with a hand-crafted LayerIR derived from the
-    # project's shared test fixture instead of going through the full CLI
-    # chain. This keeps coverage of the node-side Zod validation while the
-    # PTQ ↔ fx wiring gap exists.
     layer_ir_path = tmp_path / "layer_ir.json"
     fixture_path = REPO_ROOT / "test" / "fixtures" / "pipeline_ir.json"
     payload = json.loads(fixture_path.read_text(encoding="utf8"))

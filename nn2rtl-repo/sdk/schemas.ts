@@ -40,6 +40,8 @@ export const layerIrSchema = z
     weight_shape: z.array(z.number().int().positive()),
     num_weights: z.number().int().nonnegative(),
     scale_factor: z.number(),
+    lhs_scale_factor: z.number().optional(),
+    rhs_scale_factor: z.number().optional(),
     zero_point: z.number().int(),
     pipeline_latency_cycles: z.number().int().positive(),
     clock_period_ns: z.number().nonnegative(),

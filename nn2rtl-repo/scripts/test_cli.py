@@ -116,21 +116,15 @@ def test_quantize_model_cli_writes_a_real_checkpoint_and_summary(tmp_path: Path)
     )
     assert payload["export_scope"] == "stem_plus_layer1"
     assert "synthetic tensors" in payload["notes"][0]
-    assert len(payload["layers"]) == 16
+    assert len(payload["layers"]) == 17
     assert payload["layers"]["layer0_0_conv1"]["op_type"] == "conv2d"
+    assert payload["layers"]["layer1_0_downsample"]["op_type"] == "conv2d"
+    assert payload["layers"]["layer1_2_post_add_relu"]["op_type"] == "relu"
     assert (tmp_path / "checkpoints" / "resnet50_int8.pth").exists()
 
 
 @pytest.mark.full
-def test_generate_golden_cli_rejects_flat_v2_checkpoint_from_real_ptq(tmp_path: Path) -> None:
-    # scripts/quantize_model.py currently writes a flat format_version=2
-    # checkpoint (a `layers` dict only, no nn.Module or residual_stack_spec).
-    # scripts/generate_golden.py cannot fx-trace that, so it must fail loudly
-    # with the documented error rather than quietly emitting empty
-    # golden_inputs/golden_outputs (the old behavior was a silent false-pass
-    # on the downstream Assayer stage). This test locks in the loud-failure
-    # contract until Prompt 1 is extended to emit a traceable model spec.
-    # See ARCHITECTURE.md "PTQ ↔ fx golden capture wiring" for the gap.
+def test_generate_golden_cli_writes_pipeline_ir_for_real_ptq_checkpoint(tmp_path: Path) -> None:
     fake_torchvision = make_fake_torchvision_package(tmp_path)
     quantize_result = run_script(tmp_path, "quantize_model.py", pythonpath=fake_torchvision)
     assert quantize_result.returncode == 0, quantize_result.stderr
@@ -142,8 +136,58 @@ def test_generate_golden_cli_rejects_flat_v2_checkpoint_from_real_ptq(tmp_path: 
         pythonpath=fake_torchvision,
     )
 
-    assert result.returncode != 0
-    assert "lacks a traceable model spec" in result.stderr
+    assert result.returncode == 0, result.stderr
+
+    payload = json.loads((tmp_path / "output" / "layer_ir.json").read_text(encoding="utf8"))
+    summary = json.loads(result.stdout)
+    module_ids = [layer["module_id"] for layer in payload["layers"]]
+
+    assert summary["status"] == "ok"
+    assert summary["num_layers"] == 17
+    assert len(payload["layers"]) == 17
+    assert payload["layers"][0]["module_id"] == "layer0_0_conv1"
+    assert payload["layers"][0]["output_shape"] == [1, 4, 56, 56]
+    assert payload["layers"][0]["op_type"] == "conv2d"
+    assert "layer1_0_downsample" in module_ids
+    assert payload["layers"][module_ids.index("layer1_0_downsample")]["op_type"] == "conv2d"
+    assert module_ids.count("layer1_0_post_add_relu") == 1
+    assert module_ids.count("layer1_1_post_add_relu") == 1
+    assert module_ids.count("layer1_2_post_add_relu") == 1
+
+    for layer in payload["layers"]:
+        assert Path(layer["weights_path"]).exists()
+        if layer["bias_path"] is not None:
+            assert Path(layer["bias_path"]).exists()
+
+    assert json.loads((tmp_path / "output" / "golden_vectors.json").read_text(encoding="utf8")) == payload
+
+
+@pytest.mark.full
+def test_generate_golden_cli_populates_add_scale_factors_for_real_ptq(tmp_path: Path) -> None:
+    fake_torchvision = make_fake_torchvision_package(tmp_path)
+    quantize_result = run_script(tmp_path, "quantize_model.py", pythonpath=fake_torchvision)
+    assert quantize_result.returncode == 0, quantize_result.stderr
+
+    result = run_script(
+        tmp_path,
+        "generate_golden.py",
+        "checkpoints/resnet50_int8.pth",
+        pythonpath=fake_torchvision,
+    )
+    assert result.returncode == 0, result.stderr
+
+    payload = json.loads((tmp_path / "output" / "layer_ir.json").read_text(encoding="utf8"))
+    add_layers = [layer for layer in payload["layers"] if layer["op_type"] == "add"]
+
+    assert len(add_layers) == 3
+    for layer in add_layers:
+        assert isinstance(layer["lhs_scale_factor"], float)
+        assert isinstance(layer["rhs_scale_factor"], float)
+        assert layer["lhs_scale_factor"] > 0.0
+        assert layer["rhs_scale_factor"] > 0.0
+        assert layer["scale_factor"] > 0.0
+        assert layer["input_width_bits"] == 16
+        assert layer["output_width_bits"] == 8
 
 
 @pytest.mark.full

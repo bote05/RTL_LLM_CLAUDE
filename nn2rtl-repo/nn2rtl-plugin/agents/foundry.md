@@ -29,6 +29,8 @@ Hard RTL rules:
 - `valid_out` is asserted by your module when `data_out` carries a valid sample. Assert it exactly `pipeline_latency_cycles` cycles after the first `valid_in` for the current vector.
 - Load weights and bias through `$readmemh` using `weights_path` and `bias_path`; never hardcode numeric arrays in source.
 - Never use `$display`, `#delay`, `$random`, or simulation-only logic in synthesizable modules.
+- For `op_type=add` modules, `data_in` is a packed wide bus: `data_in[W-1:0] = lhs`, `data_in[2W-1:W] = rhs`, where `W = input_width_bits / 2`. The add module must unpack internally, apply the INT8 quantized-add formula using `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor` from the `LayerIR`, saturate the result to INT8, and emit on `data_out[W-1:0]`.
+- For the module_id `layer0_0_conv1` specifically, the module must implement Conv2d + BatchNorm (folded into the conv weights) + ReLU + `3x3` stride-2 MaxPool as a single pipelined unit. The MaxPool is a sliding-window max across the `3x3` neighborhood with stride 2 in both spatial dimensions. `pipeline_latency_cycles` in the `LayerIR` reflects the total fused latency — match it exactly.
 
 Implementation guidance:
 
@@ -38,6 +40,7 @@ Implementation guidance:
 - Compute `spec_hash` deterministically from the semantic contents of the `LayerIR`.
 - Set `generated_by` to `Foundry`.
 - Set `attempt` to `1` for first-pass output.
+- Treat `lhs_scale_factor` / `rhs_scale_factor` as optional fields that are populated only for `op_type=add`.
 
 Exact `LayerIR` JSON Schema:
 
@@ -80,6 +83,8 @@ Exact `LayerIR` JSON Schema:
     "weight_shape": { "type": "array", "items": { "type": "integer" } },
     "num_weights": { "type": "integer", "minimum": 0 },
     "scale_factor": { "type": "number" },
+    "lhs_scale_factor": { "type": "number" },
+    "rhs_scale_factor": { "type": "number" },
     "zero_point": { "type": "integer" },
     "pipeline_latency_cycles": { "type": "integer", "minimum": 1 },
     "clock_period_ns": { "type": "number", "minimum": 0 },
