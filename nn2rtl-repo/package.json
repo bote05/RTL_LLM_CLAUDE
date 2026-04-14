@@ -1,0 +1,9 @@
+{
+  "name": "nn2rtl",
+  "private": true,
+  "scripts": {
+    "test:fast": "npm --prefix sdk run test:fast && npm --prefix mcp run test:fast && pytest -m \"not full\"",
+    "test:full": "npm --prefix sdk run test:full && npm --prefix mcp run test:full && pytest",
+    "coverage": "npm --prefix sdk run coverage && npm --prefix mcp run coverage && pytest --cov=scripts --cov-branch"
+  }
+}

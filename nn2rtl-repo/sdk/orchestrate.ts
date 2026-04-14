@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { z } from "zod";
 
 import {
   query,
@@ -10,9 +11,6 @@ import {
   type SDKMessage,
   type SDKResultMessage,
 } from "./claude-agent-sdk-compat.js";
-
-import { z } from "zod";
-
 import { AGENT_CONFIG, PIPELINE_CONFIG, type AgentName } from "./config.js";
 import { PipelineStateManager } from "./pipeline.js";
 import {
@@ -25,7 +23,6 @@ import type {
   LayerIR,
   ModelUsageEntry,
   PipelineIR,
-  PipelineState,
   VerifResult,
   VerilogModule,
 } from "./types.js";
@@ -35,11 +32,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const pluginPath = path.resolve(__dirname, "../nn2rtl-plugin");
 
-const ACTIVE_CLI_OPTIONS = {
-  resume: false,
-};
-
-const AGENT_SLUGS = {
+export const AGENT_SLUGS = {
   Conductor: "conductor",
   Cartographer: "cartographer",
   Foundry: "foundry",
@@ -68,6 +61,28 @@ const GLOBAL_ALLOWED_TOOLS = [
 ];
 
 type SynthesisReport = z.infer<typeof synthesisReportZod>;
+type AgentSlug = (typeof AGENT_SLUGS)[AgentName];
+type AgentRunResult<T> = {
+  payload: T;
+  result: SDKResultMessage;
+  messages: SDKMessage[];
+};
+type FrontmatterRecord = Record<string, string>;
+
+export type OrchestratorRuntime = {
+  now: () => Date;
+  queryFn: typeof query;
+};
+
+export type RunPipelineOptions = {
+  resume?: boolean;
+  runtime?: Partial<OrchestratorRuntime>;
+};
+
+const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
+  now: () => new Date(),
+  queryFn: query,
+};
 
 function toOutputFormat(schema: z.ZodType): OutputFormat {
   return {
@@ -76,22 +91,21 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
   };
 }
 
-const pipelineIrOutputFormat     = toOutputFormat(pipelineIrZod);
-const verilogModuleOutputFormat  = toOutputFormat(verilogModuleZod);
-const verifResultOutputFormat    = toOutputFormat(verifResultZod);
+const pipelineIrOutputFormat = toOutputFormat(pipelineIrZod);
+const verilogModuleOutputFormat = toOutputFormat(verilogModuleZod);
+const verifResultOutputFormat = toOutputFormat(verifResultZod);
 const synthesisReportOutputFormat = toOutputFormat(synthesisReportZod);
 
-type AgentSlug = (typeof AGENT_SLUGS)[AgentName];
+export function createOrchestratorRuntime(
+  overrides: Partial<OrchestratorRuntime> = {},
+): OrchestratorRuntime {
+  return {
+    ...DEFAULT_ORCHESTRATOR_RUNTIME,
+    ...overrides,
+  };
+}
 
-type AgentRunResult<T> = {
-  payload: T;
-  result: SDKResultMessage;
-  messages: SDKMessage[];
-};
-
-type FrontmatterRecord = Record<string, string>;
-
-function resolveFromSdk(relativePath: string): string {
+export function resolveFromSdk(relativePath: string): string {
   return path.resolve(__dirname, relativePath);
 }
 
@@ -99,7 +113,7 @@ function reportPath(fileName: string): string {
   return path.join(resolveFromSdk(PIPELINE_CONFIG.reports_dir), fileName);
 }
 
-function normalizeAgentName(slug: AgentSlug): AgentName {
+export function normalizeAgentName(slug: AgentSlug): AgentName {
   const match = Object.entries(AGENT_SLUGS).find(([, value]) => value === slug);
   if (!match) {
     throw new Error(`No AgentName mapping found for slug '${slug}'.`);
@@ -108,7 +122,9 @@ function normalizeAgentName(slug: AgentSlug): AgentName {
   return match[0] as AgentName;
 }
 
-function parseFrontmatter(markdown: string): { frontmatter: FrontmatterRecord; body: string } {
+export function parseFrontmatter(
+  markdown: string,
+): { frontmatter: FrontmatterRecord; body: string } {
   const match = markdown.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) {
     throw new Error("Expected agent markdown to start with YAML frontmatter.");
@@ -136,7 +152,7 @@ function parseFrontmatter(markdown: string): { frontmatter: FrontmatterRecord; b
   return { frontmatter, body: body.trim() };
 }
 
-function splitCsvField(value: string | undefined): string[] | undefined {
+export function splitCsvField(value: string | undefined): string[] | undefined {
   if (!value) {
     return undefined;
   }
@@ -153,11 +169,11 @@ function isResultMessage(message: SDKMessage): message is SDKResultMessage {
   return message.type === "result" && "modelUsage" in message;
 }
 
-async function readText(filePath: string): Promise<string> {
+export async function readText(filePath: string): Promise<string> {
   return readFile(filePath, "utf8");
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
+export async function pathExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath);
     return true;
@@ -166,7 +182,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile<T>(
+export async function readJsonFile<T>(
   filePath: string,
   schema?: z.ZodType<T>,
 ): Promise<T> {
@@ -186,7 +202,7 @@ async function readJsonFile<T>(
   return parsed as T;
 }
 
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -201,13 +217,20 @@ function recordUsageFromResult(
   );
 }
 
-async function appendRunLog(entry: Record<string, unknown>): Promise<void> {
+export async function appendRunLog(
+  entry: Record<string, unknown>,
+  runtime: OrchestratorRuntime = createOrchestratorRuntime(),
+): Promise<void> {
   const logPath = reportPath("run_log.jsonl");
   await mkdir(path.dirname(logPath), { recursive: true });
-  await appendFile(logPath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...entry })}\n`, "utf8");
+  await appendFile(
+    logPath,
+    `${JSON.stringify({ timestamp: runtime.now().toISOString(), ...entry })}\n`,
+    "utf8",
+  );
 }
 
-async function ensureOutputLayout(): Promise<void> {
+export async function ensureOutputLayout(): Promise<void> {
   await Promise.all([
     mkdir(resolveFromSdk(PIPELINE_CONFIG.output_dir), { recursive: true }),
     mkdir(resolveFromSdk(PIPELINE_CONFIG.rtl_dir), { recursive: true }),
@@ -221,7 +244,7 @@ function buildSidecarPath(moduleId: string): string {
   return path.join(resolveFromSdk(PIPELINE_CONFIG.tb_dir), `${moduleId}.sidecar.json`);
 }
 
-async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentDefinition> {
+export async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentDefinition> {
   const agentName = normalizeAgentName(slug);
   const markdownPath = path.join(pluginPath, "agents", `${slug}.md`);
   const markdown = await readText(markdownPath);
@@ -243,7 +266,6 @@ async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentDefiniti
 
   // TODO: Switch this back to AgentDefinition.skills once the published SDK typings expose the documented field and the installable package typechecks cleanly.
   // TODO: Restore AgentDefinition.maxTurns once the published SDK typings match the documented field; for now the parent query's maxTurns acts as the guardrail.
-
   return {
     description: AGENT_CONFIG[agentName].description,
     prompt,
@@ -253,15 +275,17 @@ async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentDefiniti
   };
 }
 
-async function loadAllAgentDefinitions(): Promise<Record<string, AgentDefinition>> {
+export async function loadAllAgentDefinitions(): Promise<Record<string, AgentDefinition>> {
   const entries = await Promise.all(
-    Object.values(AGENT_SLUGS).map(async (slug) => [slug, await loadPluginAgentDefinition(slug)] as const),
+    Object.values(AGENT_SLUGS).map(
+      async (slug) => [slug, await loadPluginAgentDefinition(slug)] as const,
+    ),
   );
 
   return Object.fromEntries(entries);
 }
 
-function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
+export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
   return [
     `Invoke the \`${slug}\` subagent immediately.`,
     "Do not solve the task yourself.",
@@ -274,7 +298,7 @@ function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
   ].join("\n");
 }
 
-function requireStructuredOutput<T>(
+export function requireStructuredOutput<T>(
   result: SDKResultMessage,
   label: string,
   schema: z.ZodType<T>,
@@ -303,12 +327,13 @@ async function runDelegatedAgent<T>(
   payload: unknown,
   outputFormat: OutputFormat,
   resultSchema: z.ZodType<T>,
+  runtime: OrchestratorRuntime,
 ): Promise<AgentRunResult<T>> {
   const agents = await loadAllAgentDefinitions();
   const messages: SDKMessage[] = [];
   let finalResult: SDKResultMessage | null = null;
 
-  for await (const message of query({
+  for await (const message of runtime.queryFn({
     prompt: buildDelegationPrompt(slug, payload),
     options: {
       cwd: repoRoot,
@@ -338,7 +363,7 @@ async function runDelegatedAgent<T>(
   };
 }
 
-function findLayer(pipelineIr: PipelineIR, moduleId: string): LayerIR {
+export function findLayer(pipelineIr: PipelineIR, moduleId: string): LayerIR {
   const layer = pipelineIr.layers.find((candidate) => candidate.module_id === moduleId);
   if (!layer) {
     throw new Error(`LayerIR for module '${moduleId}' was not found in output/layer_ir.json.`);
@@ -347,7 +372,7 @@ function findLayer(pipelineIr: PipelineIR, moduleId: string): LayerIR {
   return layer;
 }
 
-async function loadPersistedVerilogModule(moduleId: string): Promise<VerilogModule> {
+export async function loadPersistedVerilogModule(moduleId: string): Promise<VerilogModule> {
   const metaPath = path.join(resolveFromSdk(PIPELINE_CONFIG.rtl_dir), `${moduleId}.meta.json`);
   return readJsonFile<VerilogModule>(metaPath, verilogModuleZod);
 }
@@ -358,19 +383,24 @@ async function logStateTransition(
   from: string,
   to: string,
   reason: string,
+  runtime: OrchestratorRuntime,
 ): Promise<void> {
-  await appendRunLog({
-    event: "state_transition",
-    module_id: moduleId,
-    from,
-    to,
-    reason,
-    pipeline_state: manager.getState(),
-  });
+  await appendRunLog(
+    {
+      event: "state_transition",
+      module_id: moduleId,
+      from,
+      to,
+      reason,
+      pipeline_state: manager.getState(),
+    },
+    runtime,
+  );
 }
 
-async function ensureLayerIr(
+export async function ensureLayerIr(
   checkpointPath: string,
+  runtime: OrchestratorRuntime = createOrchestratorRuntime(),
 ): Promise<{
   pipelineIr: PipelineIR;
   bootstrapUsage?: {
@@ -394,26 +424,33 @@ async function ensureLayerIr(
     output_path: layerIrPath,
   };
 
-  await appendRunLog({
-    event: "action",
-    action: "invoke_cartographer",
-    payload,
-  });
+  await appendRunLog(
+    {
+      event: "action",
+      action: "invoke_cartographer",
+      payload,
+    },
+    runtime,
+  );
 
   const result = await runDelegatedAgent<PipelineIR>(
     "cartographer",
     payload,
     pipelineIrOutputFormat,
     pipelineIrZod,
+    runtime,
   );
 
-  await appendRunLog({
-    event: "agent_result",
-    agent: "Cartographer",
-    total_cost_usd: result.result.total_cost_usd,
-    modelUsage: result.result.modelUsage,
-    payload: result.payload,
-  });
+  await appendRunLog(
+    {
+      event: "agent_result",
+      agent: "Cartographer",
+      total_cost_usd: result.result.total_cost_usd,
+      modelUsage: result.result.modelUsage,
+      payload: result.payload,
+    },
+    runtime,
+  );
 
   await writeJsonFile(layerIrPath, result.payload);
   return {
@@ -425,11 +462,14 @@ async function ensureLayerIr(
   };
 }
 
-async function invokeYosys(module: VerilogModule): Promise<AgentRunResult<SynthesisReport>> {
+async function invokeYosys(
+  module: VerilogModule,
+  runtime: OrchestratorRuntime,
+): Promise<AgentRunResult<SynthesisReport>> {
   const messages: SDKMessage[] = [];
   let finalResult: SDKResultMessage | null = null;
 
-  for await (const message of query({
+  for await (const message of runtime.queryFn({
     prompt: [
       "Call the run_yosys MCP tool exactly once with the payload below.",
       "Do not use built-in tools.",
@@ -466,34 +506,48 @@ async function invokeYosys(module: VerilogModule): Promise<AgentRunResult<Synthe
   }
 
   return {
-    payload: requireStructuredOutput<SynthesisReport>(finalResult, "run_yosys", synthesisReportZod),
+    payload: requireStructuredOutput<SynthesisReport>(
+      finalResult,
+      "run_yosys",
+      synthesisReportZod,
+    ),
     result: finalResult,
     messages,
   };
 }
 
-async function invokeFoundry(layerIr: LayerIR): Promise<AgentRunResult<VerilogModule>> {
-  await appendRunLog({
-    event: "action",
-    action: "invoke_foundry",
-    module_id: layerIr.module_id,
-  });
+async function invokeFoundry(
+  layerIr: LayerIR,
+  runtime: OrchestratorRuntime,
+): Promise<AgentRunResult<VerilogModule>> {
+  await appendRunLog(
+    {
+      event: "action",
+      action: "invoke_foundry",
+      module_id: layerIr.module_id,
+    },
+    runtime,
+  );
 
   const result = await runDelegatedAgent<VerilogModule>(
     "foundry",
     { layer_ir: layerIr },
     verilogModuleOutputFormat,
     verilogModuleZod,
+    runtime,
   );
 
-  await appendRunLog({
-    event: "agent_result",
-    agent: "Foundry",
-    module_id: layerIr.module_id,
-    total_cost_usd: result.result.total_cost_usd,
-    modelUsage: result.result.modelUsage,
-    payload: result.payload,
-  });
+  await appendRunLog(
+    {
+      event: "agent_result",
+      agent: "Foundry",
+      module_id: layerIr.module_id,
+      total_cost_usd: result.result.total_cost_usd,
+      modelUsage: result.result.modelUsage,
+      payload: result.payload,
+    },
+    runtime,
+  );
 
   return result;
 }
@@ -501,12 +555,16 @@ async function invokeFoundry(layerIr: LayerIR): Promise<AgentRunResult<VerilogMo
 async function invokeAssayer(
   module: VerilogModule,
   layerIr: LayerIR,
+  runtime: OrchestratorRuntime,
 ): Promise<AgentRunResult<VerifResult>> {
-  await appendRunLog({
-    event: "action",
-    action: "invoke_assayer",
-    module_id: module.module_id,
-  });
+  await appendRunLog(
+    {
+      event: "action",
+      action: "invoke_assayer",
+      module_id: module.module_id,
+    },
+    runtime,
+  );
 
   const result = await runDelegatedAgent<VerifResult>(
     "assayer",
@@ -519,16 +577,20 @@ async function invokeAssayer(
     },
     verifResultOutputFormat,
     verifResultZod,
+    runtime,
   );
 
-  await appendRunLog({
-    event: "agent_result",
-    agent: "Assayer",
-    module_id: module.module_id,
-    total_cost_usd: result.result.total_cost_usd,
-    modelUsage: result.result.modelUsage,
-    payload: result.payload,
-  });
+  await appendRunLog(
+    {
+      event: "agent_result",
+      agent: "Assayer",
+      module_id: module.module_id,
+      total_cost_usd: result.result.total_cost_usd,
+      modelUsage: result.result.modelUsage,
+      payload: result.payload,
+    },
+    runtime,
+  );
 
   return result;
 }
@@ -537,12 +599,16 @@ async function invokeSurgeon(
   brokenModule: VerilogModule,
   verifResult: VerifResult,
   layerIr: LayerIR,
+  runtime: OrchestratorRuntime,
 ): Promise<AgentRunResult<VerilogModule>> {
-  await appendRunLog({
-    event: "action",
-    action: "invoke_surgeon",
-    module_id: brokenModule.module_id,
-  });
+  await appendRunLog(
+    {
+      event: "action",
+      action: "invoke_surgeon",
+      module_id: brokenModule.module_id,
+    },
+    runtime,
+  );
 
   const result = await runDelegatedAgent<VerilogModule>(
     "surgeon",
@@ -553,28 +619,33 @@ async function invokeSurgeon(
     },
     verilogModuleOutputFormat,
     verilogModuleZod,
+    runtime,
   );
 
-  await appendRunLog({
-    event: "agent_result",
-    agent: "Surgeon",
-    module_id: brokenModule.module_id,
-    total_cost_usd: result.result.total_cost_usd,
-    modelUsage: result.result.modelUsage,
-    payload: result.payload,
-  });
+  await appendRunLog(
+    {
+      event: "agent_result",
+      agent: "Surgeon",
+      module_id: brokenModule.module_id,
+      total_cost_usd: result.result.total_cost_usd,
+      modelUsage: result.result.modelUsage,
+      payload: result.payload,
+    },
+    runtime,
+  );
 
   return result;
 }
 
-async function writePipelineSummary(
+export async function writePipelineSummary(
   manager: PipelineStateManager,
   pipelineIr: PipelineIR,
+  runtime: OrchestratorRuntime = createOrchestratorRuntime(),
 ): Promise<void> {
   const summaryPath = reportPath("pipeline_summary.json");
   const summaryPayload = {
     run_id: manager.getState().run_id,
-    completed_at: new Date().toISOString(),
+    completed_at: runtime.now().toISOString(),
     is_done: manager.isDone(),
     model_name: pipelineIr.model_name,
     modules_total: pipelineIr.layers.length,
@@ -585,40 +656,54 @@ async function writePipelineSummary(
   };
 
   await writeJsonFile(summaryPath, summaryPayload);
-  await appendRunLog({
-    event: "pipeline_summary_written",
-    path: summaryPath,
-    payload: summaryPayload,
-  });
+  await appendRunLog(
+    {
+      event: "pipeline_summary_written",
+      path: summaryPath,
+      payload: summaryPayload,
+    },
+    runtime,
+  );
 }
 
-export async function runPipeline(checkpointPath: string): Promise<void> {
+export async function runPipeline(
+  checkpointPath: string,
+  options: RunPipelineOptions = {},
+): Promise<void> {
+  const resume = options.resume ?? false;
+  const runtime = createOrchestratorRuntime(options.runtime);
   await ensureOutputLayout();
 
   const runLogPath = reportPath("run_log.jsonl");
-  if (!ACTIVE_CLI_OPTIONS.resume) {
+  if (!resume) {
     await writeFile(runLogPath, "", "utf8");
   }
 
-  await appendRunLog({
-    event: "pipeline_start",
-    checkpoint_path: checkpointPath,
-    resume: ACTIVE_CLI_OPTIONS.resume,
-  });
+  await appendRunLog(
+    {
+      event: "pipeline_start",
+      checkpoint_path: checkpointPath,
+      resume,
+    },
+    runtime,
+  );
 
-  const layerIrBootstrap = await ensureLayerIr(checkpointPath);
+  const layerIrBootstrap = await ensureLayerIr(checkpointPath, runtime);
   const pipelineIr = layerIrBootstrap.pipelineIr;
   const moduleIds = pipelineIr.layers.map((layer) => layer.module_id);
   const statePath = resolveFromSdk(PIPELINE_CONFIG.pipeline_state_path);
   const manager = new PipelineStateManager(moduleIds, PIPELINE_CONFIG.max_retries);
 
-  if (ACTIVE_CLI_OPTIONS.resume && (await pathExists(statePath))) {
+  if (resume && (await pathExists(statePath))) {
     await manager.loadState(statePath);
-    await appendRunLog({
-      event: "pipeline_resume_loaded",
-      state_path: statePath,
-      state: manager.getState(),
-    });
+    await appendRunLog(
+      {
+        event: "pipeline_resume_loaded",
+        state_path: statePath,
+        state: manager.getState(),
+      },
+      runtime,
+    );
   } else {
     if (layerIrBootstrap.bootstrapUsage) {
       manager.recordAgentUsage(
@@ -627,11 +712,14 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
       );
     }
     await manager.saveState(statePath);
-    await appendRunLog({
-      event: "pipeline_state_initialized",
-      state_path: statePath,
-      state: manager.getState(),
-    });
+    await appendRunLog(
+      {
+        event: "pipeline_state_initialized",
+        state_path: statePath,
+        state: manager.getState(),
+      },
+      runtime,
+    );
   }
 
   while (!manager.isDone()) {
@@ -649,7 +737,14 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
       const beforeStatus = beforeTickState.modules[tickModuleId];
       const afterStatus = afterTickState.modules[tickModuleId];
       if (beforeStatus !== afterStatus) {
-        await logStateTransition(manager, tickModuleId, beforeStatus, afterStatus, nextAction.action);
+        await logStateTransition(
+          manager,
+          tickModuleId,
+          beforeStatus,
+          afterStatus,
+          nextAction.action,
+          runtime,
+        );
       }
     }
 
@@ -657,7 +752,7 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
 
     if (nextAction.action === "invoke_foundry") {
       const layer = findLayer(pipelineIr, nextAction.module_id);
-      const foundryResult = await invokeFoundry(layer);
+      const foundryResult = await invokeFoundry(layer, runtime);
       recordUsageFromResult(manager, foundryResult.result);
       await manager.saveState(statePath);
 
@@ -669,10 +764,11 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
         statusBeforeVerify,
         "verifying",
         "foundry_completed",
+        runtime,
       );
       await manager.saveState(statePath);
 
-      const assayerResult = await invokeAssayer(foundryResult.payload, layer);
+      const assayerResult = await invokeAssayer(foundryResult.payload, layer, runtime);
       recordUsageFromResult(manager, assayerResult.result);
       const statusBeforeApply = manager.getState().modules[nextAction.module_id];
       manager.applyVerifResult(nextAction.module_id, assayerResult.payload);
@@ -683,23 +779,27 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
         statusBeforeApply,
         statusAfterApply,
         `assayer_${assayerResult.payload.status}`,
+        runtime,
       );
       await manager.saveState(statePath);
 
       if (statusAfterApply === "pass") {
         // TODO: If synthesis failures should trigger retries, extend PipelineState and the retry logic to include post-verification Yosys outcomes.
-        const yosysResult = await invokeYosys(foundryResult.payload);
+        const yosysResult = await invokeYosys(foundryResult.payload, runtime);
         recordUsageFromResult(manager, yosysResult.result);
         await writeJsonFile(reportPath(`${nextAction.module_id}.yosys.json`), yosysResult.payload);
         await manager.saveState(statePath);
       }
 
       if (statusAfterApply === "fail_abort") {
-        await appendRunLog({
-          event: "module_fail_abort",
-          module_id: nextAction.module_id,
-          result: assayerResult.payload,
-        });
+        await appendRunLog(
+          {
+            event: "module_fail_abort",
+            module_id: nextAction.module_id,
+            result: assayerResult.payload,
+          },
+          runtime,
+        );
       }
 
       continue;
@@ -716,7 +816,7 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
         );
       }
 
-      const surgeonResult = await invokeSurgeon(brokenModule, verifResult, layer);
+      const surgeonResult = await invokeSurgeon(brokenModule, verifResult, layer, runtime);
       recordUsageFromResult(manager, surgeonResult.result);
       await manager.saveState(statePath);
 
@@ -728,10 +828,11 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
         statusBeforeVerify,
         "verifying",
         "surgeon_completed",
+        runtime,
       );
       await manager.saveState(statePath);
 
-      const assayerResult = await invokeAssayer(surgeonResult.payload, layer);
+      const assayerResult = await invokeAssayer(surgeonResult.payload, layer, runtime);
       recordUsageFromResult(manager, assayerResult.result);
       const statusBeforeApply = manager.getState().modules[nextAction.module_id];
       manager.applyVerifResult(nextAction.module_id, assayerResult.payload);
@@ -742,23 +843,27 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
         statusBeforeApply,
         statusAfterApply,
         `assayer_${assayerResult.payload.status}`,
+        runtime,
       );
       await manager.saveState(statePath);
 
       if (statusAfterApply === "pass") {
         // TODO: If synthesis failures should trigger retries, extend PipelineState and the retry logic to include post-verification Yosys outcomes.
-        const yosysResult = await invokeYosys(surgeonResult.payload);
+        const yosysResult = await invokeYosys(surgeonResult.payload, runtime);
         recordUsageFromResult(manager, yosysResult.result);
         await writeJsonFile(reportPath(`${nextAction.module_id}.yosys.json`), yosysResult.payload);
         await manager.saveState(statePath);
       }
 
       if (statusAfterApply === "fail_abort") {
-        await appendRunLog({
-          event: "module_fail_abort",
-          module_id: nextAction.module_id,
-          result: assayerResult.payload,
-        });
+        await appendRunLog(
+          {
+            event: "module_fail_abort",
+            module_id: nextAction.module_id,
+            result: assayerResult.payload,
+          },
+          runtime,
+        );
       }
 
       continue;
@@ -768,20 +873,23 @@ export async function runPipeline(checkpointPath: string): Promise<void> {
     throw new Error(`Unhandled pipeline action '${JSON.stringify(nextAction)}'.`);
   }
 
-  await writePipelineSummary(manager, pipelineIr);
-  await appendRunLog({
-    event: "pipeline_complete",
-    run_id: manager.getState().run_id,
-    summary: manager.summary(),
-  });
+  await writePipelineSummary(manager, pipelineIr, runtime);
+  await appendRunLog(
+    {
+      event: "pipeline_complete",
+      run_id: manager.getState().run_id,
+      summary: manager.summary(),
+    },
+    runtime,
+  );
 }
 
-function parseCliArgs(argv: string[]): { checkpointPath: string; resume: boolean } {
+export function parseCliArgs(argv: string[]): { checkpointPath: string; resume: boolean } {
   const resume = argv.includes("--resume");
   const positional = argv.filter((arg) => !arg.startsWith("--"));
 
   if (positional.length < 1) {
-    throw new Error("Usage: tsx orchestrate.ts <checkpoint-path> [--resume]");
+    throw new Error("Usage: tsx main.ts <checkpoint-path> [--resume]");
   }
 
   // TODO: Extend CLI parsing if the pipeline grows knobs like alternate plugins, custom output roots, or per-run retry budgets.
@@ -791,19 +899,25 @@ function parseCliArgs(argv: string[]): { checkpointPath: string; resume: boolean
   };
 }
 
-async function main(): Promise<void> {
-  const cli = parseCliArgs(process.argv.slice(2));
-  ACTIVE_CLI_OPTIONS.resume = cli.resume;
-  await runPipeline(cli.checkpointPath);
+export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const cli = parseCliArgs(argv);
+  await runPipeline(cli.checkpointPath, { resume: cli.resume });
 }
 
-main().catch(async (error: unknown) => {
+export async function handlePipelineError(
+  error: unknown,
+  runtime: Partial<OrchestratorRuntime> = {},
+): Promise<void> {
+  const resolvedRuntime = createOrchestratorRuntime(runtime);
   const message = error instanceof Error ? error.message : String(error);
   await ensureOutputLayout().catch(() => undefined);
-  await appendRunLog({
-    event: "pipeline_error",
-    error: message,
-  }).catch(() => undefined);
+  await appendRunLog(
+    {
+      event: "pipeline_error",
+      error: message,
+    },
+    resolvedRuntime,
+  ).catch(() => undefined);
   console.error(message);
   process.exitCode = 1;
-});
+}

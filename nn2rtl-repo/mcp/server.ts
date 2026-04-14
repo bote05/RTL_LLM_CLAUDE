@@ -27,17 +27,21 @@ import {
   writeVerilogOutput,
 } from "./schemas.js";
 
-const server = new Server(
-  {
-    name: "nn2rtl-tools",
-    version: "0.1.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  },
-);
+export type ToolImplementations = {
+  read_weights: typeof read_weights;
+  run_iverilog: typeof run_iverilog;
+  run_verilator: typeof run_verilator;
+  run_yosys: typeof run_yosys;
+  write_verilog: typeof write_verilog;
+};
+
+const DEFAULT_TOOL_IMPLEMENTATIONS: ToolImplementations = {
+  read_weights,
+  run_iverilog,
+  run_verilator,
+  run_yosys,
+  write_verilog,
+};
 
 function toToolResult(payload: Record<string, unknown>): CallToolResult {
   return {
@@ -50,7 +54,7 @@ function toJsonSchema(schema: z.ZodType): Record<string, unknown> {
   return z.toJSONSchema(schema) as Record<string, unknown>;
 }
 
-const toolDefinitions = [
+export const toolDefinitions = [
   {
     name: "run_iverilog",
     description: "Run iverilog syntax checking for a candidate Verilog module.",
@@ -83,15 +87,21 @@ const toolDefinitions = [
   },
 ] as const;
 
-async function handleRunIverilog(args: Record<string, unknown>): Promise<CallToolResult> {
+async function handleRunIverilog(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
   const input = runIverilogInput.parse(args);
-  const result = await run_iverilog(input.verilog_source, input.module_name);
+  const result = await toolImpls.run_iverilog(input.verilog_source, input.module_name);
   return toToolResult(result);
 }
 
-async function handleRunVerilator(args: Record<string, unknown>): Promise<CallToolResult> {
+async function handleRunVerilator(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
   const input = runVerilatorInput.parse(args);
-  const result = await run_verilator(
+  const result = await toolImpls.run_verilator(
     input.verilog_source,
     input.module_name,
     input.sidecar_path,
@@ -99,57 +109,90 @@ async function handleRunVerilator(args: Record<string, unknown>): Promise<CallTo
   return toToolResult(result as unknown as Record<string, unknown>);
 }
 
-async function handleRunYosys(args: Record<string, unknown>): Promise<CallToolResult> {
+async function handleRunYosys(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
   const input = runYosysInput.parse(args);
-  const result = await run_yosys(input.verilog_source, input.module_name);
+  const result = await toolImpls.run_yosys(input.verilog_source, input.module_name);
   return toToolResult(result);
 }
 
-async function handleReadWeights(args: Record<string, unknown>): Promise<CallToolResult> {
+async function handleReadWeights(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
   const input = readWeightsInput.parse(args);
-  const result = await read_weights(input.checkpoint_path, input.quantization_config);
+  const result = await toolImpls.read_weights(input.checkpoint_path, input.quantization_config);
   return toToolResult(result as unknown as Record<string, unknown>);
 }
 
-async function handleWriteVerilog(args: Record<string, unknown>): Promise<CallToolResult> {
+async function handleWriteVerilog(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
   const input = writeVerilogInput.parse(args);
-  const writtenPath = await write_verilog(input.module, input.output_dir);
+  const writtenPath = await toolImpls.write_verilog(input.module, input.output_dir);
   return toToolResult({ path: writtenPath });
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [...toolDefinitions],
-}));
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const name = request.params.name;
-  const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-
+export async function handleToolCall(
+  name: string,
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations = DEFAULT_TOOL_IMPLEMENTATIONS,
+): Promise<CallToolResult> {
   switch (name) {
     case "run_iverilog":
-      return handleRunIverilog(args);
+      return handleRunIverilog(args, toolImpls);
     case "run_verilator":
-      return handleRunVerilator(args);
+      return handleRunVerilator(args, toolImpls);
     case "run_yosys":
-      return handleRunYosys(args);
+      return handleRunYosys(args, toolImpls);
     case "read_weights":
-      return handleReadWeights(args);
+      return handleReadWeights(args, toolImpls);
     case "write_verilog":
-      return handleWriteVerilog(args);
+      return handleWriteVerilog(args, toolImpls);
     default:
       return {
         content: [{ type: "text", text: `Unknown tool '${name}'.` }],
         isError: true,
       };
   }
-});
-
-async function main(): Promise<void> {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+export function createServer(
+  toolImpls: ToolImplementations = DEFAULT_TOOL_IMPLEMENTATIONS,
+): Server {
+  const server = new Server(
+    {
+      name: "nn2rtl-tools",
+      version: "0.1.0",
+    },
+    {
+      capabilities: {
+        tools: {},
+      },
+    },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [...toolDefinitions],
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const name = request.params.name;
+    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    return handleToolCall(name, args, toolImpls);
+  });
+
+  return server;
+}
+
+export async function startServer(
+  toolImpls: ToolImplementations = DEFAULT_TOOL_IMPLEMENTATIONS,
+): Promise<Server> {
+  const server = createServer(toolImpls);
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  return server;
+}
