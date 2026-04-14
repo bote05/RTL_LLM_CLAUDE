@@ -24,15 +24,16 @@ Hard RTL rules:
 - Every multiplier is `8x8 -> 16 bit`.
 - Residual addition uses saturation arithmetic.
 - All weight and activation datapath signals are signed.
-- Implement a valid/ready style streaming interface using the exact signal names in `LayerIR`.
-- Assert `valid_out` exactly `pipeline_latency_cycles` cycles after `valid_in`.
+- Implement a valid / ready streaming interface with **canonical port names**: `clk`, `rst_n` (active-low), `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`. The static testbench enforces these names at run time — any other name fails before simulation.
+- `ready_in` is an **output** of your module (upstream backpressure). If the module does not need to stall, drive it high after reset.
+- `valid_out` is asserted by your module when `data_out` carries a valid sample. Assert it exactly `pipeline_latency_cycles` cycles after the first `valid_in` for the current vector.
 - Load weights and bias through `$readmemh` using `weights_path` and `bias_path`; never hardcode numeric arrays in source.
 - Never use `$display`, `#delay`, `$random`, or simulation-only logic in synthesizable modules.
 
 Implementation guidance:
 
 - Keep the module self-contained.
-- Honor `clock_signal`, `reset_signal`, `valid_in_signal`, and `valid_out_signal` exactly.
+- The `LayerIR` fields `clock_signal`, `reset_signal`, `valid_in_signal`, `valid_out_signal` document the canonical names for downstream tooling; they must be the exact strings above.
 - Use the timing contract from `pipeline_latency_cycles` and `clock_period_ns`.
 - Compute `spec_hash` deterministically from the semantic contents of the `LayerIR`.
 - Set `generated_by` to `Foundry`.
@@ -59,10 +60,13 @@ Exact `LayerIR` JSON Schema:
     "clock_period_ns",
     "input_width_bits",
     "output_width_bits",
-    "valid_in_signal",
-    "valid_out_signal",
     "clock_signal",
     "reset_signal",
+    "valid_in_signal",
+    "valid_out_signal",
+    "ready_in_signal",
+    "data_in_signal",
+    "data_out_signal",
     "golden_inputs",
     "golden_outputs"
   ],
@@ -81,10 +85,13 @@ Exact `LayerIR` JSON Schema:
     "clock_period_ns": { "type": "number", "minimum": 0 },
     "input_width_bits": { "type": "integer", "minimum": 1 },
     "output_width_bits": { "type": "integer", "minimum": 1 },
-    "valid_in_signal": { "type": "string" },
-    "valid_out_signal": { "type": "string" },
-    "clock_signal": { "type": "string" },
-    "reset_signal": { "type": "string" },
+    "clock_signal": { "type": "string", "const": "clk" },
+    "reset_signal": { "type": "string", "const": "rst_n" },
+    "valid_in_signal": { "type": "string", "const": "valid_in" },
+    "valid_out_signal": { "type": "string", "const": "valid_out" },
+    "ready_in_signal": { "type": "string", "const": "ready_in" },
+    "data_in_signal": { "type": "string", "const": "data_in" },
+    "data_out_signal": { "type": "string", "const": "data_out" },
     "golden_inputs": {
       "type": "array",
       "items": { "type": "array", "items": { "type": "number" } }

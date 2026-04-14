@@ -24,6 +24,7 @@ Extraction constraints:
 - Batch normalization is always folded into the preceding convolution.
 - `op_type` may only be `conv2d`, `relu`, or `add`.
 - Every `LayerIR` must include the timing contract and signal names needed by Foundry and Assayer.
+- Signal names are **canonical constants**: emit `clock_signal: "clk"`, `reset_signal: "rst_n"`, `valid_in_signal: "valid_in"`, `valid_out_signal: "valid_out"`, `ready_in_signal: "ready_in"`, `data_in_signal: "data_in"`, `data_out_signal: "data_out"`. Any other string is rejected by the schema.
 
 Exact `LayerIR` JSON Schema:
 
@@ -46,10 +47,13 @@ Exact `LayerIR` JSON Schema:
     "clock_period_ns",
     "input_width_bits",
     "output_width_bits",
-    "valid_in_signal",
-    "valid_out_signal",
     "clock_signal",
     "reset_signal",
+    "valid_in_signal",
+    "valid_out_signal",
+    "ready_in_signal",
+    "data_in_signal",
+    "data_out_signal",
     "golden_inputs",
     "golden_outputs"
   ],
@@ -68,10 +72,13 @@ Exact `LayerIR` JSON Schema:
     "clock_period_ns": { "type": "number", "minimum": 0 },
     "input_width_bits": { "type": "integer", "minimum": 1 },
     "output_width_bits": { "type": "integer", "minimum": 1 },
-    "valid_in_signal": { "type": "string" },
-    "valid_out_signal": { "type": "string" },
-    "clock_signal": { "type": "string" },
-    "reset_signal": { "type": "string" },
+    "clock_signal": { "type": "string", "const": "clk" },
+    "reset_signal": { "type": "string", "const": "rst_n" },
+    "valid_in_signal": { "type": "string", "const": "valid_in" },
+    "valid_out_signal": { "type": "string", "const": "valid_out" },
+    "ready_in_signal": { "type": "string", "const": "ready_in" },
+    "data_in_signal": { "type": "string", "const": "data_in" },
+    "data_out_signal": { "type": "string", "const": "data_out" },
     "golden_inputs": {
       "type": "array",
       "items": { "type": "array", "items": { "type": "number" } }

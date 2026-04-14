@@ -26,10 +26,13 @@ Use this skill when extracting a quantized ResNet-50 residual block stack into `
 - `clock_period_ns`
 - `input_width_bits`
 - `output_width_bits`
-- `valid_in_signal`
-- `valid_out_signal`
-- `clock_signal`
-- `reset_signal`
+- `clock_signal` — must equal the literal `"clk"`
+- `reset_signal` — must equal the literal `"rst_n"`
+- `valid_in_signal` — must equal the literal `"valid_in"`
+- `valid_out_signal` — must equal the literal `"valid_out"`
+- `ready_in_signal` — must equal the literal `"ready_in"`
+- `data_in_signal` — must equal the literal `"data_in"`
+- `data_out_signal` — must equal the literal `"data_out"`
 - `golden_inputs`
 - `golden_outputs`
 
