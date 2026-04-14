@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  VERILATOR_COMMAND,
   parseYosysReport,
   readSidecarIfPresent,
   read_weights,
@@ -194,7 +195,7 @@ describe("mcp tools", () => {
 
     const result = await run_verilator("module unit_module; endmodule", "unit_module", sidecarPath, {
       commandRunner: async (file) => {
-        if (file === "verilator") {
+        if (file === VERILATOR_COMMAND) {
           throw { stderr: "compile boom" };
         }
         return { stdout: "", stderr: "" };

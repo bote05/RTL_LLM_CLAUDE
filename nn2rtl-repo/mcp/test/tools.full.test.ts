@@ -7,7 +7,13 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { read_weights, run_iverilog, run_verilator, run_yosys } from "../tools.js";
+import {
+  PYTHON_COMMAND,
+  read_weights,
+  run_iverilog,
+  run_verilator,
+  run_yosys,
+} from "../tools.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -72,7 +78,11 @@ async function writeSidecar(
   return sidecarPath;
 }
 
-describe("mcp tools full integration", () => {
+// Real Verilator builds take 10–15s on Windows with w64devkit; the vitest
+// default 5s timeout is far too tight for this suite.
+const VERILATOR_TEST_TIMEOUT_MS = 180_000;
+
+describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, () => {
   it("runs iverilog successfully on a real fixture module", async () => {
     const verilog = await loadFixture(verilatorFixtureRoot, "stream_passthrough.v");
     await expect(run_iverilog(verilog, "stream_passthrough")).resolves.toEqual({
@@ -200,7 +210,7 @@ describe("mcp tools full integration", () => {
     const tempRepoRoot = await makeTempDir("nn2rtl-read-weights-full-");
 
     await execFileAsync(
-      "python3",
+      PYTHON_COMMAND,
       [path.join(repoRoot, "scripts", "quantize_model.py")],
       {
         cwd: repoRoot,

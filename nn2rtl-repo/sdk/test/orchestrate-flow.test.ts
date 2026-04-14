@@ -190,6 +190,50 @@ describe("runPipeline", () => {
     expect(state.attempts.unit_module).toBe(1);
   });
 
+  it("runs the Surgeon repair path after a failed yosys synthesis report", async () => {
+    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    const originalModule = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const repairedModule = {
+      ...originalModule,
+      generated_by: "Surgeon",
+      attempt: 2,
+    };
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        return successResult(originalModule);
+      }],
+      assayer: [successResult(verifPass), successResult(verifPass)],
+      surgeon: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        return successResult(repairedModule);
+      }],
+      yosys: [
+        successResult({ success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" }),
+        successResult({ success: true, lut_count: 3, fmax_mhz: 20, report: "fixture" }),
+      ],
+    });
+
+    await runPipeline("checkpoint.pth", {
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.filter((prompt) => prompt.includes("Call the run_yosys MCP tool")).length).toBe(2);
+    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(true);
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("pass");
+    expect(state.attempts.unit_module).toBe(1);
+    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_fail"');
+  });
+
   it("blocks resume when fail_retry has no prior verification result", async () => {
     await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
     await writeFile(

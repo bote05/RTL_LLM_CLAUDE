@@ -7,11 +7,10 @@ module stream_bubble (
   output reg        valid_out,
   output reg  [7:0] data_out
 );
-  localparam IDLE = 2'd0;
-  localparam WAITING = 2'd1;
-  localparam OUTPUTTING = 2'd2;
+  localparam IDLE = 1'd0;
+  localparam OUTPUTTING = 1'd1;
 
-  reg [1:0] state;
+  reg state;
   reg [7:0] latched_data;
 
   assign ready_in = (state == IDLE);
@@ -29,11 +28,8 @@ module stream_bubble (
         IDLE: begin
           if (valid_in) begin
             latched_data <= data_in;
-            state <= WAITING;
+            state <= OUTPUTTING;
           end
-        end
-        WAITING: begin
-          state <= OUTPUTTING;
         end
         OUTPUTTING: begin
           valid_out <= 1'b1;

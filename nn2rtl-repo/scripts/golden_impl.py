@@ -35,9 +35,13 @@ def int8_to_hex(value: int) -> str:
 
 def write_signed_int8_hex(values: Iterable[int], file_path: Path) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    # $readmemh accepts LF everywhere, and the bench tests pin the on-disk
+    # bytes. newline="" disables Python's platform-specific CRLF translation
+    # on Windows.
     file_path.write_text(
         "".join(f"{int8_to_hex(int(value))}\n" for value in values),
         encoding="utf8",
+        newline="",
     )
 
 

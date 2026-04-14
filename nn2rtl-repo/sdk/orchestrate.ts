@@ -113,6 +113,24 @@ export function resolveFromSdk(relativePath: string): string {
   return path.resolve(sdkRoot, relativePath);
 }
 
+function buildYosysFailureResult(
+  moduleId: string,
+  verifiedResult: VerifResult,
+  synthesisReport: SynthesisReport,
+): VerifResult {
+  return {
+    ...verifiedResult,
+    module_id: moduleId,
+    status: "fail",
+    failure_class: "synthesis_failed",
+    fix_hint: [
+      "Yosys synthesis failed after functional verification passed.",
+      "Repair the RTL so `synth_ice40 -abc9; stat` succeeds.",
+      synthesisReport.report,
+    ].join("\n\n"),
+  };
+}
+
 function reportPath(fileName: string): string {
   return path.join(resolveFromSdk(PIPELINE_CONFIG.reports_dir), fileName);
 }
@@ -520,6 +538,53 @@ async function invokeYosys(
   };
 }
 
+async function processYosysOutcome(
+  manager: PipelineStateManager,
+  moduleId: string,
+  module: VerilogModule,
+  verifiedResult: VerifResult,
+  statePath: string,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const yosysResult = await invokeYosys(module, runtime);
+  recordUsageFromResult(manager, yosysResult.result);
+  await writeJsonFile(reportPath(`${moduleId}.yosys.json`), yosysResult.payload);
+
+  if (yosysResult.payload.success) {
+    await manager.saveState(statePath);
+    return;
+  }
+
+  const synthesisFailure = buildYosysFailureResult(
+    moduleId,
+    verifiedResult,
+    yosysResult.payload,
+  );
+  const statusBeforeApply = manager.getState().modules[moduleId];
+  manager.applyVerifResult(moduleId, synthesisFailure);
+  const statusAfterApply = manager.getState().modules[moduleId];
+  await logStateTransition(
+    manager,
+    moduleId,
+    statusBeforeApply,
+    statusAfterApply,
+    "yosys_fail",
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  if (statusAfterApply === "fail_abort") {
+    await appendRunLog(
+      {
+        event: "module_fail_abort",
+        module_id: moduleId,
+        result: synthesisFailure,
+      },
+      runtime,
+    );
+  }
+}
+
 async function invokeFoundry(
   layerIr: LayerIR,
   runtime: OrchestratorRuntime,
@@ -788,11 +853,14 @@ export async function runPipeline(
       await manager.saveState(statePath);
 
       if (statusAfterApply === "pass") {
-        // TODO: If synthesis failures should trigger retries, extend PipelineState and the retry logic to include post-verification Yosys outcomes.
-        const yosysResult = await invokeYosys(foundryResult.payload, runtime);
-        recordUsageFromResult(manager, yosysResult.result);
-        await writeJsonFile(reportPath(`${nextAction.module_id}.yosys.json`), yosysResult.payload);
-        await manager.saveState(statePath);
+        await processYosysOutcome(
+          manager,
+          nextAction.module_id,
+          foundryResult.payload,
+          assayerResult.payload,
+          statePath,
+          runtime,
+        );
       }
 
       if (statusAfterApply === "fail_abort") {
@@ -852,11 +920,14 @@ export async function runPipeline(
       await manager.saveState(statePath);
 
       if (statusAfterApply === "pass") {
-        // TODO: If synthesis failures should trigger retries, extend PipelineState and the retry logic to include post-verification Yosys outcomes.
-        const yosysResult = await invokeYosys(surgeonResult.payload, runtime);
-        recordUsageFromResult(manager, yosysResult.result);
-        await writeJsonFile(reportPath(`${nextAction.module_id}.yosys.json`), yosysResult.payload);
-        await manager.saveState(statePath);
+        await processYosysOutcome(
+          manager,
+          nextAction.module_id,
+          surgeonResult.payload,
+          assayerResult.payload,
+          statePath,
+          runtime,
+        );
       }
 
       if (statusAfterApply === "fail_abort") {

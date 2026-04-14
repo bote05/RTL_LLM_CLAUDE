@@ -17,6 +17,7 @@ Use this skill when verifying a generated or repaired module.
   - `pipeline_latency_cycles`
   - golden input and output paths
   - results path
+- `results_path`, `golden_inputs_path`, and `golden_outputs_path` must be absolute filesystem paths because `run_verilator` executes the compiled binary from a temp build directory.
 
 ## Tool Order
 

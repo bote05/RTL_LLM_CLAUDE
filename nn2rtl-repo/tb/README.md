@@ -16,7 +16,7 @@ The testbench is compiled once per module. Two preprocessor macros select the DU
 -DVMODEL_CLASS=V<module_id>            (generated Verilator class name)
 ```
 
-The eventual wiring is for the `run_verilator` MCP tool to set these when it invokes `verilator --cc --exe --build -CFLAGS ...`. **That wiring is not implemented yet** — today [mcp/tools.ts](../mcp/tools.ts) only runs `verilator --lint-only` and returns a placeholder `VerifResult`. Driving the compiled binary with a sidecar path is the next critical-path TODO.
+`run_verilator` sets these when it invokes `verilator --cc --exe --build -CFLAGS ...`, then executes the produced binary with the sidecar path and validates the structured results JSON it writes.
 
 ## Canonical signal names
 

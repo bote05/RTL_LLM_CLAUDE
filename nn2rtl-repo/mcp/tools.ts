@@ -20,6 +20,23 @@ const repoRoot = path.resolve(
 export const TB_SOURCE_PATH = path.resolve(repoRoot, "tb", "static_verilator_tb.cpp");
 export const TB_JSON_HPP_PATH = path.resolve(repoRoot, "tb", "third_party", "json.hpp");
 
+// On Windows, the `verilator` entry point is a Perl script that OSS CAD Suite
+// does not ship Perl for; `verilator_bin.exe` is the native Windows binary and
+// works directly. Linux/macOS installs ship the Perl wrapper with a working
+// system Perl, so `verilator` is the right command there. An env override lets
+// callers force a specific binary (e.g. a distro-managed `verilator`).
+export const VERILATOR_COMMAND =
+  process.env.NN2RTL_VERILATOR_BIN ??
+  (process.platform === "win32" ? "verilator_bin" : "verilator");
+
+// On Windows, the `python3` command often resolves to a broken Microsoft Store
+// alias; `python` typically points at a real interpreter. On Linux/macOS
+// `python3` is the conventional entry point. An env override lets callers
+// force a specific interpreter (e.g. a virtualenv binary).
+export const PYTHON_COMMAND =
+  process.env.NN2RTL_PYTHON_BIN ??
+  (process.platform === "win32" ? "python" : "python3");
+
 function resolveTmpDirRoot(): string {
   if (process.platform === "win32") {
     return os.tmpdir();
@@ -216,7 +233,7 @@ export async function run_verilator(
 
     try {
       await runtime.commandRunner(
-        "verilator",
+        VERILATOR_COMMAND,
         [
           "--cc",
           "--exe",
@@ -319,7 +336,7 @@ export async function read_weights(
   const scriptPath = path.join(repoRoot, "scripts", "generate_golden.py");
   const outputPath = path.join(resolveRepoRootFromEnv(runtime.env), "output", "golden_vectors.json");
 
-  await runtime.commandRunner("python3", [scriptPath, checkpoint_path], {
+  await runtime.commandRunner(PYTHON_COMMAND, [scriptPath, checkpoint_path], {
     cwd: runtime.cwd,
     env: {
       ...runtime.env,

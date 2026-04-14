@@ -17,6 +17,7 @@ export const failureClassSchema = z.enum([
   "scale_factor_misapplied",
   "bias_term_missing",
   "batch_norm_not_folded",
+  "synthesis_failed",
 ]);
 
 export const layerIrSchema = z

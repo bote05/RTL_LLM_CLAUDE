@@ -57,7 +57,8 @@ export type FailureClass =
   | "enable_signal_ignored"
   | "scale_factor_misapplied"
   | "bias_term_missing"
-  | "batch_norm_not_folded";
+  | "batch_norm_not_folded"
+  | "synthesis_failed";
 
 export interface VerifResult {
   module_id: string;

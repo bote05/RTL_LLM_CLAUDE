@@ -37,6 +37,12 @@
 #include "third_party/json.hpp"
 #include "verilated.h"
 
+// Verilator's linker looks for this stub; it is the simulation timestamp used
+// by waveform dumps. The bench does not emit waves, so a constant is fine.
+double sc_time_stamp() {
+  return 0;
+}
+
 #ifndef VMODEL_HEADER
 #  error "VMODEL_HEADER must be defined at build time (e.g. -DVMODEL_HEADER=\"\\\"Vfoo.h\\\"\")."
 #endif

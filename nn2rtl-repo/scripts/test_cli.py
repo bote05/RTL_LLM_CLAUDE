@@ -31,7 +31,9 @@ def test_quantize_model_cli_writes_a_real_checkpoint_and_summary(tmp_path: Path)
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["checkpoint_path"].endswith("checkpoints/resnet50_int8.pth")
+    assert Path(payload["checkpoint_path"]).as_posix().endswith(
+        "checkpoints/resnet50_int8.pth"
+    )
     assert payload["layers"]["toy_conv1x1"]["scale_factor"] == 0.125
     assert (tmp_path / "checkpoints" / "resnet50_int8.pth").exists()
 

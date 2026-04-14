@@ -62,7 +62,6 @@ type QueryParams = {
 
 type Query = AsyncGenerator<SDKMessage, void>;
 
-// @ts-expect-error The package ships broken root typings; sdk.mjs is imported as an untyped runtime entrypoint on purpose.
-import { query as rawQuery } from "@anthropic-ai/claude-agent-sdk/sdk.mjs";
+import { query as rawQuery } from "@anthropic-ai/claude-agent-sdk";
 
 export const query = rawQuery as unknown as (_params: QueryParams) => Query;
