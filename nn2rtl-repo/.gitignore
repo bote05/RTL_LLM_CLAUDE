@@ -33,6 +33,7 @@ output/rtl/
 output/tb/
 output/reports/
 output/weights/
+output/goldens/
 output/layer_ir.json
 output/pipeline_state.json
 output/run_log.jsonl
