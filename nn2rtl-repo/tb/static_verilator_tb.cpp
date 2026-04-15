@@ -108,28 +108,49 @@ Sidecar loadSidecar(const std::string& path) {
   return s;
 }
 
+// Binary vector file format (.goldin / .goldout):
+//   [ 0..4)  magic        : ASCII "NN2V"
+//   [ 4..8)  version      : uint32 LE (= 1)
+//   [ 8..12) num_vectors  : uint32 LE
+//   [12..16) samples_per_vector : uint32 LE
+//   [16..)   data         : num_vectors * samples_per_vector * int32 LE
+// Documented in scripts/golden_impl.py (write_golden_vector_file).
 std::vector<std::vector<int64_t>> loadVectorFile(const std::string& path) {
-  std::ifstream in(path);
+  std::ifstream in(path, std::ios::binary);
   if (!in.is_open()) {
     throw std::runtime_error("Could not open vector file '" + path + "'.");
   }
 
-  json j;
-  in >> j;
-  if (!j.is_array()) {
-    throw std::runtime_error("Vector file '" + path + "' is not a JSON array.");
+  char magic[4];
+  uint32_t version = 0;
+  uint32_t num_vectors = 0;
+  uint32_t samples_per_vector = 0;
+  in.read(magic, sizeof(magic));
+  in.read(reinterpret_cast<char*>(&version), sizeof(version));
+  in.read(reinterpret_cast<char*>(&num_vectors), sizeof(num_vectors));
+  in.read(reinterpret_cast<char*>(&samples_per_vector), sizeof(samples_per_vector));
+  if (!in) {
+    throw std::runtime_error("Vector file '" + path + "' header is truncated.");
+  }
+  if (magic[0] != 'N' || magic[1] != 'N' || magic[2] != '2' || magic[3] != 'V') {
+    throw std::runtime_error("Vector file '" + path + "' has wrong magic; expected 'NN2V'.");
+  }
+  if (version != 1) {
+    throw std::runtime_error("Vector file '" + path + "' has unsupported version.");
   }
 
   std::vector<std::vector<int64_t>> vectors;
-  vectors.reserve(j.size());
-  for (const auto& row : j) {
-    if (!row.is_array()) {
-      throw std::runtime_error("Vector file '" + path + "' contains a non-array row.");
+  vectors.reserve(num_vectors);
+  std::vector<int32_t> row_buffer(samples_per_vector);
+  for (uint32_t v = 0; v < num_vectors; ++v) {
+    in.read(reinterpret_cast<char*>(row_buffer.data()),
+            static_cast<std::streamsize>(samples_per_vector * sizeof(int32_t)));
+    if (!in) {
+      throw std::runtime_error("Vector file '" + path + "' data is truncated.");
     }
-    std::vector<int64_t> parsed;
-    parsed.reserve(row.size());
-    for (const auto& v : row) {
-      parsed.push_back(v.get<int64_t>());
+    std::vector<int64_t> parsed(samples_per_vector);
+    for (uint32_t i = 0; i < samples_per_vector; ++i) {
+      parsed[i] = static_cast<int64_t>(row_buffer[i]);
     }
     vectors.push_back(std::move(parsed));
   }

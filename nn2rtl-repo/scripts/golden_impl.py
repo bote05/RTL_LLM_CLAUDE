@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import array
 import json
 import operator
+import struct
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
@@ -237,6 +239,98 @@ def get_output_paths(repo_root: Path) -> tuple[Path, Path, Path]:
     return layer_ir_path, legacy_output_path, weights_dir
 
 
+def get_goldens_dir(repo_root: Path) -> Path:
+    goldens_dir = repo_root / "output" / "goldens"
+    goldens_dir.mkdir(parents=True, exist_ok=True)
+    return goldens_dir
+
+
+def get_golden_artifact_paths(repo_root: Path, module_id: str) -> tuple[Path, Path]:
+    goldens_dir = get_goldens_dir(repo_root)
+    return (
+        goldens_dir / f"{module_id}.goldin",
+        goldens_dir / f"{module_id}.goldout",
+    )
+
+
+# --- Binary vector file format (.goldin / .goldout) -----------------------
+# Full ResNet-50 feature maps inflate inline JSON LayerIR to multi-GB. Storing
+# golden vectors as binary sidecar files keeps the LayerIR itself small (so
+# Node's readFileSync 512 MB string cap and MCP argument-size limits don't
+# bite) while preserving per-module verification coverage.
+#
+# Layout (all little-endian):
+#   [ 0..4)  magic        : 4 bytes, ASCII "NN2V"
+#   [ 4..8)  version      : uint32, current=1
+#   [ 8..12) num_vectors  : uint32
+#   [12..16) samples_per_vector : uint32
+#   [16..)   data         : num_vectors * samples_per_vector * int32 samples
+#
+# Samples are int32 so the same format handles plain int8 streams, 16-bit
+# packed add inputs, and any future wider-width op without a format change.
+# The Verilator testbench reads the same format via loadVectorFile().
+GOLDEN_FILE_MAGIC = b"NN2V"
+GOLDEN_FILE_VERSION = 1
+GOLDEN_FILE_HEADER_STRUCT = struct.Struct("<4sIII")
+
+
+def write_golden_vector_file(values: Sequence[Sequence[int]], file_path: Path) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    num_vectors = len(values)
+    samples_per_vector = len(values[0]) if num_vectors > 0 else 0
+    for vector in values:
+        if len(vector) != samples_per_vector:
+            raise ValueError(
+                f"Golden vector file '{file_path}' requires every row to have "
+                f"{samples_per_vector} samples; found {len(vector)}."
+            )
+
+    header = GOLDEN_FILE_HEADER_STRUCT.pack(
+        GOLDEN_FILE_MAGIC,
+        GOLDEN_FILE_VERSION,
+        num_vectors,
+        samples_per_vector,
+    )
+
+    total_samples = num_vectors * samples_per_vector
+    flat_array = array.array("i")
+    flat_array.extend(int(v) for vector in values for v in vector)
+    if len(flat_array) != total_samples:
+        raise ValueError(
+            f"Expected {total_samples} samples in '{file_path}', "
+            f"got {len(flat_array)}."
+        )
+
+    with file_path.open("wb") as fh:
+        fh.write(header)
+        flat_array.tofile(fh)
+
+
+def read_golden_vector_file(file_path: Path) -> list[list[int]]:
+    with file_path.open("rb") as fh:
+        header_bytes = fh.read(GOLDEN_FILE_HEADER_STRUCT.size)
+        if len(header_bytes) != GOLDEN_FILE_HEADER_STRUCT.size:
+            raise GoldenGenerationError(f"Golden vector file '{file_path}' is truncated.")
+        magic, version, num_vectors, samples_per_vector = GOLDEN_FILE_HEADER_STRUCT.unpack(header_bytes)
+        if magic != GOLDEN_FILE_MAGIC:
+            raise GoldenGenerationError(
+                f"Golden vector file '{file_path}' has wrong magic: {magic!r}."
+            )
+        if version != GOLDEN_FILE_VERSION:
+            raise GoldenGenerationError(
+                f"Golden vector file '{file_path}' version {version} unsupported."
+            )
+
+        flat = array.array("i")
+        flat.fromfile(fh, num_vectors * samples_per_vector)
+
+    result: list[list[int]] = []
+    for v in range(num_vectors):
+        start = v * samples_per_vector
+        result.append(list(flat[start : start + samples_per_vector]))
+    return result
+
+
 def get_legacy_output_path(repo_root: Path) -> Path:
     return repo_root / "output" / LEGACY_GOLDEN_FILE_NAME
 
@@ -440,6 +534,17 @@ def validate_pipeline_ir_payload(payload: Mapping[str, Any]) -> None:
                 f"Layer '{module_id}' bias_path must be null or an absolute POSIX path."
             )
 
+        for golden_field in ("golden_inputs_path", "golden_outputs_path"):
+            path_value = layer.get(golden_field)
+            if not isinstance(path_value, str) or not is_absolute_posix_path(path_value):
+                raise GoldenGenerationError(
+                    f"Layer '{module_id}' {golden_field} must be an absolute POSIX path."
+                )
+            if not Path(path_value).exists():
+                raise GoldenGenerationError(
+                    f"Layer '{module_id}' {golden_field} '{path_value}' does not exist on disk."
+                )
+
         if layer["op_type"] == "add":
             for field_name in ("lhs_scale_factor", "rhs_scale_factor"):
                 value = layer.get(field_name)
@@ -479,6 +584,11 @@ def build_legacy_pipeline_ir_payload(
     write_signed_int8_hex(tensor_to_int8_list(folded_bias), bias_path)
 
     stream_shape = [1, 1, 1, len(input_stream)]
+
+    goldin_path, goldout_path = get_golden_artifact_paths(repo_root, module_id)
+    write_golden_vector_file([list(input_stream)], goldin_path)
+    write_golden_vector_file([list(output_stream)], goldout_path)
+
     return {
         "model_name": checkpoint["model_name"],
         "quantization": checkpoint["quantization"],
@@ -500,8 +610,8 @@ def build_legacy_pipeline_ir_payload(
                 "input_width_bits": checkpoint["input_width_bits"],
                 "output_width_bits": checkpoint["output_width_bits"],
                 **SIGNAL_LITERALS,
-                "golden_inputs": [input_stream],
-                "golden_outputs": [output_stream],
+                "golden_inputs_path": goldin_path.resolve().as_posix(),
+                "golden_outputs_path": goldout_path.resolve().as_posix(),
             }
         ],
     }
@@ -597,14 +707,19 @@ def build_fx_pipeline_ir_payload(
                 f"{module_id}.output_width_bits",
             ),
             **SIGNAL_LITERALS,
-            "golden_inputs": layer_input_vectors,
-            "golden_outputs": captured_outputs[module_id],
         }
         if op_type == "conv2d" and not bias_values:
             raise GoldenGenerationError(f"Layer '{module_id}' did not serialize a bias vector.")
         if op_type == "add":
             layer_payload["lhs_scale_factor"] = float(metadata["lhs_scale_factor"])
             layer_payload["rhs_scale_factor"] = float(metadata["rhs_scale_factor"])
+
+        goldin_path, goldout_path = get_golden_artifact_paths(repo_root, module_id)
+        write_golden_vector_file(layer_input_vectors, goldin_path)
+        write_golden_vector_file(captured_outputs[module_id], goldout_path)
+        layer_payload["golden_inputs_path"] = goldin_path.resolve().as_posix()
+        layer_payload["golden_outputs_path"] = goldout_path.resolve().as_posix()
+
         layer_payloads.append(layer_payload)
 
     return {

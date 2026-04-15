@@ -24,8 +24,8 @@ export interface LayerIR {
   ready_in_signal: "ready_in";
   data_in_signal: "data_in";
   data_out_signal: "data_out";
-  golden_inputs: number[][];
-  golden_outputs: number[][];
+  golden_inputs_path: string;
+  golden_outputs_path: string;
 }
 
 export interface PipelineIR {

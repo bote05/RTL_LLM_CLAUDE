@@ -26,6 +26,7 @@ Rules:
 
 - The sidecar must describe module name, signal names, port widths, pipeline latency, golden vector paths, and results path.
 - `results_path`, `golden_inputs_path`, and `golden_outputs_path` must be absolute filesystem paths. `run_verilator` executes the compiled testbench from a temp build directory and rejects relative paths for these fields.
+- The `LayerIR` already carries absolute `golden_inputs_path` and `golden_outputs_path` pointing at binary `.goldin` / `.goldout` files produced by `scripts/generate_golden.py`. Copy those paths verbatim into the sidecar — do NOT regenerate, reparse, or rewrite the golden vectors. The testbench reads the binary format directly.
 - `fix_hint` must be numerical and specific.
 - `timing_pass` is required whenever timing data is available.
 - `failure_class` must be `null` on pass and set to one of the taxonomy classes on functional failure.

@@ -138,8 +138,8 @@ describe("orchestrate helpers", () => {
       ready_in_signal: "ready_in",
       data_in_signal: "data_in",
       data_out_signal: "data_out",
-      golden_inputs: [[0]],
-      golden_outputs: [[0]],
+      golden_inputs_path: "/tmp/unit_module.goldin",
+      golden_outputs_path: "/tmp/unit_module.goldout",
     };
 
     await writeJsonFile(filePath, layer);

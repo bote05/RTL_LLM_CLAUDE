@@ -11,6 +11,7 @@ from scripts.golden_impl import (
     fold_batch_norm_into_conv,
     int8_to_hex,
     is_absolute_posix_path,
+    read_golden_vector_file,
     write_pipeline_ir,
     write_signed_int8_hex,
 )
@@ -161,8 +162,8 @@ def test_build_pipeline_ir_payload_keeps_legacy_toy_flow_working(tmp_path: Path)
     assert layer["ready_in_signal"] == "ready_in"
     assert layer["data_in_signal"] == "data_in"
     assert layer["data_out_signal"] == "data_out"
-    assert layer["golden_inputs"] == [[0, 1, 2, 7]]
-    assert layer["golden_outputs"] == [[1, 3, 5, 15]]
+    assert read_golden_vector_file(Path(layer["golden_inputs_path"])) == [[0, 1, 2, 7]]
+    assert read_golden_vector_file(Path(layer["golden_outputs_path"])) == [[1, 3, 5, 15]]
     assert Path(layer["weights_path"]).exists()
     assert Path(layer["bias_path"]).exists()
 
@@ -188,40 +189,54 @@ def test_build_pipeline_ir_payload_captures_fx_layers_in_topological_order(tmp_p
         "relu2",
     ]
 
+    # Read the per-layer golden vectors back from disk into a chain-friendly map.
+    layer_goldens: dict[str, dict[str, list[list[int]]]] = {}
+    for layer in pipeline_ir["layers"]:
+        layer_goldens[layer["module_id"]] = {
+            "inputs": read_golden_vector_file(Path(layer["golden_inputs_path"])),
+            "outputs": read_golden_vector_file(Path(layer["golden_outputs_path"])),
+        }
+
     for index, layer in enumerate(pipeline_ir["layers"]):
         assert layer["ready_in_signal"] == "ready_in"
         assert is_absolute_posix_path(layer["weights_path"])
         assert Path(layer["weights_path"]).exists()
-        assert len(layer["golden_outputs"]) == 8
+        assert is_absolute_posix_path(layer["golden_inputs_path"])
+        assert is_absolute_posix_path(layer["golden_outputs_path"])
+        assert Path(layer["golden_inputs_path"]).exists()
+        assert Path(layer["golden_outputs_path"]).exists()
+        goldens = layer_goldens[layer["module_id"]]
+        assert len(goldens["outputs"]) == 8
         if index == 0:
-            assert len(layer["golden_inputs"]) == 8
+            assert len(goldens["inputs"]) == 8
         elif layer["module_id"] != "add0":
-            assert layer["golden_inputs"] == pipeline_ir["layers"][index - 1]["golden_outputs"]
+            previous_id = pipeline_ir["layers"][index - 1]["module_id"]
+            assert goldens["inputs"] == layer_goldens[previous_id]["outputs"]
         if layer["bias_path"] is not None:
             assert is_absolute_posix_path(layer["bias_path"])
             assert Path(layer["bias_path"]).exists()
 
     add_layer = next(layer for layer in pipeline_ir["layers"] if layer["module_id"] == "add0")
-    conv2_layer = next(layer for layer in pipeline_ir["layers"] if layer["module_id"] == "conv2")
-    input_vectors = pipeline_ir["layers"][0]["golden_inputs"]
+    input_vectors = layer_goldens["conv1"]["inputs"]
+    conv2_outputs = layer_goldens["conv2"]["outputs"]
     expected_packed_inputs = [
         [pack_int8_pair(lhs, rhs) for lhs, rhs in zip(lhs_vector, rhs_vector)]
-        for lhs_vector, rhs_vector in zip(conv2_layer["golden_outputs"], input_vectors)
+        for lhs_vector, rhs_vector in zip(conv2_outputs, input_vectors)
     ]
     expected_add_outputs = [
         [
             max(-128, min(127, round((lhs * 0.25 + rhs * 0.5) / 0.5)))
             for lhs, rhs in zip(lhs_vector, rhs_vector)
         ]
-        for lhs_vector, rhs_vector in zip(conv2_layer["golden_outputs"], input_vectors)
+        for lhs_vector, rhs_vector in zip(conv2_outputs, input_vectors)
     ]
 
     assert add_layer["input_width_bits"] == 16
     assert add_layer["lhs_scale_factor"] == pytest.approx(0.25)
     assert add_layer["rhs_scale_factor"] == pytest.approx(0.5)
-    assert add_layer["golden_inputs"] == expected_packed_inputs
-    assert add_layer["golden_outputs"] == expected_add_outputs
-    assert pipeline_ir["layers"][-1]["golden_inputs"] == add_layer["golden_outputs"]
+    assert layer_goldens["add0"]["inputs"] == expected_packed_inputs
+    assert layer_goldens["add0"]["outputs"] == expected_add_outputs
+    assert layer_goldens["relu2"]["inputs"] == layer_goldens["add0"]["outputs"]
 
     weights_dir = tmp_path / "output" / "weights"
     assert (weights_dir / "conv1_weights.hex").read_text(encoding="utf8") == "02\n"

@@ -238,10 +238,22 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       ready_in_signal: "ready_in",
       data_in_signal: "data_in",
       data_out_signal: "data_out",
-      golden_inputs: [[0, 1, 2, 7]],
-      golden_outputs: [[1, 3, 5, 15]],
     });
+    expect(pipelineIr.layers[0].golden_inputs_path).toMatch(/toy_conv1x1\.goldin$/);
+    expect(pipelineIr.layers[0].golden_outputs_path).toMatch(/toy_conv1x1\.goldout$/);
     expect(await readFile(pipelineIr.layers[0].weights_path, "utf8")).toBe("02\n");
     expect(await readFile(pipelineIr.layers[0].bias_path!, "utf8")).toBe("01\n");
+
+    // Binary vector files: 16-byte header + int32 LE samples.
+    // Toy fixture has one vector of {0, 1, 2, 7} in -> {1, 3, 5, 15} out.
+    const goldinBuf = await readFile(pipelineIr.layers[0].golden_inputs_path);
+    expect(goldinBuf.subarray(0, 4).toString("ascii")).toBe("NN2V");
+    expect(goldinBuf.readUInt32LE(4)).toBe(1); // version
+    expect(goldinBuf.readUInt32LE(8)).toBe(1); // num_vectors
+    expect(goldinBuf.readUInt32LE(12)).toBe(4); // samples_per_vector
+    expect(goldinBuf.readInt32LE(16)).toBe(0);
+    expect(goldinBuf.readInt32LE(20)).toBe(1);
+    expect(goldinBuf.readInt32LE(24)).toBe(2);
+    expect(goldinBuf.readInt32LE(28)).toBe(7);
   });
 });

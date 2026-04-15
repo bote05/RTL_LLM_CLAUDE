@@ -54,8 +54,8 @@ export const layerIrSchema = z
     ready_in_signal: z.literal("ready_in"),
     data_in_signal: z.literal("data_in"),
     data_out_signal: z.literal("data_out"),
-    golden_inputs: z.array(z.array(z.number())),
-    golden_outputs: z.array(z.array(z.number())),
+    golden_inputs_path: z.string(),
+    golden_outputs_path: z.string(),
   })
   .strict();
 
