@@ -42,6 +42,38 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+// Binary vector file format matches scripts/golden_impl.py's
+// write_golden_vector_file + tb/static_verilator_tb.cpp's loadVectorFile:
+//   4 bytes ASCII "NN2V", uint32 LE version=1, uint32 num_vectors,
+//   uint32 samples_per_vector, then num*samples int32 LE samples.
+async function writeGoldenVectorFile(
+  filePath: string,
+  vectors: number[][],
+): Promise<void> {
+  const numVectors = vectors.length;
+  const samplesPerVector = numVectors > 0 ? vectors[0].length : 0;
+  for (const row of vectors) {
+    if (row.length !== samplesPerVector) {
+      throw new Error(
+        `writeGoldenVectorFile: row length mismatch, expected ${samplesPerVector} got ${row.length}`,
+      );
+    }
+  }
+  const buf = Buffer.alloc(16 + numVectors * samplesPerVector * 4);
+  buf.write("NN2V", 0, 4, "ascii");
+  buf.writeUInt32LE(1, 4);
+  buf.writeUInt32LE(numVectors, 8);
+  buf.writeUInt32LE(samplesPerVector, 12);
+  let offset = 16;
+  for (const row of vectors) {
+    for (const sample of row) {
+      buf.writeInt32LE(sample | 0, offset);
+      offset += 4;
+    }
+  }
+  await writeFile(filePath, buf);
+}
+
 async function writeSidecar(
   tempDir: string,
   moduleName: string,
@@ -65,15 +97,15 @@ async function writeSidecar(
     output_width_bits: 8,
     pipeline_latency_cycles: pipelineLatencyCycles,
     clock_period_ns: 20,
-    golden_inputs_path: path.join(tempDir, `${moduleName}.inputs.json`),
-    golden_outputs_path: path.join(tempDir, `${moduleName}.outputs.json`),
+    golden_inputs_path: path.join(tempDir, `${moduleName}.goldin`),
+    golden_outputs_path: path.join(tempDir, `${moduleName}.goldout`),
     results_path: path.join(tempDir, `${moduleName}.results.json`),
     testbench_template_path: path.join(repoRoot, "tb", "static_verilator_tb.cpp"),
     ...overrides,
   };
 
-  await writeJson(sidecar.golden_inputs_path, [inputs]);
-  await writeJson(sidecar.golden_outputs_path, [outputs]);
+  await writeGoldenVectorFile(sidecar.golden_inputs_path, [inputs]);
+  await writeGoldenVectorFile(sidecar.golden_outputs_path, [outputs]);
   await writeJson(sidecarPath, sidecar);
   return sidecarPath;
 }
@@ -196,7 +228,7 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
     const tempDir = await makeTempDir("nn2rtl-verilator-missing-vector-");
     const verilog = await loadFixture(verilatorFixtureRoot, "stream_passthrough.v");
     const sidecarPath = await writeSidecar(tempDir, "stream_passthrough", [1, 2], [1, 2], 1);
-    await unlink(path.join(tempDir, "stream_passthrough.outputs.json"));
+    await unlink(path.join(tempDir, "stream_passthrough.goldout"));
 
     const result = await run_verilator(verilog, "stream_passthrough", sidecarPath);
 
@@ -206,7 +238,7 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
     expect(result.verilator_stderr).toContain("Could not open vector file");
   });
 
-  it("reads weights through the real toy Python flow and emits weight artifacts", async () => {
+  it("reads weights through the real Python frontend and emits ResNet-50 layer1 artifacts", async () => {
     const tempRepoRoot = await makeTempDir("nn2rtl-read-weights-full-");
 
     await execFileAsync(
@@ -223,7 +255,7 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
 
     const pipelineIr = await read_weights(
       "checkpoints/resnet50_int8.pth",
-      { calibration: "toy" },
+      { calibration: "synthetic" },
       {
         cwd: repoRoot,
         env: {
@@ -233,27 +265,34 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       },
     );
 
+    // The real ResNet-50 PTQ flow emits 17 modules: stem + 3 layer1 blocks +
+    // downsample + post_add_relus. The first is the fused stem.
+    expect(pipelineIr.layers).toHaveLength(17);
+    expect(pipelineIr.model_name).toBe("resnet50");
     expect(pipelineIr.layers[0]).toMatchObject({
-      module_id: "toy_conv1x1",
+      module_id: "layer0_0_conv1",
+      op_type: "conv2d",
+      clock_signal: "clk",
       ready_in_signal: "ready_in",
       data_in_signal: "data_in",
       data_out_signal: "data_out",
     });
-    expect(pipelineIr.layers[0].golden_inputs_path).toMatch(/toy_conv1x1\.goldin$/);
-    expect(pipelineIr.layers[0].golden_outputs_path).toMatch(/toy_conv1x1\.goldout$/);
-    expect(await readFile(pipelineIr.layers[0].weights_path, "utf8")).toBe("02\n");
-    expect(await readFile(pipelineIr.layers[0].bias_path!, "utf8")).toBe("01\n");
+    // Output is post-MaxPool (fusion is invisible to downstream): 1 x 64 x 56 x 56.
+    expect(pipelineIr.layers[0].output_shape).toEqual([1, 64, 56, 56]);
 
-    // Binary vector files: 16-byte header + int32 LE samples.
-    // Toy fixture has one vector of {0, 1, 2, 7} in -> {1, 3, 5, 15} out.
+    // Weight + bias hex files are materialized on disk (one uppercase hex
+    // value per line; widths vary by op, so just assert the format).
+    expect(await readFile(pipelineIr.layers[0].weights_path, "utf8")).toMatch(/^[0-9A-F]+\n/);
+    expect(await readFile(pipelineIr.layers[0].bias_path!, "utf8")).toMatch(/^[0-9A-F]+\n/);
+
+    // Binary vector files: 16-byte NN2V header + int32 LE samples. The stem
+    // input is [1, 3, 224, 224] = 150528 samples per vector, 8 vectors.
+    expect(pipelineIr.layers[0].golden_inputs_path).toMatch(/layer0_0_conv1\.goldin$/);
+    expect(pipelineIr.layers[0].golden_outputs_path).toMatch(/layer0_0_conv1\.goldout$/);
     const goldinBuf = await readFile(pipelineIr.layers[0].golden_inputs_path);
     expect(goldinBuf.subarray(0, 4).toString("ascii")).toBe("NN2V");
     expect(goldinBuf.readUInt32LE(4)).toBe(1); // version
-    expect(goldinBuf.readUInt32LE(8)).toBe(1); // num_vectors
-    expect(goldinBuf.readUInt32LE(12)).toBe(4); // samples_per_vector
-    expect(goldinBuf.readInt32LE(16)).toBe(0);
-    expect(goldinBuf.readInt32LE(20)).toBe(1);
-    expect(goldinBuf.readInt32LE(24)).toBe(2);
-    expect(goldinBuf.readInt32LE(28)).toBe(7);
+    expect(goldinBuf.readUInt32LE(8)).toBe(8); // num_vectors
+    expect(goldinBuf.readUInt32LE(12)).toBe(1 * 3 * 224 * 224); // samples_per_vector
   });
 });

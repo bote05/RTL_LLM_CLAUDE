@@ -70,8 +70,8 @@ Exact `LayerIR` JSON Schema:
     "ready_in_signal",
     "data_in_signal",
     "data_out_signal",
-    "golden_inputs",
-    "golden_outputs"
+    "golden_inputs_path",
+    "golden_outputs_path"
   ],
   "properties": {
     "module_id": { "type": "string" },
@@ -97,14 +97,10 @@ Exact `LayerIR` JSON Schema:
     "ready_in_signal": { "type": "string", "const": "ready_in" },
     "data_in_signal": { "type": "string", "const": "data_in" },
     "data_out_signal": { "type": "string", "const": "data_out" },
-    "golden_inputs": {
-      "type": "array",
-      "items": { "type": "array", "items": { "type": "number" } }
-    },
-    "golden_outputs": {
-      "type": "array",
-      "items": { "type": "array", "items": { "type": "number" } }
-    }
+    "golden_inputs_path": { "type": "string" },
+    "golden_outputs_path": { "type": "string" }
   }
 }
 ```
+
+Golden vectors are stored on disk as binary `.goldin` / `.goldout` files at the paths carried in `golden_inputs_path` / `golden_outputs_path`. You do not need to read them — Assayer feeds them to the Verilator testbench at verification time. Generate the RTL using the rest of the LayerIR (shapes, scales, signal names, pipeline latency).

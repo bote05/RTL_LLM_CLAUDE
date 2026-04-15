@@ -54,8 +54,8 @@ Exact `LayerIR` JSON Schema:
     "ready_in_signal",
     "data_in_signal",
     "data_out_signal",
-    "golden_inputs",
-    "golden_outputs"
+    "golden_inputs_path",
+    "golden_outputs_path"
   ],
   "properties": {
     "module_id": { "type": "string" },
@@ -79,14 +79,12 @@ Exact `LayerIR` JSON Schema:
     "ready_in_signal": { "type": "string", "const": "ready_in" },
     "data_in_signal": { "type": "string", "const": "data_in" },
     "data_out_signal": { "type": "string", "const": "data_out" },
-    "golden_inputs": {
-      "type": "array",
-      "items": { "type": "array", "items": { "type": "number" } }
-    },
-    "golden_outputs": {
-      "type": "array",
-      "items": { "type": "array", "items": { "type": "number" } }
-    }
+    "golden_inputs_path": { "type": "string" },
+    "golden_outputs_path": { "type": "string" },
+    "lhs_scale_factor": { "type": "number" },
+    "rhs_scale_factor": { "type": "number" }
   }
 }
 ```
+
+Golden activations are not inlined in the LayerIR. `scripts/generate_golden.py` (invoked via the `read_weights` MCP tool) writes per-module binary `.goldin` / `.goldout` files under `output/goldens/` and populates `golden_inputs_path` / `golden_outputs_path` as absolute POSIX strings on each LayerIR entry. Do **not** embed activation arrays in your structured output; just copy the paths the tool produced. `lhs_scale_factor` and `rhs_scale_factor` are only populated for `op_type: "add"` modules and carry the scale of the add's two input operands for Foundry's quantized-add math.

@@ -33,8 +33,9 @@ Use this skill when extracting a quantized ResNet-50 residual block stack into `
 - `ready_in_signal` — must equal the literal `"ready_in"`
 - `data_in_signal` — must equal the literal `"data_in"`
 - `data_out_signal` — must equal the literal `"data_out"`
-- `golden_inputs`
-- `golden_outputs`
+- `golden_inputs_path` — absolute POSIX path to the binary `.goldin` file under `output/goldens/`
+- `golden_outputs_path` — absolute POSIX path to the binary `.goldout` file under `output/goldens/`
+- `lhs_scale_factor`, `rhs_scale_factor` — only populated for `op_type: "add"` modules
 
 ## Hex File Format
 

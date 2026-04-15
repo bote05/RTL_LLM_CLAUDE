@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,143 @@ function resolveTmpDirRoot(): string {
     : "/tmp";
 }
 
+// On Windows, OSS CAD Suite binaries (yosys, verilator, iverilog, abc, ...)
+// need YOSYSHQ_ROOT set + both `bin/` and `lib/` prepended to PATH or they
+// spawn silently and exit non-zero with no stderr (DLLs not found). The
+// shipped `environment.bat` does this setup; Node's execFile inherits the
+// parent process env, which usually does *not* have these set unless the
+// user launched their shell from that batch file.
+//
+// Detect the suite root by walking up from the first `yosys`/`yosys.exe` on
+// PATH. If found, return an env object with YOSYSHQ_ROOT populated and
+// bin/lib prepended to PATH. The env override NN2RTL_YOSYSHQ_ROOT lets
+// callers force a specific location.
+function resolveOssCadSuiteRoot(env: NodeJS.ProcessEnv): string | null {
+  const override = env.NN2RTL_YOSYSHQ_ROOT;
+  if (override) {
+    return path.resolve(override);
+  }
+  if (env.YOSYSHQ_ROOT) {
+    return path.resolve(env.YOSYSHQ_ROOT);
+  }
+  const pathVar = env.PATH ?? env.Path ?? "";
+  const sep = process.platform === "win32" ? ";" : ":";
+  const candidates = pathVar.split(sep).filter(Boolean);
+  const binaries = process.platform === "win32" ? ["yosys.exe", "yosys"] : ["yosys"];
+  for (const dir of candidates) {
+    for (const bin of binaries) {
+      if (existsSync(path.join(dir, bin))) {
+        // bin dir -> suite root is one level up, IFF sibling `lib/` exists.
+        const root = path.resolve(dir, "..");
+        if (existsSync(path.join(root, "lib"))) {
+          return root;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Verilator on Windows needs three things on PATH, in this order:
+//  1. A modern g++ (w64devkit / GCC 13+). Without it the C++ compile step
+//     fails on `-faligned-new`, `-fcf-protection=none`, etc.
+//  2. A real python3 (oss-cad-suite ships one at `lib/python3.exe`). Without
+//     it, Verilator's makefile hits the Microsoft Store `python3.exe` shim
+//     which prints "Python was not found" and exits with error 0x2331.
+//  3. oss-cad-suite's own DLLs (lib/) for anything it shells out to.
+// We layer both augmentations: Verilator first (so its g++ wins), then
+// oss-cad-suite lib (without touching g++). Override the C++ toolchain
+// with NN2RTL_WIN_CXX_TOOLCHAIN_BIN.
+export function augmentEnvForVerilatorCxx(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") {
+    return env;
+  }
+  const candidates = [
+    env.NN2RTL_WIN_CXX_TOOLCHAIN_BIN,
+    env.USERPROFILE ? path.join(env.USERPROFILE, "w64devkit", "bin") : undefined,
+    "C:\\w64devkit\\bin",
+  ].filter((c): c is string => typeof c === "string" && c.length > 0);
+  for (const dir of candidates) {
+    if (existsSync(path.join(dir, "g++.exe"))) {
+      const augmented: NodeJS.ProcessEnv = { ...env };
+      const currentPath = env.PATH ?? env.Path ?? "";
+      const sep = ";";
+      const norm = (d: string) => path.resolve(d).toLowerCase();
+      const target = norm(dir);
+      const remaining = currentPath
+        .split(sep)
+        .filter((entry) => entry && norm(entry) !== target);
+      const newPath = [dir, ...remaining].join(sep);
+      augmented.PATH = newPath;
+      augmented.Path = newPath;
+      return augmented;
+    }
+  }
+  return env;
+}
+
+// Like augmentEnvForOssCadSuite but only prepends `lib/` (DLLs + python3.exe).
+// Used for Verilator, which needs oss-cad-suite's python3 but must NOT see
+// oss-cad-suite's older g++ (that lives elsewhere on PATH; we want the
+// modern w64devkit g++ from augmentEnvForVerilatorCxx to win).
+export function augmentEnvForOssCadSuiteLibOnly(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const root = resolveOssCadSuiteRoot(env);
+  if (!root) {
+    return env;
+  }
+  const augmented: NodeJS.ProcessEnv = { ...env, YOSYSHQ_ROOT: root };
+  const sep = process.platform === "win32" ? ";" : ":";
+  const libDir = path.join(root, "lib");
+  const currentPath = env.PATH ?? env.Path ?? "";
+  const norm = (dir: string) => path.resolve(dir).toLowerCase();
+  const target = norm(libDir);
+  const remaining = currentPath
+    .split(sep)
+    .filter((entry) => entry && norm(entry) !== target);
+  const newPath = [libDir, ...remaining].join(sep);
+  augmented.PATH = newPath;
+  if (process.platform === "win32") {
+    augmented.Path = newPath;
+  }
+  return augmented;
+}
+
+export function augmentEnvForOssCadSuite(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const root = resolveOssCadSuiteRoot(env);
+  if (!root) {
+    return env;
+  }
+  const augmented: NodeJS.ProcessEnv = { ...env, YOSYSHQ_ROOT: root };
+  const sep = process.platform === "win32" ? ";" : ":";
+  const binDir = path.join(root, "bin");
+  const libDir = path.join(root, "lib");
+  // On Windows, Node exposes process.env with BOTH `PATH` and `Path`
+  // populated (duplicated). If we update only one, the child process may
+  // read the other and see the un-augmented value. So read from whichever
+  // is set and write to BOTH keys.
+  const currentPath = env.PATH ?? env.Path ?? "";
+  // Strip any existing copies of binDir/libDir and prepend them — Windows
+  // DLL resolution walks PATH in order, and if another toolchain (e.g.
+  // git's mingw64) appears earlier it can load an incompatible
+  // libstdc++/libgcc before yosys's own DLLs are seen. Force oss-cad-suite
+  // to win by putting it at position 0.
+  const norm = (dir: string) => path.resolve(dir).toLowerCase();
+  const targets = new Set([norm(binDir), norm(libDir)]);
+  const remaining = currentPath
+    .split(sep)
+    .filter((entry) => entry && !targets.has(norm(entry)));
+  const newPath = [binDir, libDir, ...remaining].join(sep);
+  augmented.PATH = newPath;
+  if (process.platform === "win32") {
+    augmented.Path = newPath;
+  }
+  const certFile = path.join(root, "etc", "cacert.pem");
+  if (!augmented.SSL_CERT_FILE && existsSync(certFile)) {
+    augmented.SSL_CERT_FILE = certFile;
+  }
+  return augmented;
+}
+
 type CommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -71,10 +209,12 @@ export type ToolsRuntime = {
 
 const DEFAULT_TOOLS_RUNTIME: ToolsRuntime = {
   async commandRunner(file, args, options) {
-    const { stdout, stderr } = await execFileAsync(file, args, options);
+    const result = await execFileAsync(file, args, options);
+    const stdoutRaw: unknown = result.stdout;
+    const stderrRaw: unknown = result.stderr;
     return {
-      stdout: typeof stdout === "string" ? stdout : stdout.toString("utf8"),
-      stderr: typeof stderr === "string" ? stderr : stderr.toString("utf8"),
+      stdout: typeof stdoutRaw === "string" ? stdoutRaw : Buffer.isBuffer(stdoutRaw) ? stdoutRaw.toString("utf8") : String(stdoutRaw ?? ""),
+      stderr: typeof stderrRaw === "string" ? stderrRaw : Buffer.isBuffer(stderrRaw) ? stderrRaw.toString("utf8") : String(stderrRaw ?? ""),
     };
   },
   cwd: repoRoot,
@@ -220,6 +360,7 @@ export async function run_iverilog(
     try {
       await runtime.commandRunner("iverilog", ["-o", os.devNull, "-g2012", verilogPath], {
         cwd: tempDir,
+        env: augmentEnvForOssCadSuite(runtime.env),
       });
       return { success: true, stderr: "" };
     } catch (error: unknown) {
@@ -270,7 +411,7 @@ export async function run_verilator(
           "static_verilator_tb.cpp",
           `${module_name}.v`,
         ],
-        { cwd: tempDir },
+        { cwd: tempDir, env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)) },
       );
     } catch (error: unknown) {
       return {
@@ -289,7 +430,10 @@ export async function run_verilator(
     let simulationError: unknown = null;
 
     try {
-      await runtime.commandRunner(binaryPath, [sidecar_path], { cwd: tempDir });
+      await runtime.commandRunner(binaryPath, [sidecar_path], {
+        cwd: tempDir,
+        env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)),
+      });
     } catch (error: unknown) {
       simulationError = error;
     }
@@ -325,14 +469,18 @@ export async function run_yosys(
     await writeFile(verilogPath, verilog_source, "utf8");
 
     try {
+      // Yosys specifically needs its own bin/ + lib/ at the head of PATH so
+      // Windows finds the right DLLs; Verilator breaks if we force that
+      // globally because oss-cad-suite's bundled g++ shadows w64devkit's
+      // modern g++. Scope the augment to the yosys invocation only.
       const { stdout, stderr } = await runtime.commandRunner(
         "yosys",
         [
           "-p",
-          `synth_ice40 -abc9 -top ${module_name}; stat; tee -o /dev/stdout ltp -noff`,
+          `synth_ice40 -abc9 -top ${module_name}; stat; ltp -noff`,
           verilogPath,
         ],
-        { cwd: tempDir },
+        { cwd: tempDir, env: augmentEnvForOssCadSuite(runtime.env) },
       );
 
       const report = [stdout, stderr].filter(Boolean).join("\n");

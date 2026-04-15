@@ -1,6 +1,6 @@
 import { appendFile, access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -595,7 +595,11 @@ export async function ensureLayerIr(
 // synthesisReportSchema the SDK path used.
 // Resolved as a runtime string so tsc does not analyze the target module
 // (it lives in sibling package `mcp/`, outside this package's rootDir).
-const MCP_TOOLS_MODULE_PATH = "../mcp/tools.js";
+// When `sdk/` is compiled to `sdk/dist/`, we need the sibling `mcp/dist/`
+// build; when running straight from source via tsx, we target the .ts file.
+const MCP_TOOLS_MODULE_PATH = path.basename(__dirname) === "dist"
+  ? pathToFileURL(path.resolve(repoRoot, "mcp", "dist", "tools.js")).href
+  : pathToFileURL(path.resolve(repoRoot, "mcp", "tools.ts")).href;
 
 async function invokeYosys(module: VerilogModule): Promise<SynthesisReport> {
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
