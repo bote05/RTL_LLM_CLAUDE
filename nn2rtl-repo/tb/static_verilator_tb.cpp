@@ -282,6 +282,29 @@ int main(int argc, char** argv) {
     int64_t first_valid_out_cycle = -1;
     bool    timing_observed       = false;
 
+    // Per-vector timing check: every vector must honour the sidecar's declared
+    // latency, not just the first one. A single boolean collapses the per-vector
+    // results.
+    bool    all_vectors_timing_ok = true;
+    int64_t worst_vector_actual_cycles = -1;
+
+    // Sign-extend DUT outputs according to output_width_bits so negative int8s
+    // are not reported as their unsigned 8-bit encoding.
+    const int output_width_bits = sidecar.output_width_bits;
+    const uint64_t output_mask  = (output_width_bits >= 64)
+                                      ? ~static_cast<uint64_t>(0)
+                                      : ((static_cast<uint64_t>(1) << output_width_bits) - 1);
+    const uint64_t sign_bit     = (output_width_bits > 0 && output_width_bits < 64)
+                                      ? (static_cast<uint64_t>(1) << (output_width_bits - 1))
+                                      : 0;
+    const auto signExtendOutput = [&](uint64_t raw) -> int64_t {
+      const uint64_t masked = raw & output_mask;
+      if (sign_bit && (masked & sign_bit)) {
+        return static_cast<int64_t>(masked | ~output_mask);
+      }
+      return static_cast<int64_t>(masked);
+    };
+
     const int64_t hang_budget = sidecar.pipeline_latency_cycles * 4 + 16;
 
     // Unified interleaved drive/sample loop. For each test vector we drive inputs
@@ -296,6 +319,8 @@ int main(int argc, char** argv) {
       size_t  input_idx    = 0;
       size_t  output_idx   = 0;
       int64_t idle_cycles  = 0;
+      int64_t vector_first_valid_in  = -1;
+      int64_t vector_first_valid_out = -1;
 
       while (output_idx < outputs.size()) {
         if (idle_cycles > hang_budget) {
@@ -312,8 +337,11 @@ int main(int argc, char** argv) {
             first_valid_out_cycle = cycle_counter;
             timing_observed = true;
           }
+          if (vector_first_valid_out < 0) {
+            vector_first_valid_out = cycle_counter;
+          }
 
-          const int64_t got      = static_cast<int64_t>(dut->data_out);
+          const int64_t got      = signExtendOutput(static_cast<uint64_t>(dut->data_out));
           const int64_t expected = outputs[output_idx];
           expected_flat.push_back(expected);
           actual_flat.push_back(got);
@@ -337,6 +365,9 @@ int main(int argc, char** argv) {
           if (first_valid_in_cycle < 0) {
             first_valid_in_cycle = cycle_counter;
           }
+          if (vector_first_valid_in < 0) {
+            vector_first_valid_in = cycle_counter;
+          }
           dut->data_in  = static_cast<uint64_t>(inputs[input_idx]);
           dut->valid_in = 1;
           ++input_idx;
@@ -352,6 +383,18 @@ int main(int argc, char** argv) {
       }
 
       dut->valid_in = 0;
+
+      if (vector_first_valid_in >= 0 && vector_first_valid_out >= 0) {
+        const int64_t vector_actual = vector_first_valid_out - vector_first_valid_in;
+        if (vector_actual != sidecar.pipeline_latency_cycles) {
+          all_vectors_timing_ok = false;
+        }
+        if (vector_actual > worst_vector_actual_cycles) {
+          worst_vector_actual_cycles = vector_actual;
+        }
+      } else {
+        all_vectors_timing_ok = false;
+      }
     }
 
     dut->final();
@@ -363,7 +406,13 @@ int main(int argc, char** argv) {
             ? first_valid_out_cycle - first_valid_in_cycle
             : -1;
     const bool timing_pass =
-        timing_observed && timing_actual_cycles == timing_expected_cycles;
+        timing_observed &&
+        timing_actual_cycles == timing_expected_cycles &&
+        all_vectors_timing_ok;
+    const int64_t timing_actual_cycles_reported =
+        (worst_vector_actual_cycles >= 0 && !all_vectors_timing_ok)
+            ? worst_vector_actual_cycles
+            : timing_actual_cycles;
     const bool numerical_pass = max_abs_error <= kNumericalTolerance;
     const std::string status  = (numerical_pass && timing_pass) ? "pass" : "fail";
 
@@ -375,7 +424,7 @@ int main(int argc, char** argv) {
         {"max_error", max_abs_error},
         {"mean_error", mean_error},
         {"timing_pass", timing_pass},
-        {"timing_actual_cycles", timing_actual_cycles},
+        {"timing_actual_cycles", timing_actual_cycles_reported},
         {"timing_expected_cycles", timing_expected_cycles},
         {"failure_class", nullptr},
         {"verilator_stderr", std::string("")},

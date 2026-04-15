@@ -412,6 +412,15 @@ def tensor_to_int8_list(tensor: torch.Tensor) -> list[int]:
     return [int(value) for value in quantize_tensor_to_int8_range(tensor).reshape(-1).tolist()]
 
 
+def tensor_to_int32_list(tensor: torch.Tensor) -> list[int]:
+    working = tensor.detach() if isinstance(tensor, torch.Tensor) else tensor
+    if isinstance(working, torch.Tensor) and working.is_quantized:
+        working = working.dequantize()
+    int32_min, int32_max = -(2**31), 2**31 - 1
+    clamped = torch.clamp(working.to(torch.float64).round(), int32_min, int32_max)
+    return [int(value) for value in clamped.reshape(-1).tolist()]
+
+
 def utc_now_iso8601() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -464,6 +473,12 @@ def build_pipeline_ir_payload(
                 "(see CheckpointResidualStack for the expected operations "
                 "schema). See ARCHITECTURE.md for why this is a hard error."
             )
+        # Route v2 checkpoints through the strict ResNet-50 validator in
+        # quantize_impl.py so the same shape/scope checks apply to the main
+        # golden-generation path. Without this a handcrafted bias_int32=[300]
+        # checkpoint would be accepted here even though load_quantized_checkpoint
+        # would reject it. Pass the validated payload onward.
+        load_quantized_checkpoint(checkpoint_path)
         payload = build_fx_pipeline_ir_payload(
             checkpoint=raw_checkpoint,
             repo_root=repo_root,
@@ -892,10 +907,14 @@ def write_layer_hex_artifacts(
         if bias_tensor is None:
             bias_tensor = torch.zeros(weight_tensor.shape[0], dtype=torch.float32)
         weight_values = tensor_to_int8_list(weight_tensor)
-        bias_values = tensor_to_int8_list(bias_tensor)
+        # Folded conv bias is an INT32 accumulator-width quantity per the
+        # checkpoint schema (`bias_int32`); writing it through the INT8 path
+        # would silently clip any non-trivial folded bias before Foundry sees
+        # it. Widths differ between weights (INT8) and bias (INT32).
+        bias_values = tensor_to_int32_list(bias_tensor)
 
     write_signed_int8_hex(weight_values, weights_path)
-    write_signed_int8_hex(bias_values, bias_path)
+    write_signed_int32_hex(bias_values, bias_path)
     return weight_values, bias_values
 
 

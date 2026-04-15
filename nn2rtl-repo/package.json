@@ -3,8 +3,8 @@
   "private": true,
   "scripts": {
     "check:twins": "node scripts/check-twins.mjs",
-    "test:fast": "npm run check:twins && npm --prefix sdk run test:fast && npm --prefix mcp run test:fast && python -m pytest -m \"not full\"",
-    "test:full": "npm run check:twins && npm --prefix sdk run test:full && npm --prefix mcp run test:full && python -m pytest -m \"not manual\"",
-    "coverage": "npm run check:twins && npm --prefix sdk run coverage && npm --prefix mcp run coverage && python -m pytest -m \"not manual\" --cov=scripts --cov-branch --cov-fail-under=90"
+    "test:fast": "npm run check:twins && npm --prefix sdk run test:fast && npm --prefix mcp run test:fast && python3 -m pytest -m \"not full\"",
+    "test:full": "npm run check:twins && npm --prefix sdk run test:full && npm --prefix mcp run test:full && python3 -m pytest -m \"not manual\"",
+    "coverage": "npm run check:twins && npm --prefix sdk run coverage && npm --prefix mcp run coverage && python3 -m pytest -m \"not manual\" --cov=scripts --cov-branch --cov-fail-under=90"
   }
 }

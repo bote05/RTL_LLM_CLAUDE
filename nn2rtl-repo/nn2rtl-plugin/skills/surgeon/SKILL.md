@@ -1,6 +1,6 @@
 ---
 name: surgeon
-description: Repair playbook for nn2rtl failures, including the full 16-class taxonomy, line-level rewrite patterns, and timing/handshake preservation constraints.
+description: Repair playbook for nn2rtl failures, including the full 17-class taxonomy, line-level rewrite patterns, and timing/handshake preservation constraints.
 ---
 # Surgeon Skill
 
@@ -24,6 +24,7 @@ Use this skill when a module failed verification and needs a minimal targeted fi
 - `scale_factor_misapplied`
 - `bias_term_missing`
 - `batch_norm_not_folded`
+- `synthesis_failed`
 
 ## Rewrite Constraints
 

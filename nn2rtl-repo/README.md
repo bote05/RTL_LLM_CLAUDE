@@ -7,7 +7,7 @@ Author: Daniel — University of Twente, Bachelor Thesis
 
 ## Overview
 
-`nn2rtl` is an autonomous multi-agent AI system that takes a trained PyTorch neural network and produces synthesizable Verilog RTL suitable for FPGA implementation. Instead of a human hardware engineer manually writing tens of thousands of lines of RTL, the system coordinates five specialized agents that:
+`nn2rtl` is an autonomous multi-agent AI system that takes a trained PyTorch neural network and produces synthesizable Verilog RTL suitable for FPGA implementation. Instead of a human hardware engineer manually writing tens of thousands of lines of RTL, the system coordinates four LLM agents (Cartographer, Foundry, Assayer, Surgeon) around a deterministic TypeScript orchestrator that:
 
 - extract the network structure from a quantized PyTorch checkpoint,
 - generate synthesizable Verilog modules,
@@ -50,9 +50,8 @@ The system consumes a quantized PyTorch ResNet-50 residual block stack and is de
 
 ### Target Network
 
-The target is the ResNet-50 residual block stack only: the 16 residual blocks that account for the compute-dominant portion of the model. The following are explicitly out of scope:
+The target is the fused ResNet-50 stem plus the residual block stack (the 16 residual blocks that dominate compute). The fused stem (7x7 conv + BN + ReLU + 3x3 maxpool, collapsed into a single `layer0_0_conv1` module) is now in scope. Still out of scope:
 
-- the stem,
 - global average pooling,
 - the fully connected classifier layer,
 - full-chip SoC integration,
@@ -122,7 +121,7 @@ reg signed [7:0] weights [0:NUM_WEIGHTS-1];
 initial $readmemh("/absolute/path/to/output/weights/block_1_conv1_weights.hex", weights);
 ```
 
-Golden activation vectors are much smaller than weight tensors, so they remain safe to include in per-module JSON passed between agents.
+Golden activation vectors are written to per-module binary sidecar files (`.goldin` / `.goldout`) under `output/goldens/` using the `NN2V` format (16-byte header + int32 LE samples). The LayerIR carries only the paths, not the raw tensors, so even a full ResNet-50 LayerIR stays well under Node's string size limits.
 
 ### All Generated Modules Must Be Fully Pipelined
 

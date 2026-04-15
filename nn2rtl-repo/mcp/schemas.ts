@@ -87,7 +87,18 @@ export const verifResultSchema = z
     got: nullToUndef(z.array(z.number())),
     max_error: nullToUndef(z.number()),
     mean_error: nullToUndef(z.number()),
-    failure_class: nullToUndef(failureClassSchema),
+    // Agents sometimes emit non-enum "unknown"-style strings for failure_class
+    // on pass (e.g. "none", "N/A", ""). Coerce anything not in the taxonomy
+    // to undefined — status=="pass"|"fail" remains the authoritative gate,
+    // failure_class is a classification aid for Surgeon.
+    failure_class: z.preprocess(
+      (v) => {
+        if (v === null || v === undefined) return undefined;
+        if (typeof v !== "string") return undefined;
+        return failureClassSchema.safeParse(v).success ? v : undefined;
+      },
+      failureClassSchema.optional(),
+    ),
     fix_hint: nullToUndef(z.string()),
     iverilog_stderr: nullToUndef(z.string()),
     verilator_stderr: nullToUndef(z.string()),

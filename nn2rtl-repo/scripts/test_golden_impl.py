@@ -240,9 +240,9 @@ def test_build_pipeline_ir_payload_captures_fx_layers_in_topological_order(tmp_p
 
     weights_dir = tmp_path / "output" / "weights"
     assert (weights_dir / "conv1_weights.hex").read_text(encoding="utf8") == "02\n"
-    assert (weights_dir / "conv1_bias.hex").read_text(encoding="utf8") == "01\n"
+    assert (weights_dir / "conv1_bias.hex").read_text(encoding="utf8") == "00000001\n"
     assert (weights_dir / "conv2_weights.hex").read_text(encoding="utf8") == "FF\n"
-    assert (weights_dir / "conv2_bias.hex").read_text(encoding="utf8") == "02\n"
+    assert (weights_dir / "conv2_bias.hex").read_text(encoding="utf8") == "00000002\n"
     assert (weights_dir / "relu1_weights.hex").read_text(encoding="utf8") == ""
     assert (weights_dir / "add0_bias.hex").read_text(encoding="utf8") == ""
 

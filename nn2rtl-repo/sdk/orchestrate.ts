@@ -122,6 +122,16 @@ const MAX_LUT_COUNT_PER_MODULE = 5000;
 // with the correct failure_class. The classification matters because Surgeon
 // uses it to pick the repair strategy — "add a pipeline register" is very
 // different from "remove a non-synthesizable construct."
+// Yosys reports on large residual blocks can be hundreds of KB; inlining the
+// full report into every fix_hint would bloat pipeline_state.json and the run
+// log, compounding large-tensor state growth. Cap the tail we embed.
+const YOSYS_REPORT_TAIL_CAP = 8_000;
+function capYosysReport(report: string): string {
+  if (report.length <= YOSYS_REPORT_TAIL_CAP) return report;
+  return `...[${report.length - YOSYS_REPORT_TAIL_CAP} bytes elided]...\n` +
+    report.slice(-YOSYS_REPORT_TAIL_CAP);
+}
+
 function evaluateSynthesis(
   moduleId: string,
   verifiedResult: VerifResult,
@@ -139,8 +149,8 @@ function evaluateSynthesis(
       fix_hint: [
         "Yosys synthesis failed after functional verification passed.",
         "Repair the RTL so `synth_ice40 -abc9; stat` succeeds.",
-        "Yosys output:",
-        report.report,
+        "Yosys output (tail):",
+        capYosysReport(report.report),
       ].join("\n\n"),
     };
   }
@@ -158,8 +168,8 @@ function evaluateSynthesis(
       fix_hint: [
         "Yosys synthesis completed but no Fmax could be measured from the report.",
         "Rewrite the module so `synth_ice40 -abc9` emits an abc9 delay line, or remove constructs that prevent timing analysis.",
-        "Yosys output:",
-        report.report,
+        "Yosys output (tail):",
+        capYosysReport(report.report),
       ].join("\n\n"),
     };
   }
@@ -177,8 +187,8 @@ function evaluateSynthesis(
       fix_hint: [
         `Synthesis passed but Fmax ${report.fmax_mhz.toFixed(2)} MHz is below the ${FMAX_TARGET_MHZ} MHz target.`,
         "Insert a pipeline register to break the critical path, and update pipeline_latency_cycles to match.",
-        "Yosys output:",
-        report.report,
+        "Yosys output (tail):",
+        capYosysReport(report.report),
       ].join("\n\n"),
     };
   }
@@ -194,8 +204,8 @@ function evaluateSynthesis(
       fix_hint: [
         `Synthesis passed but LUT count ${report.lut_count} exceeds the ${MAX_LUT_COUNT_PER_MODULE} per-module ceiling.`,
         "Rewrite the module to share arithmetic or collapse redundant logic.",
-        "Yosys output:",
-        report.report,
+        "Yosys output (tail):",
+        capYosysReport(report.report),
       ].join("\n\n"),
     };
   }
@@ -522,6 +532,26 @@ async function logStateTransition(
   );
 }
 
+// The add-module wire contract: int8 operands are packed as
+//   data_in[W-1:0]    = lhs
+//   data_in[2W-1:W]   = rhs
+// so `input_width_bits` for an add layer must be twice the operand (= output)
+// width. This contract lives only in a Foundry prompt today; catch desync at
+// LayerIR load time before Foundry silently emits garbage.
+function validateAddModulePacking(pipelineIr: PipelineIR): void {
+  for (const layer of pipelineIr.layers) {
+    if (layer.op_type !== "add") continue;
+    const expected = 2 * layer.output_width_bits;
+    if (layer.input_width_bits !== expected) {
+      throw new Error(
+        `LayerIR '${layer.module_id}' (op_type=add): input_width_bits=${layer.input_width_bits} ` +
+          `but expected ${expected} (= 2 * output_width_bits=${layer.output_width_bits}). ` +
+          `Add modules must pack lhs/rhs operands into a single data_in bus.`,
+      );
+    }
+  }
+}
+
 export async function ensureLayerIr(
   checkpointPath: string,
   runtime: OrchestratorRuntime = createOrchestratorRuntime(),
@@ -533,11 +563,29 @@ export async function ensureLayerIr(
   };
 }> {
   const layerIrPath = resolveFromSdk(PIPELINE_CONFIG.layer_ir_path);
+  const layerIrFingerprintPath = `${layerIrPath}.checkpoint`;
+  const checkpointAbs = path.resolve(checkpointPath);
 
   if (await pathExists(layerIrPath)) {
-    return {
-      pipelineIr: await readJsonFile<PipelineIR>(layerIrPath, pipelineIrZod),
-    };
+    // Only reuse layer_ir.json if it was generated from the same checkpoint
+    // the user is asking about now. A mismatch means a stale artifact from a
+    // previous run and silently compiling it would yield nonsense.
+    let fingerprintMatches = false;
+    try {
+      const prior = (await readFile(layerIrFingerprintPath, "utf8")).trim();
+      fingerprintMatches = prior === checkpointAbs;
+    } catch {
+      fingerprintMatches = false;
+    }
+    if (fingerprintMatches) {
+      const pipelineIr = await readJsonFile<PipelineIR>(layerIrPath, pipelineIrZod);
+      validateAddModulePacking(pipelineIr);
+      return { pipelineIr };
+    }
+    throw new Error(
+      `Stale output/layer_ir.json found (not tied to checkpoint '${checkpointAbs}'). ` +
+        `Delete output/layer_ir.json (and output/pipeline_state.json) to rebuild from the new checkpoint.`,
+    );
   }
 
   const payload = {
@@ -576,7 +624,9 @@ export async function ensureLayerIr(
     runtime,
   );
 
+  validateAddModulePacking(result.payload);
   await writeJsonFile(layerIrPath, result.payload);
+  await writeFile(layerIrFingerprintPath, `${checkpointAbs}\n`, "utf8");
   return {
     pipelineIr: result.payload,
     bootstrapUsage: {
@@ -712,7 +762,10 @@ async function invokeFoundry(
 
   const result = await runDelegatedAgent<VerilogModule>(
     "foundry",
-    { layer_ir: layerIr },
+    {
+      layer_ir: layerIr,
+      write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+    },
     verilogModuleOutputFormat,
     verilogModuleZod,
     runtime,
@@ -799,6 +852,7 @@ async function invokeSurgeon(
       broken_module: brokenModule,
       verif_result: verifResult,
       layer_ir: layerIr,
+      write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
     },
     verilogModuleOutputFormat,
     verilogModuleZod,
@@ -882,6 +936,7 @@ export async function runPipeline(
 
   if (resume && (await pathExists(statePath))) {
     await manager.loadState(statePath);
+    manager.requireModuleIdsMatch(moduleIds);
     await appendRunLog(
       {
         event: "pipeline_resume_loaded",
@@ -1128,6 +1183,14 @@ export function parseCliArgs(argv: string[]): {
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const cli = parseCliArgs(argv);
+  // Validate the checkpoint path at the CLI boundary so a typo fails fast and
+  // with a useful message instead of being routed through the Python frontend
+  // (which produces a noisier error after doing real work).
+  if (!(await pathExists(cli.checkpointPath))) {
+    throw new Error(
+      `Checkpoint not found: '${cli.checkpointPath}'. Pass a valid path relative to the repo root or an absolute path.`,
+    );
+  }
   await runPipeline(cli.checkpointPath, {
     resume: cli.resume,
     maxRetries: cli.maxRetries,
@@ -1140,14 +1203,28 @@ export async function handlePipelineError(
 ): Promise<void> {
   const resolvedRuntime = createOrchestratorRuntime(runtime);
   const message = error instanceof Error ? error.message : String(error);
-  await ensureOutputLayout().catch(() => undefined);
-  await appendRunLog(
-    {
-      event: "pipeline_error",
-      error: message,
-    },
-    resolvedRuntime,
-  ).catch(() => undefined);
   console.error(message);
+  // Recovery-side failures (disk full, permission denied on output/, bad
+  // runtime) used to be swallowed, which hid the real root cause when the
+  // failure mode was "cannot write to output/ at all". Log them to stderr so
+  // postmortems see every failure in the chain.
+  try {
+    await ensureOutputLayout();
+  } catch (layoutErr: unknown) {
+    const m = layoutErr instanceof Error ? layoutErr.message : String(layoutErr);
+    console.error(`handlePipelineError: ensureOutputLayout failed: ${m}`);
+  }
+  try {
+    await appendRunLog(
+      {
+        event: "pipeline_error",
+        error: message,
+      },
+      resolvedRuntime,
+    );
+  } catch (logErr: unknown) {
+    const m = logErr instanceof Error ? logErr.message : String(logErr);
+    console.error(`handlePipelineError: appendRunLog failed: ${m}`);
+  }
   process.exitCode = 1;
 }

@@ -13,7 +13,7 @@
     "pipeline": "tsx main.ts",
     "test": "vitest",
     "test:fast": "cross-env TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --exclude=test/**/*.full.test.ts",
-    "test:full": "vitest run",
+    "test:full": "cross-env TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run",
     "coverage": "cross-env TMPDIR=/tmp TEMP=/tmp TMP=/tmp vitest run --coverage"
   },
   "dependencies": {

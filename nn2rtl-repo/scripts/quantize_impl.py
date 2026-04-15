@@ -59,45 +59,6 @@ class ToyPointwiseModel(torch.nn.Module):
         return torch.clamp(y, -128, 127).to(torch.int32)
 
 
-class FallbackBottleneck(torch.nn.Module):
-    def __init__(self, in_channels: int, bottleneck_channels: int, out_channels: int, *, use_downsample: bool) -> None:
-        super().__init__()
-        self.conv1 = torch.nn.Conv2d(in_channels, bottleneck_channels, kernel_size=1, bias=False)
-        self.bn1 = torch.nn.BatchNorm2d(bottleneck_channels)
-        self.conv2 = torch.nn.Conv2d(
-            bottleneck_channels,
-            bottleneck_channels,
-            kernel_size=3,
-            padding=1,
-            bias=False,
-        )
-        self.bn2 = torch.nn.BatchNorm2d(bottleneck_channels)
-        self.conv3 = torch.nn.Conv2d(bottleneck_channels, out_channels, kernel_size=1, bias=False)
-        self.bn3 = torch.nn.BatchNorm2d(out_channels)
-        self.relu = torch.nn.ReLU(inplace=False)
-        if use_downsample:
-            self.downsample = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                torch.nn.BatchNorm2d(out_channels),
-            )
-        else:
-            self.downsample = None
-
-
-class FallbackResNet50(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.conv1 = torch.nn.Conv2d(3, 4, kernel_size=3, stride=2, padding=1, bias=False)
-        self.bn1 = torch.nn.BatchNorm2d(4)
-        self.relu = torch.nn.ReLU(inplace=False)
-        self.maxpool = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = torch.nn.Sequential(
-            FallbackBottleneck(4, 2, 4, use_downsample=True),
-            FallbackBottleneck(4, 2, 4, use_downsample=False),
-            FallbackBottleneck(4, 2, 4, use_downsample=False),
-        )
-
-
 def resolve_checkpoint_path(repo_root: Path, checkpoint_path: str | Path | None = None) -> Path:
     if checkpoint_path is None:
         return repo_root / "checkpoints" / DEFAULT_CHECKPOINT_NAME

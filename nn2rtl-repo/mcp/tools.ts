@@ -39,12 +39,16 @@ export const PYTHON_COMMAND =
   (process.platform === "win32" ? "python" : "python3");
 
 function resolveTmpDirRoot(): string {
-  if (process.platform === "win32") {
-    return os.tmpdir();
+  // os.tmpdir() handles TMPDIR / TMP / TEMP / USERPROFILE / platform defaults
+  // correctly across Windows, macOS, and Linux. Preserve an explicit absolute
+  // TMPDIR override for callers that deliberately redirect tmp (e.g. the
+  // Windows cross-env TMPDIR=/tmp workaround in the vitest scripts), but fall
+  // through to os.tmpdir() for anything else rather than hardcoding "/tmp".
+  const override = process.env.TMPDIR;
+  if (override && path.isAbsolute(override)) {
+    return override;
   }
-  return process.env.TMPDIR && path.isAbsolute(process.env.TMPDIR)
-    ? process.env.TMPDIR
-    : "/tmp";
+  return os.tmpdir();
 }
 
 // On Windows, OSS CAD Suite binaries (yosys, verilator, iverilog, abc, ...)
@@ -244,6 +248,33 @@ export async function withTempDir<T>(
   }
 }
 
+// System-level spawn errors (ENOENT, EACCES, timeout, OOM) must not be
+// laundered into Verilog syntax/synthesis failures: Surgeon would then try to
+// "fix" an out-of-memory error by rewriting correct code. A genuine tool exit
+// from iverilog/yosys has a numeric exit code on the Error object; a Node
+// spawn failure surfaces `code` as a string like "ENOENT" and typically has no
+// `signal` or `stdout`.
+export function isSystemSpawnError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const err = error as { code?: unknown; killed?: boolean; signal?: unknown };
+  if (typeof err.code === "string") {
+    const c = err.code;
+    if (
+      c === "ENOENT" ||
+      c === "EACCES" ||
+      c === "EPERM" ||
+      c === "ENOMEM" ||
+      c === "ETIMEDOUT" ||
+      c === "EMFILE" ||
+      c === "ENFILE"
+    ) {
+      return true;
+    }
+  }
+  if (err.killed === true && err.signal) return true;
+  return false;
+}
+
 export function stderrFromUnknown(error: unknown): string {
   if (typeof error === "object" && error !== null && "stderr" in error) {
     const stderr = (error as { stderr?: string | Buffer }).stderr;
@@ -265,8 +296,15 @@ export function stderrFromUnknown(error: unknown): string {
 export function parseYosysReport(
   report: string,
 ): { fmax_mhz: number; lut_count: number } {
-  const lutMatch = report.match(/LUT4\s+(\d+)/);
-  const lut_count = lutMatch ? Number(lutMatch[1]) : 0;
+  // Yosys cell-naming varies by backend (and by version): synth_ice40 emits
+  // `SB_LUT4`, other targets emit bare `LUT`, `LUT4`, `LUT5`, `LUT6`, and some
+  // paths emit `ICESTORM_LC`. Sum any cell row whose name contains a LUT-ish
+  // token so a non-iCE40 target does not silently report `lut_count: 0`.
+  let lut_count = 0;
+  const lutLineRe = /^\s*(?:\$?[A-Z0-9_]*(?:LUT|ICESTORM_LC)[A-Z0-9_]*)\s+(\d+)\s*$/gim;
+  for (const m of report.matchAll(lutLineRe)) {
+    lut_count += Number(m[1]);
+  }
 
   // Fmax extraction order — most specific first:
   // 1. Explicit "X MHz" (nextpnr-style report or test mocks)
@@ -364,6 +402,9 @@ export async function run_iverilog(
       });
       return { success: true, stderr: "" };
     } catch (error: unknown) {
+      if (isSystemSpawnError(error)) {
+        throw error;
+      }
       return { success: false, stderr: stderrFromUnknown(error) };
     }
   }, runtime);
@@ -382,6 +423,16 @@ export async function run_verilator(
       throw new Error(`run_verilator: sidecar '${sidecar_path}' was not found.`);
     }
     requireAbsoluteSidecarPaths(sidecar);
+
+    // The sidecar carries `module_name` and `module_id` fields that the bench
+    // never rechecks against the DUT it was given. If a caller passes a
+    // mismatched pair we want to fail loudly here rather than silently build
+    // the wrong module.
+    if (sidecar.module_name !== module_name) {
+      throw new Error(
+        `run_verilator: sidecar.module_name='${sidecar.module_name}' does not match the module_name argument '${module_name}'.`,
+      );
+    }
 
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     const tempTbPath = path.join(tempDir, "static_verilator_tb.cpp");
@@ -414,6 +465,9 @@ export async function run_verilator(
         { cwd: tempDir, env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)) },
       );
     } catch (error: unknown) {
+      if (isSystemSpawnError(error)) {
+        throw error;
+      }
       return {
         module_id: sidecar.module_id,
         status: "syntax_error",
@@ -490,6 +544,9 @@ export async function run_yosys(
         ...parseYosysReport(report),
       };
     } catch (error: unknown) {
+      if (isSystemSpawnError(error)) {
+        throw error;
+      }
       return {
         success: false,
         lut_count: 0,

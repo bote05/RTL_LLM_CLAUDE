@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename } from "node:fs/promises";
 import path from "node:path";
 
 import { pipelineStateSchema } from "./schemas.js";
@@ -130,9 +130,42 @@ export class PipelineStateManager {
     return cloneState(this.state);
   }
 
+  // Assert that the loaded state's module set matches a reference set. The
+  // orchestrator calls this after loadState() to reject a stale
+  // pipeline_state.json left over from a previous checkpoint's LayerIR. Kept
+  // out of loadState() itself so unit tests can exercise transient-status
+  // recovery without building a full LayerIR fixture.
+  requireModuleIdsMatch(expectedModuleIds: readonly string[]): void {
+    const current = new Set(expectedModuleIds);
+    const loaded = new Set(Object.keys(this.state.modules));
+    const missing = [...current].filter((id) => !loaded.has(id));
+    const extra = [...loaded].filter((id) => !current.has(id));
+    if (missing.length > 0 || extra.length > 0) {
+      throw new Error(
+        `pipeline_state.json module set does not match the current LayerIR. ` +
+          `Missing in state: [${missing.join(", ")}]. ` +
+          `Unknown in state: [${extra.join(", ")}]. ` +
+          `Delete output/pipeline_state.json to start a fresh run.`,
+      );
+    }
+  }
+
   async saveState(filePath: string): Promise<void> {
+    // Atomic write: stage to a sibling tmp file, fsync, then rename. A crash
+    // mid-write leaves either the previous valid state or the new valid state
+    // on disk — never a truncated JSON blob. Required by loadState()'s
+    // crash-point recovery logic.
     await mkdir(path.dirname(filePath), { recursive: true });
-    await writeFile(filePath, `${JSON.stringify(this.state, null, 2)}\n`, "utf8");
+    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    const payload = `${JSON.stringify(this.state, null, 2)}\n`;
+    const handle = await open(tmpPath, "w");
+    try {
+      await handle.writeFile(payload, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tmpPath, filePath);
   }
 
   async loadState(filePath: string): Promise<void> {
@@ -146,7 +179,12 @@ export class PipelineStateManager {
       );
     }
 
+    // Preserve the max_retries the caller passed into the constructor. The
+    // CLI exposes a resume-time --max-retries override; blindly replaying the
+    // saved value would silently ignore it.
+    const activeMaxRetries = this.state.max_retries;
     this.state = validated.data as PipelineState;
+    this.state.max_retries = activeMaxRetries;
 
     const loadedOrder = Object.keys(this.state.modules);
     if (loadedOrder.length > 0) {

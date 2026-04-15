@@ -33,6 +33,7 @@ Workflow:
    - `scale_factor_misapplied`
    - `bias_term_missing`
    - `batch_norm_not_folded`
+   - `synthesis_failed`
 2. Locate the exact faulty line range.
 3. Rewrite only that section.
 4. Preserve the public interface exactly, including the handshake and timing contract.
