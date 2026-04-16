@@ -15,7 +15,7 @@
 export const AGENT_CONFIG = {
   Cartographer: { model: "sonnet" as const, maxTurns: 30, description: "Model extractor. Runs once at pipeline start. Emits output/layer_ir.json." },
   Foundry:      { model: "sonnet" as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
-  Surgeon:      { model: "opus"   as const, maxTurns: 20, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
+  Surgeon:      { model: "opus"   as const, maxTurns: 8, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
 } as const;
 
 export type AgentName = keyof typeof AGENT_CONFIG;

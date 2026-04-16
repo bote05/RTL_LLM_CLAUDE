@@ -148,6 +148,12 @@ describe("runPipeline", () => {
     });
 
     expect(queryFn.mock.calls.some(([call]) => (call as { prompt: string }).prompt.includes("cartographer"))).toBe(false);
+    expect(queryFn.mock.calls[0]?.[0]).toMatchObject({
+      options: {
+        maxTurns: 20,
+        allowedTools: ["Agent", "mcp__nn2rtl-tools__write_verilog"],
+      },
+    });
     expect(JSON.parse(await readFile(path.join(reportsDir, "pipeline_summary.json"), "utf8"))).toMatchObject({
       model_name: (pipelineIr as { model_name: string }).model_name,
       is_done: true,
@@ -269,11 +275,12 @@ describe("runPipeline", () => {
     expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');
   });
 
-  it("treats fmax_mhz=0 as a pass when Yosys succeeded (Sky130 does not always emit a delay)", async () => {
+  it("routes missing Sky130 timing measurement to Surgeon as synthesis_failed", async () => {
     await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
+    const repairedModule = { ...originalModule, generated_by: "Surgeon", attempt: 2 };
     const verifPass = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
     );
@@ -283,24 +290,42 @@ describe("runPipeline", () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
         return successResult(originalModule);
       }],
-      surgeon: [],
+      surgeon: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        return successResult(repairedModule);
+      }],
     });
-    const assayerFn = createAssayerMock([verifPass]);
-    // Sky130 `stat -liberty` + `abc -liberty` does not always print a
-    // delay line, so `fmax_mhz: 0` with `success: true` is not a failure.
-    // We still gate on lut_count and on Yosys success itself.
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const yosysFn = createYosysMock([
-      { success: true, lut_count: 4, fmax_mhz: 0, area_um2: 123.4, report: "stat ran but no delay line" },
+      {
+        success: true,
+        lut_count: 147911,
+        fmax_mhz: 0,
+        area_um2: 1112938.6464,
+        report: "147911 1.11E+006 cells\nChip area for module '\\unit_module': 1112938.646400",
+      },
+      {
+        success: true,
+        lut_count: 147911,
+        fmax_mhz: 75,
+        area_um2: 1112938.6464,
+        report:
+          "ABC: WireLoad = \"none\"  Delay = 13333.33 ps\n" +
+          "147911 1.11E+006 cells\n" +
+          "Chip area for module '\\unit_module': 1112938.646400",
+      },
     ]);
 
     await runPipeline("checkpoint.pth", {
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
-    expect(yosysFn).toHaveBeenCalledTimes(1);
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(yosysFn).toHaveBeenCalledTimes(2);
+    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(true);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.results.unit_module.failure_class).toBeUndefined();
+    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');
   });
 
   it("routes Fmax-below-target to Surgeon with missing_pipeline_register failure class", async () => {

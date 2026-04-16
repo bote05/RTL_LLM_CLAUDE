@@ -114,7 +114,11 @@ async function handleRunYosys(
   toolImpls: ToolImplementations,
 ): Promise<CallToolResult> {
   const input = runYosysInput.parse(args);
-  const result = await toolImpls.run_yosys(input.verilog_source, input.module_name);
+  const result = await toolImpls.run_yosys(
+    input.verilog_source,
+    input.module_name,
+    input.clock_period_ns,
+  );
   return toToolResult(result);
 }
 

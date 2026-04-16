@@ -87,6 +87,7 @@ export const verifResultSchema = z
     got: nullToUndef(z.array(z.number())),
     max_error: nullToUndef(z.number()),
     mean_error: nullToUndef(z.number()),
+    sample_count: nullToUndef(z.number()),
     // Agents sometimes emit non-enum "unknown"-style strings for failure_class
     // on pass (e.g. "none", "N/A", ""). Coerce anything not in the taxonomy
     // to undefined — status=="pass"|"fail" remains the authoritative gate,
@@ -147,6 +148,7 @@ export const runYosysInput = z
   .object({
     verilog_source: z.string(),
     module_name: z.string(),
+    clock_period_ns: z.number().nonnegative().default(0),
   })
   .strict();
 

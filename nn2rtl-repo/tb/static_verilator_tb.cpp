@@ -602,11 +602,39 @@ int main(int argc, char** argv) {
     const bool numerical_pass = max_abs_error <= kNumericalTolerance;
     const std::string status = (numerical_pass && timing_pass) ? "pass" : "fail";
 
+    // Cap the expected/got arrays to a diagnostic head+tail sample. The full
+    // arrays for a 64-channel conv are ~1.6M entries; embedding them all in
+    // results.json bloats pipeline_state.json (which stores the VerifResult)
+    // and the Surgeon delegation prompt (which must fit in a model context
+    // window). Surgeon only needs a sample of the mismatch to diagnose; the
+    // aggregate stats (max_error, mean_error, sample_count) cover the rest.
+    constexpr size_t kMaxDiagnosticSamples = 1000;
+    json expected_json;
+    json got_json;
+    if (expected_flat.size() <= kMaxDiagnosticSamples) {
+      expected_json = expected_flat;
+      got_json = actual_flat;
+    } else {
+      const size_t head = kMaxDiagnosticSamples / 2;
+      const size_t tail = kMaxDiagnosticSamples - head;
+      expected_json = json::array();
+      got_json = json::array();
+      for (size_t i = 0; i < head; ++i) {
+        expected_json.push_back(expected_flat[i]);
+        got_json.push_back(actual_flat[i]);
+      }
+      for (size_t i = expected_flat.size() - tail; i < expected_flat.size(); ++i) {
+        expected_json.push_back(expected_flat[i]);
+        got_json.push_back(actual_flat[i]);
+      }
+    }
+
     json results = {
         {"module_id", sidecar.module_id},
         {"status", status},
-        {"expected", expected_flat},
-        {"got", actual_flat},
+        {"expected", expected_json},
+        {"got", got_json},
+        {"sample_count", sample_count},
         {"max_error", max_abs_error},
         {"mean_error", mean_error},
         {"timing_pass", timing_pass},

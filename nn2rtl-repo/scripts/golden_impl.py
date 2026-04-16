@@ -69,6 +69,7 @@ class Int8Conv2d(nn.Module):
         padding: Sequence[int] = (0, 0),
         dilation: Sequence[int] = (1, 1),
         groups: int = 1,
+        scale_factor: float = 1.0,
     ) -> None:
         super().__init__()
         self.register_buffer("weight", weight.to(torch.float32))
@@ -80,6 +81,7 @@ class Int8Conv2d(nn.Module):
         self.padding = tuple(int(v) for v in padding)
         self.dilation = tuple(int(v) for v in dilation)
         self.groups = int(groups)
+        self.scale_factor = float(scale_factor)
 
     def forward(self, x):
         y = F.conv2d(
@@ -91,7 +93,7 @@ class Int8Conv2d(nn.Module):
             dilation=self.dilation,
             groups=self.groups,
         )
-        return quantize_tensor_to_int8_range(y)
+        return requantize_tensor_with_scale(y, self.scale_factor)
 
 
 class Int8FusedStemConv2d(nn.Module):
@@ -103,6 +105,7 @@ class Int8FusedStemConv2d(nn.Module):
         padding: Sequence[int] = (0, 0),
         dilation: Sequence[int] = (1, 1),
         groups: int = 1,
+        scale_factor: float = 1.0,
     ) -> None:
         super().__init__()
         self.register_buffer("weight", weight.to(torch.float32))
@@ -114,6 +117,7 @@ class Int8FusedStemConv2d(nn.Module):
         self.padding = tuple(int(v) for v in padding)
         self.dilation = tuple(int(v) for v in dilation)
         self.groups = int(groups)
+        self.scale_factor = float(scale_factor)
 
     def forward(self, x):
         y = F.conv2d(
@@ -127,7 +131,7 @@ class Int8FusedStemConv2d(nn.Module):
         )
         y = torch.relu(y)
         y = F.max_pool2d(y, kernel_size=3, stride=2, padding=1)
-        return quantize_tensor_to_int8_range(y)
+        return requantize_tensor_with_scale(y, self.scale_factor)
 
 
 class Int8ReLU(nn.Module):
@@ -148,11 +152,18 @@ class Int8Add(nn.Module):
         self.output_scale_factor = float(output_scale_factor)
 
     def forward(self, lhs, rhs):
+        # lhs/rhs are int8 values; multiplying by their scale factors converts
+        # to real-valued domain. To get back to output int8 we divide by the
+        # output scale (real → int). This is different from the conv path where
+        # the accumulator stays in integer domain and the multiplier IS the
+        # scale_factor field.
         summed = (
             lhs.to(torch.float32) * self.lhs_scale_factor
             + rhs.to(torch.float32) * self.rhs_scale_factor
         )
-        return requantize_tensor_with_scale(summed, self.output_scale_factor)
+        return torch.clamp(
+            torch.round(summed / float(self.output_scale_factor)), -128, 127,
+        )
 
 
 class ResidualStackTracer(fx.Tracer):
@@ -210,6 +221,7 @@ class CheckpointResidualStack(nn.Module):
                     padding=coerce_int_sequence(operation.get("padding", [0, 0]), "padding"),
                     dilation=coerce_int_sequence(operation.get("dilation", [1, 1]), "dilation"),
                     groups=int(operation.get("groups", 1)),
+                    scale_factor=float(metadata.get("scale_factor", 1.0)),
                 )
             elif op_type == "relu":
                 module = Int8ReLU()
@@ -603,12 +615,21 @@ def quantize_tensor_to_int8_range(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def requantize_tensor_with_scale(tensor: torch.Tensor, scale_factor: float) -> torch.Tensor:
+    """Apply the requantization multiplier and clamp to INT8 range.
+
+    In our int8 pipeline the accumulator holds raw integer dot-products
+    (int8 × int8 summed over IC channels). ``scale_factor`` encodes the
+    composite requantization multiplier that maps this accumulator value
+    back into INT8 output range. The RTL implements this as a fixed-point
+    multiply-and-shift; the golden model must match by multiplying (not
+    dividing) by the same factor.
+    """
     if scale_factor <= 0.0:
         raise GoldenGenerationError(f"scale_factor must be positive, got {scale_factor}.")
     working = tensor.detach() if isinstance(tensor, torch.Tensor) else tensor
     if isinstance(working, torch.Tensor) and working.is_quantized:
         working = working.dequantize()
-    scaled = torch.round(working.to(torch.float32) / float(scale_factor))
+    scaled = torch.round(working.to(torch.float32) * float(scale_factor))
     return torch.clamp(scaled, -128, 127)
 
 

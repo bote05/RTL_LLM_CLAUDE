@@ -167,11 +167,11 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
 
   it("runs yosys against a real fixture module", async () => {
     const verilog = await loadFixture(verilatorFixtureRoot, "stream_passthrough.v");
-    const result = await run_yosys(verilog, "stream_passthrough");
+    const result = await run_yosys(verilog, "stream_passthrough", 20);
     expect(result.success).toBe(true);
     expect(result.report.length).toBeGreaterThan(0);
     expect(result.lut_count).toBeGreaterThanOrEqual(0);
-    expect(result.fmax_mhz).toBeGreaterThanOrEqual(0);
+    expect(result.fmax_mhz).toBeGreaterThan(0);
   });
 
   it("passes a valid module through the static C++ testbench", async () => {

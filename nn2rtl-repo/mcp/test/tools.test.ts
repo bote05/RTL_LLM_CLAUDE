@@ -151,6 +151,12 @@ describe("mcp tools", () => {
     expect(parsed.fmax_mhz).toBeCloseTo(400, 5);
   });
 
+  it("parses ABC current-delay fallback lines into Fmax", () => {
+    const report = 'ABC: Current delay (882.99 ps) does not exceed the target delay (20000.00 ps).';
+    const parsed = parseYosysReport(report);
+    expect(parsed.fmax_mhz).toBeCloseTo(1_132.52, 2);
+  });
+
   it("returns fmax_mhz=0 when no delay/MHz information is present", () => {
     expect(parseYosysReport("LUT4 3\nnothing measurable here")).toEqual({
       lut_count: 3,
@@ -159,7 +165,59 @@ describe("mcp tools", () => {
     });
   });
 
+  it("parses Sky130 stat output into total cell count and area", () => {
+    const report = [
+      "=== unit_module ===",
+      "   178496 cells",
+      "=== unit_module ===",
+      "   147911 1.11E+006 cells",
+      "Chip area for module '\\unit_module': 1112938.646400",
+    ].join("\n");
+    expect(parseYosysReport(report)).toEqual({
+      lut_count: 147911,
+      fmax_mhz: 0,
+      area_um2: 1112938.6464,
+    });
+  });
+
   it("runs yosys successfully when the command layer returns a valid report", async () => {
+    const commandRunner = vi.fn(async (_file, args: string[]) => {
+      expect(args[1]).toContain("-constr");
+      expect(args[1]).toContain("-D 20000");
+      return {
+        stdout: "ABC: WireLoad = \"none\" Delay = 857.82 ps\nChip area for module '\\passthrough': 590.566400",
+        stderr: "",
+      };
+    });
+    const result = await run_yosys("module passthrough; endmodule", "passthrough", 20, {
+      commandRunner,
+    });
+    expect(commandRunner).toHaveBeenCalledOnce();
+    expect(result.success).toBe(true);
+    expect(result.lut_count).toBe(0);
+    expect(result.fmax_mhz).toBeCloseTo(1_165.7457, 4);
+    expect(result.area_um2).toBe(590.5664);
+    expect(result.report).toBe(
+      "ABC: WireLoad = \"none\" Delay = 857.82 ps\nChip area for module '\\passthrough': 590.566400",
+    );
+  });
+
+  it("returns a failure report when yosys execution fails", async () => {
+    const result = await run_yosys("module bad; endmodule", "bad", 20, {
+      commandRunner: async () => {
+        throw { stderr: "yosys failed" };
+      },
+    });
+    expect(result).toEqual({
+      success: false,
+      lut_count: 0,
+      fmax_mhz: 0,
+      area_um2: 0,
+      report: "yosys failed",
+    });
+  });
+
+  it("keeps backward compatibility for run_yosys callers that pass runtime overrides as arg 3", async () => {
     const result = await run_yosys("module passthrough; endmodule", "passthrough", {
       commandRunner: async () => ({
         stdout: "LUT4 4\nEstimated fmax: 42.0 MHz",
@@ -172,21 +230,6 @@ describe("mcp tools", () => {
       fmax_mhz: 42,
       area_um2: 0,
       report: "LUT4 4\nEstimated fmax: 42.0 MHz",
-    });
-  });
-
-  it("returns a failure report when yosys execution fails", async () => {
-    const result = await run_yosys("module bad; endmodule", "bad", {
-      commandRunner: async () => {
-        throw { stderr: "yosys failed" };
-      },
-    });
-    expect(result).toEqual({
-      success: false,
-      lut_count: 0,
-      fmax_mhz: 0,
-      area_um2: 0,
-      report: "yosys failed",
     });
   });
 

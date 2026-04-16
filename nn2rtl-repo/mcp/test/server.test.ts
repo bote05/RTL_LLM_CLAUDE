@@ -28,13 +28,13 @@ describe("mcp server", () => {
 
     await handleToolCall("run_iverilog", { verilog_source: "module m; endmodule", module_name: "m" }, impls);
     await handleToolCall("run_verilator", { verilog_source: "module m; endmodule", module_name: "m", sidecar_path: "/tmp/sidecar.json" }, impls);
-    await handleToolCall("run_yosys", { verilog_source: "module m; endmodule", module_name: "m" }, impls);
+    await handleToolCall("run_yosys", { verilog_source: "module m; endmodule", module_name: "m", clock_period_ns: 20 }, impls);
     await handleToolCall("read_weights", { checkpoint_path: "checkpoint.pth", quantization_config: {} }, impls);
     await handleToolCall("write_verilog", { module: { module_id: "m", spec_hash: "h", verilog_source: "module m; endmodule", generated_by: "Foundry", attempt: 1 }, output_dir: "/tmp" }, impls);
 
     expect(impls.run_iverilog).toHaveBeenCalledOnce();
     expect(impls.run_verilator).toHaveBeenCalledOnce();
-    expect(impls.run_yosys).toHaveBeenCalledOnce();
+    expect(impls.run_yosys).toHaveBeenCalledWith("module m; endmodule", "m", 20);
     expect(impls.read_weights).toHaveBeenCalledOnce();
     expect(impls.write_verilog).toHaveBeenCalledOnce();
   });

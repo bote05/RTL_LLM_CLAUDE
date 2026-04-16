@@ -43,3 +43,4 @@ Workflow:
 7. Return only the repaired `VerilogModule` JSON object.
 
 Do not regenerate the entire module from scratch.
+Output the fixed VerilogModule JSON immediately. Do not explain your reasoning. Do not summarize what you changed. Do not read files you already received in the prompt.

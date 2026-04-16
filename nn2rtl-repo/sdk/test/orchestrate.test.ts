@@ -14,6 +14,7 @@ import {
   loadPluginAgentDefinition,
   parseCliArgs,
   parseFrontmatter,
+  preflightVerilogModule,
   readJsonFile,
   requireStructuredOutput,
   toStringList,
@@ -177,6 +178,58 @@ describe("orchestrate helpers", () => {
     expect(runtime.now()).toBe(fixed);
   });
 
+  it("flags canonical port-direction mismatches during deterministic preflight", () => {
+    const issues = preflightVerilogModule(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry",
+        attempt: 1,
+        verilog_source: [
+          "module m1(",
+          "  input wire clk,",
+          "  input wire rst_n,",
+          "  input wire valid_in,",
+          "  input wire ready_in,",
+          "  input wire [511:0] data_in,",
+          "  output reg valid_out,",
+          "  output reg [511:0] data_out",
+          ");",
+          "endmodule",
+        ].join("\n"),
+      },
+      {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 64, 1, 1],
+        output_shape: [1, 64, 1, 1],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [64, 64, 1, 1],
+        num_weights: 4096,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 67,
+        clock_period_ns: 20,
+        input_width_bits: 512,
+        output_width_bits: 512,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+    );
+
+    expect(issues).toContain(
+      "Top-level port 'ready_in' must be declared as output, found input in 'input wire ready_in'.",
+    );
+  });
+
   it("fails fast when LayerIR bus widths do not match the channel contract", async () => {
     const runtime = createOrchestratorRuntime();
 
@@ -216,6 +269,60 @@ describe("orchestrate helpers", () => {
         },
       ),
     ).rejects.toThrow("input_width_bits");
+  });
+
+  it("returns a deterministic preflight failure before invoking simulators", async () => {
+    const runtime = createOrchestratorRuntime();
+    const result = await runtime.assayerFn(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry",
+        attempt: 1,
+        verilog_source: [
+          "module m1(",
+          "  input wire clk,",
+          "  input wire rst_n,",
+          "  input wire valid_in,",
+          "  input wire ready_in,",
+          "  input wire [511:0] data_in,",
+          "  output reg valid_out,",
+          "  output reg [511:0] data_out",
+          ");",
+          "endmodule",
+        ].join("\n"),
+      },
+      {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 64, 1, 1],
+        output_shape: [1, 64, 1, 1],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [64, 64, 1, 1],
+        num_weights: 4096,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 67,
+        clock_period_ns: 20,
+        input_width_bits: 512,
+        output_width_bits: 512,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+    );
+
+    expect(result.status).toBe("fail");
+    expect(result.failure_class).toBe("port_width_mismatch");
+    expect(result.fix_hint).toContain("Deterministic preflight rejected the RTL");
+    expect(result.fix_hint).toContain("ready_in");
   });
 
   it("records fatal pipeline errors to the run log", async () => {

@@ -39,6 +39,8 @@ export const YOSYS_TIMEOUT_MS = 120_000;
 // killed and what looks like a synth failure is actually a buffer overflow.
 // Raise the cap to 64 MiB; anything larger than that is pathological.
 export const YOSYS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const SKY130_ABC_DRIVING_CELL = "sky130_fd_sc_hd__buf_1";
+const SKY130_ABC_OUTPUT_LOAD_FF = 10.0;
 
 // On Windows, the `verilator` entry point is a Perl script that OSS CAD Suite
 // does not ship Perl for; `verilator_bin.exe` is the native Windows binary and
@@ -341,10 +343,25 @@ export function parseYosysReport(
     area_um2 = Number(areaMatch[1]);
   }
   if (lut_count === 0) {
-    // Fall back to "Number of cells" line printed by `stat`.
-    const cellsMatch = report.match(/Number\s+of\s+cells:\s*(\d+)/i);
-    if (cellsMatch) {
-      lut_count = Number(cellsMatch[1]);
+    // `stat -liberty` on standard-cell flows prints summary lines like either:
+    //   147911 1.11E+006 cells
+    // or the older:
+    //   Number of cells: 147911
+    // Reports often contain multiple stats blocks (pre/post mapping), so take
+    // the last total-cells line to capture the mapped netlist.
+    let totalCells: number | null = null;
+    const cellsLineRe = /^\s*(\d+)(?:\s+[0-9]+(?:\.[0-9]+)?(?:E[+-]?\d+)?)?\s+cells\s*$/gim;
+    for (const m of report.matchAll(cellsLineRe)) {
+      totalCells = Number(m[1]);
+    }
+    if (totalCells === null) {
+      const cellsMatch = report.match(/Number\s+of\s+cells:\s*(\d+)/i);
+      if (cellsMatch) {
+        totalCells = Number(cellsMatch[1]);
+      }
+    }
+    if (totalCells !== null) {
+      lut_count = totalCells;
     }
   }
 
@@ -352,8 +369,10 @@ export function parseYosysReport(
   // 1. Explicit "X MHz" (nextpnr-style report or test mocks)
   // 2. ABC/abc9 "Delay = X.XX ns" (Yosys sta/abc9 output)
   // 3. ABC/abc9 "Delay = X.XX ps"
-  // abc9's delay line appears on every synth_ice40 -abc9 run and is our
-  // primary production signal.
+  // 4. ABC "Current delay (X.XX ps/ns)" fallback
+  // With Sky130 timing enabled via `abc -constr ... -D ...`, the `stime -p`
+  // summary line is the primary production signal; the "Current delay (...)"
+  // line is a useful fallback if that summary is absent.
   const mhzMatch = report.match(/([0-9]+(?:\.[0-9]+)?)\s*MHz/i);
   if (mhzMatch) {
     return { lut_count, fmax_mhz: Number(mhzMatch[1]), area_um2 };
@@ -371,7 +390,26 @@ export function parseYosysReport(
     return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0, area_um2 };
   }
 
+  const currentNsMatch = report.match(/Current\s+delay\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*ns\s*\)/i);
+  if (currentNsMatch) {
+    const ns = Number(currentNsMatch[1]);
+    return { lut_count, fmax_mhz: ns > 0 ? 1_000 / ns : 0, area_um2 };
+  }
+
+  const currentPsMatch = report.match(/Current\s+delay\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*ps\s*\)/i);
+  if (currentPsMatch) {
+    const ps = Number(currentPsMatch[1]);
+    return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0, area_um2 };
+  }
+
   return { lut_count, fmax_mhz: 0, area_um2 };
+}
+
+function yosysTimingTargetPs(clock_period_ns: number): number | null {
+  if (!Number.isFinite(clock_period_ns) || clock_period_ns <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.round(clock_period_ns * 1_000));
 }
 
 export function resolveOutputRoot(outputDir: string): string {
@@ -557,6 +595,7 @@ export async function run_verilator(
 export async function run_yosys(
   verilog_source: string,
   module_name: string,
+  clockPeriodNsOrRuntimeOverrides: number | Partial<ToolsRuntime> = 0,
   runtimeOverrides: Partial<ToolsRuntime> = {},
 ): Promise<{
   success: boolean;
@@ -565,7 +604,13 @@ export async function run_yosys(
   area_um2: number;
   report: string;
 }> {
-  const runtime = createToolsRuntime(runtimeOverrides);
+  const clock_period_ns =
+    typeof clockPeriodNsOrRuntimeOverrides === "number" ? clockPeriodNsOrRuntimeOverrides : 0;
+  const runtime = createToolsRuntime(
+    typeof clockPeriodNsOrRuntimeOverrides === "number"
+      ? runtimeOverrides
+      : clockPeriodNsOrRuntimeOverrides,
+  );
   return withTempDir("nn2rtl-yosys-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
@@ -574,13 +619,33 @@ export async function run_yosys(
     // -abc9; that path hung indefinitely on deep combinational blobs because
     // abc9 delay-aware mapping does unbounded search on large LUT cones.
     // Sky130 (free Google/SkyWater standard-cell library) gives real area
-    // (um^2) and real timing (ns) numbers while using generic Yosys `synth`
-    // which is much better behaved on large designs. See vendor/sky130/.
+    // (um^2), mapped standard-cell counts, and constrained timing when ABC is
+    // given a load/driving-cell constraint file plus a target delay derived
+    // from the LayerIR clock period. See vendor/sky130/.
     const sky130Lib = SKY130_LIB_PATH.replace(/\\/g, "/");
+    const targetDelayPs = yosysTimingTargetPs(clock_period_ns);
+    let abcCommand = `abc -liberty ${sky130Lib}`;
+    if (targetDelayPs !== null) {
+      const constrPath = path.join(tempDir, "sky130.abc.constr");
+      await writeFile(
+        constrPath,
+        [
+          `set_driving_cell ${SKY130_ABC_DRIVING_CELL}`,
+          `set_load ${SKY130_ABC_OUTPUT_LOAD_FF.toFixed(1)}`,
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      // `abc -constr` switches Yosys to ABC's timing-aware default script,
+      // which ends in `stime -p` and prints the critical-path delay.
+      abcCommand =
+        `abc -liberty ${sky130Lib} ` +
+        `-constr ${constrPath.replace(/\\/g, "/")} -D ${targetDelayPs}`;
+    }
     const yosysScript = [
       `synth -top ${module_name}`,
       `dfflibmap -liberty ${sky130Lib}`,
-      `abc -liberty ${sky130Lib}`,
+      abcCommand,
       `stat -liberty ${sky130Lib}`,
     ].join("; ");
     let didTimeout = false;

@@ -64,7 +64,14 @@ type AgentRunResult<T> = {
 };
 type FrontmatterRecord = Record<string, unknown>;
 
-export type YosysFn = (module: VerilogModule) => Promise<SynthesisReport>;
+type PortDirection = "input" | "output" | "inout";
+type ParsedTopPort = {
+  declaration: string;
+  direction: PortDirection;
+  width_bits: number | null;
+};
+
+export type YosysFn = (module: VerilogModule, layer: LayerIR) => Promise<SynthesisReport>;
 export type AssayerFn = (
   module: VerilogModule,
   layer: LayerIR,
@@ -86,7 +93,7 @@ export type RunPipelineOptions = {
 const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
   now: () => new Date(),
   queryFn: query,
-  yosysFn: (module) => invokeYosys(module),
+  yosysFn: (module, layer) => invokeYosys(module, layer),
   assayerFn: (module, layer) => runAssayerDeterministic(module, layer),
 };
 
@@ -185,13 +192,22 @@ function evaluateSynthesis(
     };
   }
 
-  // Sky130 `stat`+`abc` does not always emit a delay line unless driven by a
-  // constraint file or a clock period. Treat fmax=0 as "timing not measured"
-  // instead of a synth failure — we still gate on area (lut_count proxy),
-  // and functional correctness has already passed. The abc9 Fmax gate was
-  // only meaningful for the old iCE40 flow; Sky130 timing would need OpenSTA
-  // integration that is not yet wired up.
-  if (report.fmax_mhz > 0 && report.fmax_mhz < FMAX_TARGET_MHZ) {
+  if (report.fmax_mhz <= 0) {
+    return {
+      ...verifiedResult,
+      module_id: moduleId,
+      status: "fail",
+      failure_class: "synthesis_failed",
+      fix_hint: [
+        "Yosys synthesis succeeded but did not emit a measurable Sky130 timing result.",
+        "Repair the RTL or synthesis flow so constrained `abc -constr ... -D ...` reports a critical-path delay.",
+        "Yosys output summary (head + errors + tail):",
+        capYosysReport(report.report),
+      ].join("\n\n"),
+    };
+  }
+
+  if (report.fmax_mhz < FMAX_TARGET_MHZ) {
     // Synthesis succeeded but critical path is too long. Fix strategy:
     // insert a pipeline register in the longest combinational path.
     // Note the latency-contract implication — adding a register changes
@@ -210,7 +226,12 @@ function evaluateSynthesis(
     };
   }
 
-  if (report.lut_count > MAX_LUT_COUNT_PER_MODULE) {
+  // `lut_count` is a real LUT count only on the old FPGA/iCE40 flow. Under
+  // the current Sky130 `stat -liberty` flow it is a total standard-cell count
+  // proxy, so the old 5k LUT ceiling is not comparable. Keep reporting it for
+  // observability, but only enforce the LUT gate when no standard-cell area
+  // metric is present.
+  if (report.area_um2 === 0 && report.lut_count > MAX_LUT_COUNT_PER_MODULE) {
     // Design synthesizes but burns absurd area. Fix strategy: simplify /
     // factor shared terms; this is not the same bug as a timing failure.
     return {
@@ -480,6 +501,7 @@ async function runDelegatedAgent<T>(
   resultSchema: z.ZodType<T>,
   runtime: OrchestratorRuntime,
 ): Promise<AgentRunResult<T>> {
+  const agentName = normalizeAgentName(slug);
   const agents = await loadAllAgentDefinitions();
   const messages: SDKMessage[] = [];
   let finalResult: SDKResultMessage | null = null;
@@ -489,11 +511,11 @@ async function runDelegatedAgent<T>(
     options: {
       cwd: repoRoot,
       tools: ["Agent"],
-      allowedTools: GLOBAL_ALLOWED_TOOLS,
+      allowedTools: ["Agent", ...AGENT_MCP_TOOLS[slug]],
       plugins: [{ type: "local", path: pluginPath }],
       agents,
       outputFormat,
-      maxTurns: 6,
+      maxTurns: AGENT_CONFIG[agentName].maxTurns,
     },
   })) {
     messages.push(message);
@@ -627,6 +649,215 @@ const assayerLayerBusContractZod = layerIrZod.superRefine((layer, ctx) => {
   }
 });
 
+const CANONICAL_TOP_PORTS = {
+  clk: { direction: "input" as const, width_bits: 1 },
+  rst_n: { direction: "input" as const, width_bits: 1 },
+  valid_in: { direction: "input" as const, width_bits: 1 },
+  ready_in: { direction: "output" as const, width_bits: 1 },
+  valid_out: { direction: "output" as const, width_bits: 1 },
+  data_in: { direction: "input" as const, width_key: "input_width_bits" as const },
+  data_out: { direction: "output" as const, width_key: "output_width_bits" as const },
+};
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findMatchingParen(source: string, openIndex: number): number {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "(") {
+      depth += 1;
+    } else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+function extractModulePortBlock(source: string, moduleName: string): string | null {
+  const moduleMatch = new RegExp(`\\bmodule\\s+${escapeRegExp(moduleName)}\\b`).exec(source);
+  if (!moduleMatch) {
+    return null;
+  }
+
+  let cursor = moduleMatch.index + moduleMatch[0].length;
+  while (cursor < source.length && /\s/.test(source[cursor])) {
+    cursor += 1;
+  }
+
+  if (source[cursor] === "#") {
+    const paramOpen = source.indexOf("(", cursor);
+    if (paramOpen === -1) {
+      return null;
+    }
+    const paramClose = findMatchingParen(source, paramOpen);
+    if (paramClose === -1) {
+      return null;
+    }
+    cursor = paramClose + 1;
+  }
+
+  const portOpen = source.indexOf("(", cursor);
+  if (portOpen === -1) {
+    return null;
+  }
+  const portClose = findMatchingParen(source, portOpen);
+  if (portClose === -1) {
+    return null;
+  }
+  return source.slice(portOpen + 1, portClose);
+}
+
+function splitTopLevelCommaList(text: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "(") {
+      parenDepth += 1;
+    } else if (ch === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+    } else if (ch === "[") {
+      bracketDepth += 1;
+    } else if (ch === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+    } else if (ch === "{") {
+      braceDepth += 1;
+    } else if (ch === "}") {
+      braceDepth = Math.max(0, braceDepth - 1);
+    } else if (ch === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function stripVerilogComments(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/.*$/gm, " ");
+}
+
+function lastIdentifier(text: string): string | null {
+  const match = text.match(/([A-Za-z_][A-Za-z0-9_$]*)\s*$/);
+  return match ? match[1] : null;
+}
+
+function parseDeclaredPortWidthBits(declaration: string): number | null {
+  const numericRange = declaration.match(/\[\s*(\d+)\s*:\s*(\d+)\s*\]/);
+  if (numericRange) {
+    return Math.abs(Number(numericRange[1]) - Number(numericRange[2])) + 1;
+  }
+  return declaration.includes("[") && declaration.includes("]") ? null : 1;
+}
+
+function parseAnsiTopPorts(portBlock: string): Map<string, ParsedTopPort> {
+  const ports = new Map<string, ParsedTopPort>();
+  let currentDirection: PortDirection | null = null;
+  let currentWidthBits: number | null = null;
+
+  for (const rawEntry of splitTopLevelCommaList(portBlock)) {
+    const declaration = stripVerilogComments(rawEntry).replace(/\s+/g, " ").trim();
+    if (!declaration) {
+      continue;
+    }
+
+    const directionMatch = declaration.match(/^(input|output|inout)\b/i);
+    const name = lastIdentifier(declaration);
+    if (!name) {
+      continue;
+    }
+
+    if (directionMatch) {
+      currentDirection = directionMatch[1].toLowerCase() as PortDirection;
+      currentWidthBits = parseDeclaredPortWidthBits(declaration);
+      ports.set(name, {
+        declaration,
+        direction: currentDirection,
+        width_bits: currentWidthBits,
+      });
+      continue;
+    }
+
+    if (!currentDirection) {
+      continue;
+    }
+
+    ports.set(name, {
+      declaration: `${currentDirection} ${declaration}`,
+      direction: currentDirection,
+      width_bits: currentWidthBits,
+    });
+  }
+
+  return ports;
+}
+
+function expectedTopPortWidthBits(
+  portName: keyof typeof CANONICAL_TOP_PORTS,
+  layer: LayerIR,
+): number {
+  const spec = CANONICAL_TOP_PORTS[portName];
+  return "width_key" in spec ? layer[spec.width_key] : spec.width_bits;
+}
+
+export function preflightVerilogModule(module: VerilogModule, layer: LayerIR): string[] {
+  const issues: string[] = [];
+
+  if (module.module_id !== layer.module_id) {
+    issues.push(
+      `VerilogModule.module_id='${module.module_id}' does not match LayerIR.module_id='${layer.module_id}'.`,
+    );
+  }
+
+  const portBlock = extractModulePortBlock(module.verilog_source, module.module_id);
+  if (!portBlock) {
+    issues.push(
+      `Module '${module.module_id}' is missing a parseable ANSI-style top-level port list.`,
+    );
+    return issues;
+  }
+
+  const ports = parseAnsiTopPorts(portBlock);
+  for (const [portName, expected] of Object.entries(CANONICAL_TOP_PORTS)) {
+    const parsed = ports.get(portName);
+    if (!parsed) {
+      issues.push(`Missing canonical top-level port '${portName}'.`);
+      continue;
+    }
+
+    if (parsed.direction !== expected.direction) {
+      issues.push(
+        `Top-level port '${portName}' must be declared as ${expected.direction}, found ${parsed.direction} in '${parsed.declaration}'.`,
+      );
+    }
+
+    const expectedWidth = expectedTopPortWidthBits(
+      portName as keyof typeof CANONICAL_TOP_PORTS,
+      layer,
+    );
+    if (parsed.width_bits !== null && parsed.width_bits !== expectedWidth) {
+      issues.push(
+        `Top-level port '${portName}' declares width ${parsed.width_bits} bits, expected ${expectedWidth} bits from LayerIR.`,
+      );
+    }
+  }
+
+  return issues;
+}
+
 export async function ensureLayerIr(
   checkpointPath: string,
   runtime: OrchestratorRuntime = createOrchestratorRuntime(),
@@ -726,14 +957,19 @@ const MCP_TOOLS_MODULE_PATH = path.basename(__dirname) === "dist"
   ? pathToFileURL(path.resolve(repoRoot, "mcp", "dist", "tools.js")).href
   : pathToFileURL(path.resolve(repoRoot, "mcp", "tools.ts")).href;
 
-async function invokeYosys(module: VerilogModule): Promise<SynthesisReport> {
+async function invokeYosys(module: VerilogModule, layer: LayerIR): Promise<SynthesisReport> {
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
     run_yosys: (
       verilog_source: string,
       module_name: string,
+      clock_period_ns: number,
     ) => Promise<SynthesisReport>;
   };
-  const raw = await mcpTools.run_yosys(module.verilog_source, module.module_id);
+  const raw = await mcpTools.run_yosys(
+    module.verilog_source,
+    module.module_id,
+    layer.clock_period_ns,
+  );
   const parsed = synthesisReportZod.safeParse(raw);
   if (!parsed.success) {
     throw new Error(
@@ -747,13 +983,14 @@ async function processYosysOutcome(
   manager: PipelineStateManager,
   moduleId: string,
   module: VerilogModule,
+  layer: LayerIR,
   verifiedResult: VerifResult,
   statePath: string,
   runtime: OrchestratorRuntime,
 ): Promise<void> {
   let report: SynthesisReport;
   try {
-    report = await runtime.yosysFn(module);
+    report = await runtime.yosysFn(module, layer);
   } catch (error: unknown) {
     // Tool itself crashed before producing a structured report. Treat as a
     // synthesis failure so Surgeon gets a chance to repair; the fix_hint
@@ -877,6 +1114,26 @@ async function runAssayerDeterministic(
   layer: LayerIR,
 ): Promise<VerifResult> {
   assayerLayerBusContractZod.parse(layer);
+
+  const preflightIssues = preflightVerilogModule(module, layer);
+  if (preflightIssues.length > 0) {
+    const preflightMessage = [
+      "Deterministic preflight rejected the RTL before iverilog/Verilator.",
+      "Repair the canonical top-level interface so it matches the Assayer contract.",
+      "Preflight findings:",
+      ...preflightIssues.map((issue) => `- ${issue}`),
+    ].join("\n");
+    return {
+      module_id: module.module_id,
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layer.pipeline_latency_cycles,
+      failure_class: "port_width_mismatch",
+      fix_hint: preflightMessage,
+      iverilog_stderr: preflightMessage,
+    };
+  }
 
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
     run_iverilog: (
@@ -1196,6 +1453,7 @@ export async function runPipeline(
           manager,
           nextAction.module_id,
           foundryResult.payload,
+          layer,
           assayerVerif,
           statePath,
           runtime,
@@ -1262,6 +1520,7 @@ export async function runPipeline(
           manager,
           nextAction.module_id,
           surgeonResult.payload,
+          layer,
           assayerVerif,
           statePath,
           runtime,
