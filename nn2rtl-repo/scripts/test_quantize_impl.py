@@ -151,8 +151,8 @@ def test_resnet50_checkpoint_round_trip_preserves_new_schema(tmp_path: Path) -> 
     assert stem["input_shape"] == [1, 3, 224, 224]
     assert stem["output_shape"] == [1, 4, 56, 56]
     assert stem["zero_point"] == 0
-    assert stem["input_width_bits"] == 8
-    assert stem["output_width_bits"] == 8
+    assert stem["input_width_bits"] == 24
+    assert stem["output_width_bits"] == 32
     assert len(stem["weight_int8"]) == math.prod(stem["weight_shape"])
     assert len(stem["bias_int32"]) == stem["weight_shape"][0]
     assert stem["scale_factor"] > 0.0
@@ -172,8 +172,8 @@ def test_resnet50_checkpoint_round_trip_preserves_new_schema(tmp_path: Path) -> 
     assert add_layer["scale_factor"] > 0.0
     assert add_layer["lhs_scale_factor"] > 0.0
     assert add_layer["rhs_scale_factor"] > 0.0
-    assert add_layer["input_width_bits"] == 16
-    assert add_layer["output_width_bits"] == 8
+    assert add_layer["input_width_bits"] == 64
+    assert add_layer["output_width_bits"] == 32
     assert summary["layers"]["layer1_0_conv1"]["weight_shape"] == [2, 4, 1, 1]
     assert summary["layers"]["layer1_0_post_add_relu"]["op_type"] == "relu"
 
@@ -227,8 +227,8 @@ def test_load_quantized_checkpoint_rejects_malformed_resnet50_metadata(tmp_path:
                     "num_weights": 108,
                     "scale_factor": 0.1,
                     "zero_point": 0,
-                    "input_width_bits": 8,
-                    "output_width_bits": 8,
+                    "input_width_bits": 24,
+                    "output_width_bits": 32,
                 }
             },
         },

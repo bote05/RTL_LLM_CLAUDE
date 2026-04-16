@@ -177,6 +177,47 @@ describe("orchestrate helpers", () => {
     expect(runtime.now()).toBe(fixed);
   });
 
+  it("fails fast when LayerIR bus widths do not match the channel contract", async () => {
+    const runtime = createOrchestratorRuntime();
+
+    await expect(
+      runtime.assayerFn(
+        {
+          module_id: "m1",
+          spec_hash: "hash",
+          verilog_source: "module m1; endmodule",
+          generated_by: "Foundry",
+          attempt: 1,
+        },
+        {
+          module_id: "m1",
+          op_type: "conv2d",
+          input_shape: [1, 64, 1, 1],
+          output_shape: [1, 64, 1, 1],
+          weights_path: "/tmp/w.hex",
+          bias_path: "/tmp/b.hex",
+          weight_shape: [64, 64, 1, 1],
+          num_weights: 4096,
+          scale_factor: 0.5,
+          zero_point: 0,
+          pipeline_latency_cycles: 67,
+          clock_period_ns: 20,
+          input_width_bits: 8,
+          output_width_bits: 512,
+          clock_signal: "clk",
+          reset_signal: "rst_n",
+          valid_in_signal: "valid_in",
+          valid_out_signal: "valid_out",
+          ready_in_signal: "ready_in",
+          data_in_signal: "data_in",
+          data_out_signal: "data_out",
+          golden_inputs_path: "/tmp/in.goldin",
+          golden_outputs_path: "/tmp/out.goldout",
+        },
+      ),
+    ).rejects.toThrow("input_width_bits");
+  });
+
   it("records fatal pipeline errors to the run log", async () => {
     await handlePipelineError(new Error("boom"), {
       now: () => new Date("2026-04-14T00:00:00Z"),

@@ -638,9 +638,9 @@ export async function run_yosys(
             `Yosys synthesis timed out after ${YOSYS_TIMEOUT_MS / 1000}s. ` +
               `Likely cause: the design is a single very deep/wide combinational blob ` +
               `(e.g. all MACs of a conv unrolled into one always block) that abc cannot ` +
-              `map quickly. Rewrite the module to time-multiplex its arithmetic — one ` +
-              `MAC per cycle accumulated across many cycles — so the combinational cone ` +
-              `between any two registers is small.`,
+              `map quickly. Rewrite the module to use the intended registered ` +
+              `output-stationary MAC-array structure so the combinational cone ` +
+              `between any two registers stays small.`,
             "---",
             captured,
           ].join("\n")

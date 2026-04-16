@@ -114,6 +114,29 @@ export const verifResultSchema = z
   })
   .strict();
 
+export const verificationSidecarSchema = z
+  .object({
+    module_name: z.string(),
+    module_id: z.string(),
+    clock_signal: z.literal("clk"),
+    reset_signal: z.literal("rst_n"),
+    valid_in_signal: z.literal("valid_in"),
+    valid_out_signal: z.literal("valid_out"),
+    ready_in_signal: z.literal("ready_in"),
+    data_in_signal: z.literal("data_in"),
+    data_out_signal: z.literal("data_out"),
+    bus_bytes_per_sample: z.number().int().positive(),
+    input_width_bits: z.number().int().positive(),
+    output_width_bits: z.number().int().positive(),
+    pipeline_latency_cycles: z.number().int().positive(),
+    clock_period_ns: z.number().nonnegative(),
+    golden_inputs_path: z.string(),
+    golden_outputs_path: z.string(),
+    results_path: z.string(),
+    testbench_template_path: z.string(),
+  })
+  .strict();
+
 export const synthesisReportSchema = z
   .object({
     success: z.boolean(),

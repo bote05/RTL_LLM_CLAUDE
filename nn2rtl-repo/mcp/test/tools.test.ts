@@ -51,6 +51,7 @@ async function writeSidecar(
     ready_in_signal: "ready_in",
     data_in_signal: "data_in",
     data_out_signal: "data_out",
+    bus_bytes_per_sample: 1,
     input_width_bits: 8,
     output_width_bits: 8,
     pipeline_latency_cycles: 1,

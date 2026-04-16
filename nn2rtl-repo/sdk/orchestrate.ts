@@ -15,6 +15,7 @@ import {
 import { AGENT_CONFIG, PIPELINE_CONFIG, type AgentName } from "./config.js";
 import { PipelineStateManager } from "./pipeline.js";
 import {
+  layerIrSchema as layerIrZod,
   pipelineIrSchema as pipelineIrZod,
   synthesisReportSchema as synthesisReportZod,
   verifResultSchema as verifResultZod,
@@ -568,6 +569,64 @@ function validateAddModulePacking(pipelineIr: PipelineIR): void {
   }
 }
 
+function getShapeChannels(shape: number[], fieldName: string, moduleId: string): number {
+  if (shape.length < 2) {
+    throw new Error(
+      `LayerIR '${moduleId}' field '${fieldName}' must include a channel dimension; got [${shape.join(", ")}].`,
+    );
+  }
+  return shape[1];
+}
+
+function expectedInputBusWidthBits(layer: LayerIR): number {
+  const inputChannels = getShapeChannels(layer.input_shape, "input_shape", layer.module_id);
+  return layer.op_type === "add" ? inputChannels * 16 : inputChannels * 8;
+}
+
+function expectedOutputBusWidthBits(layer: LayerIR): number {
+  const outputChannels = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
+  return outputChannels * 8;
+}
+
+const assayerLayerBusContractZod = layerIrZod.superRefine((layer, ctx) => {
+  if (layer.input_width_bits % 8 !== 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["input_width_bits"],
+      message: `input_width_bits must be a multiple of 8, got ${layer.input_width_bits}.`,
+    });
+  }
+  if (layer.output_width_bits % 8 !== 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["output_width_bits"],
+      message: `output_width_bits must be a multiple of 8, got ${layer.output_width_bits}.`,
+    });
+  }
+
+  const expectedInput = expectedInputBusWidthBits(layer);
+  if (layer.input_width_bits !== expectedInput) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["input_width_bits"],
+      message:
+        `input_width_bits=${layer.input_width_bits} does not match the LayerIR channel contract ` +
+        `for op_type='${layer.op_type}' (expected ${expectedInput}).`,
+    });
+  }
+
+  const expectedOutput = expectedOutputBusWidthBits(layer);
+  if (layer.output_width_bits !== expectedOutput) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["output_width_bits"],
+      message:
+        `output_width_bits=${layer.output_width_bits} does not match the LayerIR channel contract ` +
+        `for op_type='${layer.op_type}' (expected ${expectedOutput}).`,
+    });
+  }
+});
+
 export async function ensureLayerIr(
   checkpointPath: string,
   runtime: OrchestratorRuntime = createOrchestratorRuntime(),
@@ -817,6 +876,8 @@ async function runAssayerDeterministic(
   module: VerilogModule,
   layer: LayerIR,
 ): Promise<VerifResult> {
+  assayerLayerBusContractZod.parse(layer);
+
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
     run_iverilog: (
       verilog_source: string,
@@ -847,6 +908,7 @@ async function runAssayerDeterministic(
     ready_in_signal: "ready_in" as const,
     data_in_signal: "data_in" as const,
     data_out_signal: "data_out" as const,
+    bus_bytes_per_sample: layer.input_width_bits / 8,
     input_width_bits: layer.input_width_bits,
     output_width_bits: layer.output_width_bits,
     pipeline_latency_cycles: layer.pipeline_latency_cycles,

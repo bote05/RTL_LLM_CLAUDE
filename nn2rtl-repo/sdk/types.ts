@@ -98,6 +98,7 @@ export interface VerificationSidecar {
   ready_in_signal: string;
   data_in_signal: string;
   data_out_signal: string;
+  bus_bytes_per_sample: number;
   input_width_bits: number;
   output_width_bits: number;
   pipeline_latency_cycles: number;

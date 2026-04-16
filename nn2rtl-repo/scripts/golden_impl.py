@@ -31,24 +31,24 @@ SIGNAL_LITERALS = {
 PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
-# Number of register stages wrapped around a time-multiplexed MAC pipeline
-# (input latch -> multiply -> accumulate -> saturate/output buffer). The
-# conv latency formula below adds this to ic*kh*kw so `pipeline_latency_cycles`
-# matches what an actual one-MAC-per-clock RTL implementation achieves.
+# Number of register stages wrapped around the output-stationary MAC-array
+# datapath (input latch -> multiply -> accumulate -> saturate/output buffer).
+# The conv latency formula below adds this to ic*kh*kw so
+# `pipeline_latency_cycles` matches the packed-channel wide-bus contract used
+# by Foundry and the static Verilator bench.
 CONV_PIPELINE_STAGES = 3
 
 
 def compute_conv2d_latency_cycles(weight_shape: list[int]) -> int:
-    """Return a realistic latency for a time-multiplexed conv2d.
+    """Return the packed-channel MAC-array latency for a conv2d.
 
-    Foundry is required to emit one 8x8 MAC per clock; a single output sample
-    therefore takes `in_channels * kh * kw + pipeline_stages` cycles from
-    first valid_in to first valid_out. `weight_shape` is [oc, ic, kh, kw]
-    (PyTorch convention). A 7x7 stem with 3 input channels → 3*49+3 = 150;
-    a 1x1 layer1 conv with 64 input channels → 64*1+3 = 67; a 3x3 conv with
-    64 input channels → 64*9+3 = 579. These replace the previous hardcoded
-    value of 2, which was physically impossible and caused synthesis to try
-    to map thousands of parallel multipliers in a single cycle.
+    Foundry emits an output-stationary array of `oc` parallel 8x8 MAC units.
+    Each cycle consumes one receptive-field position's worth of packed input
+    channels, so a single output sample takes `in_channels * kh * kw +
+    pipeline_stages` cycles from first valid_in to first valid_out.
+    `weight_shape` is [oc, ic, kh, kw] (PyTorch convention). A 7x7 stem with
+    3 input channels → 3*49+3 = 150; a 1x1 layer1 conv with 64 input channels
+    → 64*1+3 = 67; a 3x3 conv with 64 input channels → 64*9+3 = 579.
     """
     if len(weight_shape) < 4:
         return PIPELINE_LATENCY_CYCLES["conv2d"]
@@ -284,29 +284,197 @@ def get_golden_artifact_paths(repo_root: Path, module_id: str) -> tuple[Path, Pa
 # bite) while preserving per-module verification coverage.
 #
 # Layout (all little-endian):
-#   [ 0..4)  magic        : 4 bytes, ASCII "NN2V"
-#   [ 4..8)  version      : uint32, current=1
-#   [ 8..12) num_vectors  : uint32
+#   [ 0..4)  magic            : 4 bytes, ASCII "NN2V"
+#   [ 4..8)  version          : uint32, current=2
+#   [ 8..12) num_vectors      : uint32
 #   [12..16) samples_per_vector : uint32
-#   [16..)   data         : num_vectors * samples_per_vector * int32 samples
+#   [16..20) bytes_per_sample : uint32
+#   [20..)   data             : num_vectors * samples_per_vector *
+#                               ceil(bytes_per_sample / 4) int32 words
 #
-# Samples are int32 so the same format handles plain int8 streams, 16-bit
-# packed add inputs, and any future wider-width op without a format change.
-# The Verilator testbench reads the same format via loadVectorFile().
+# Each logical sample is a packed bus value for one cycle. Within a sample the
+# bytes are little-endian: byte 0 is the least-significant 8 bits of word 0,
+# byte 1 the next 8 bits, etc. `data_in[i*8 +: 8]` / `data_out[i*8 +: 8]`
+# therefore correspond to channel i.
 GOLDEN_FILE_MAGIC = b"NN2V"
-GOLDEN_FILE_VERSION = 1
-GOLDEN_FILE_HEADER_STRUCT = struct.Struct("<4sIII")
+GOLDEN_FILE_VERSION = 2
+GOLDEN_FILE_HEADER_STRUCT = struct.Struct("<4sIIII")
 
 
-def write_golden_vector_file(values: Sequence[Sequence[int]], file_path: Path) -> None:
+def bus_bytes_for_bits(bus_bits: int, *, context: str) -> int:
+    if not isinstance(bus_bits, int) or isinstance(bus_bits, bool):
+        raise GoldenGenerationError(f"{context} must be an integer, got {bus_bits!r}.")
+    if bus_bits <= 0 or bus_bits % 8 != 0:
+        raise GoldenGenerationError(
+            f"{context} must be a positive multiple of 8, got {bus_bits}."
+        )
+    return bus_bits // 8
+
+
+def int32_words_for_bus_bytes(bus_bytes: int) -> int:
+    return (bus_bytes + 3) // 4
+
+
+def channel_bus_bits_from_shape(shape: Sequence[int], *, context: str) -> int:
+    resolved = coerce_shape(shape, context)
+    if len(resolved) < 2:
+        raise GoldenGenerationError(
+            f"{context} must have at least batch and channel dimensions, got {resolved}."
+        )
+    return int(resolved[1]) * 8
+
+
+def normalize_layer_bus_width_bits(
+    *,
+    module_id: str,
+    field_name: str,
+    stored_value: Any,
+    expected_value: int,
+    legacy_value: int,
+) -> int:
+    if stored_value is None:
+        return expected_value
+    actual_value = coerce_int(stored_value, f"{module_id}.{field_name}")
+    if actual_value in {expected_value, legacy_value}:
+        return expected_value
+    raise GoldenGenerationError(
+        f"Layer '{module_id}' field '{field_name}' must be {expected_value} "
+        f"(channel-packed) or legacy {legacy_value}, got {actual_value}."
+    )
+
+
+def pack_word_to_signed_int32(word: int) -> int:
+    return word - 2**32 if word >= 2**31 else word
+
+
+def tensor_to_bus_samples(
+    tensor: torch.Tensor,
+    *,
+    context: str,
+) -> list[list[int]]:
+    quantized = quantize_tensor_to_int8_range(tensor).to(torch.int32)
+    if quantized.ndim != 4 or int(quantized.shape[0]) != 1:
+        raise GoldenGenerationError(
+            f"{context} must have shape [1, C, H, W], got {list(quantized.shape)}."
+        )
+    _, channels, height, width = quantized.shape
+    flattened = (
+        quantized.squeeze(0)
+        .permute(1, 2, 0)
+        .contiguous()
+        .reshape(int(height) * int(width), int(channels))
+    )
+    return [[int(value) for value in sample] for sample in flattened.tolist()]
+
+
+def pack_bus_sample_words(
+    sample_bytes: Sequence[int],
+    bus_bits: int,
+    *,
+    context: str,
+) -> list[int]:
+    bus_bytes = bus_bytes_for_bits(bus_bits, context=context)
+    if len(sample_bytes) != bus_bytes:
+        raise GoldenGenerationError(
+            f"{context} must provide exactly {bus_bytes} bytes for bus_bits={bus_bits}, "
+            f"got {len(sample_bytes)}."
+        )
+
+    words: list[int] = []
+    for byte_start in range(0, bus_bytes, 4):
+        word = 0
+        for byte_offset, value in enumerate(sample_bytes[byte_start : byte_start + 4]):
+            word |= (int(value) & 0xFF) << (8 * byte_offset)
+        words.append(pack_word_to_signed_int32(word))
+    return words
+
+
+def pack_tensor_vectors_to_bus_words(
+    tensors: Sequence[torch.Tensor],
+    bus_bits: int,
+    *,
+    context: str,
+) -> list[list[int]]:
+    packed_vectors: list[list[int]] = []
+    for vector_index, tensor in enumerate(tensors):
+        vector_words: list[int] = []
+        for sample_index, sample_bytes in enumerate(
+            tensor_to_bus_samples(tensor, context=f"{context} vector[{vector_index}]")
+        ):
+            vector_words.extend(
+                pack_bus_sample_words(
+                    sample_bytes,
+                    bus_bits,
+                    context=f"{context} vector[{vector_index}] sample[{sample_index}]",
+                )
+            )
+        packed_vectors.append(vector_words)
+    return packed_vectors
+
+
+def pack_paired_tensors_to_bus_words(
+    lhs_tensors: Sequence[torch.Tensor],
+    rhs_tensors: Sequence[torch.Tensor],
+    bus_bits: int,
+    *,
+    context: str,
+) -> list[list[int]]:
+    if len(lhs_tensors) != len(rhs_tensors):
+        raise GoldenGenerationError(
+            f"{context} requires matching vector counts, got {len(lhs_tensors)} and {len(rhs_tensors)}."
+        )
+
+    packed_vectors: list[list[int]] = []
+    for vector_index, (lhs_tensor, rhs_tensor) in enumerate(zip(lhs_tensors, rhs_tensors)):
+        lhs_samples = tensor_to_bus_samples(
+            lhs_tensor,
+            context=f"{context} lhs vector[{vector_index}]",
+        )
+        rhs_samples = tensor_to_bus_samples(
+            rhs_tensor,
+            context=f"{context} rhs vector[{vector_index}]",
+        )
+        if len(lhs_samples) != len(rhs_samples):
+            raise GoldenGenerationError(
+                f"{context} vector[{vector_index}] requires matching sample counts, "
+                f"got {len(lhs_samples)} and {len(rhs_samples)}."
+            )
+
+        vector_words: list[int] = []
+        for sample_index, (lhs_sample, rhs_sample) in enumerate(zip(lhs_samples, rhs_samples)):
+            vector_words.extend(
+                pack_bus_sample_words(
+                    [*lhs_sample, *rhs_sample],
+                    bus_bits,
+                    context=f"{context} vector[{vector_index}] sample[{sample_index}]",
+                )
+            )
+        packed_vectors.append(vector_words)
+    return packed_vectors
+
+
+def write_golden_vector_file(
+    values: Sequence[Sequence[int]],
+    file_path: Path,
+    bus_bits: int,
+) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    bytes_per_sample = bus_bytes_for_bits(bus_bits, context=f"{file_path}.bus_bits")
+    words_per_sample = int32_words_for_bus_bytes(bytes_per_sample)
     num_vectors = len(values)
-    samples_per_vector = len(values[0]) if num_vectors > 0 else 0
+    samples_per_vector = len(values[0]) // words_per_sample if num_vectors > 0 else 0
     for vector in values:
-        if len(vector) != samples_per_vector:
+        if len(vector) % words_per_sample != 0:
+            raise ValueError(
+                f"Golden vector file '{file_path}' requires rows to be a multiple of "
+                f"{words_per_sample} int32 words per bus sample; found {len(vector)} words."
+            )
+        if len(vector) != samples_per_vector * words_per_sample:
             raise ValueError(
                 f"Golden vector file '{file_path}' requires every row to have "
-                f"{samples_per_vector} samples; found {len(vector)}."
+                f"{samples_per_vector * words_per_sample} int32 words "
+                f"({samples_per_vector} samples at {words_per_sample} words/sample); "
+                f"found {len(vector)}."
             )
 
     header = GOLDEN_FILE_HEADER_STRUCT.pack(
@@ -314,14 +482,15 @@ def write_golden_vector_file(values: Sequence[Sequence[int]], file_path: Path) -
         GOLDEN_FILE_VERSION,
         num_vectors,
         samples_per_vector,
+        bytes_per_sample,
     )
 
-    total_samples = num_vectors * samples_per_vector
+    total_words = num_vectors * samples_per_vector * words_per_sample
     flat_array = array.array("i")
     flat_array.extend(int(v) for vector in values for v in vector)
-    if len(flat_array) != total_samples:
+    if len(flat_array) != total_words:
         raise ValueError(
-            f"Expected {total_samples} samples in '{file_path}', "
+            f"Expected {total_words} int32 words in '{file_path}', "
             f"got {len(flat_array)}."
         )
 
@@ -330,12 +499,16 @@ def write_golden_vector_file(values: Sequence[Sequence[int]], file_path: Path) -
         flat_array.tofile(fh)
 
 
-def read_golden_vector_file(file_path: Path) -> list[list[int]]:
+def read_golden_vector_file(file_path: Path, bus_bits: int) -> list[list[int]]:
+    expected_bytes_per_sample = bus_bytes_for_bits(
+        bus_bits,
+        context=f"{file_path}.bus_bits",
+    )
     with file_path.open("rb") as fh:
         header_bytes = fh.read(GOLDEN_FILE_HEADER_STRUCT.size)
         if len(header_bytes) != GOLDEN_FILE_HEADER_STRUCT.size:
             raise GoldenGenerationError(f"Golden vector file '{file_path}' is truncated.")
-        magic, version, num_vectors, samples_per_vector = GOLDEN_FILE_HEADER_STRUCT.unpack(header_bytes)
+        magic, version, num_vectors, samples_per_vector, bytes_per_sample = GOLDEN_FILE_HEADER_STRUCT.unpack(header_bytes)
         if magic != GOLDEN_FILE_MAGIC:
             raise GoldenGenerationError(
                 f"Golden vector file '{file_path}' has wrong magic: {magic!r}."
@@ -344,14 +517,21 @@ def read_golden_vector_file(file_path: Path) -> list[list[int]]:
             raise GoldenGenerationError(
                 f"Golden vector file '{file_path}' version {version} unsupported."
             )
+        if bytes_per_sample != expected_bytes_per_sample:
+            raise GoldenGenerationError(
+                f"Golden vector file '{file_path}' bytes_per_sample={bytes_per_sample} "
+                f"does not match bus_bits={bus_bits} ({expected_bytes_per_sample} bytes)."
+            )
 
+        words_per_sample = int32_words_for_bus_bytes(bytes_per_sample)
         flat = array.array("i")
-        flat.fromfile(fh, num_vectors * samples_per_vector)
+        flat.fromfile(fh, num_vectors * samples_per_vector * words_per_sample)
 
     result: list[list[int]] = []
     for v in range(num_vectors):
-        start = v * samples_per_vector
-        result.append(list(flat[start : start + samples_per_vector]))
+        start = v * samples_per_vector * words_per_sample
+        stop = start + samples_per_vector * words_per_sample
+        result.append(list(flat[start:stop]))
     return result
 
 
@@ -625,8 +805,16 @@ def build_legacy_pipeline_ir_payload(
     stream_shape = [1, 1, 1, len(input_stream)]
 
     goldin_path, goldout_path = get_golden_artifact_paths(repo_root, module_id)
-    write_golden_vector_file([list(input_stream)], goldin_path)
-    write_golden_vector_file([list(output_stream)], goldout_path)
+    write_golden_vector_file(
+        [list(input_stream)],
+        goldin_path,
+        bus_bits=int(checkpoint["input_width_bits"]),
+    )
+    write_golden_vector_file(
+        [list(output_stream)],
+        goldout_path,
+        bus_bits=int(checkpoint["output_width_bits"]),
+    )
 
     return {
         "model_name": checkpoint["model_name"],
@@ -692,7 +880,6 @@ def build_fx_pipeline_ir_payload(
     input_stream = build_deterministic_input_stream(first_input_shape)
     captured_outputs = capture_golden_outputs(traced_model, trace_layers, layers, input_stream)
     operation_map, input_name = extract_operation_map(checkpoint)
-    input_vectors = [tensor_to_int8_list(vector) for vector in input_stream]
     layer_payloads: list[dict[str, Any]] = []
 
     for index, trace_layer in enumerate(trace_layers):
@@ -714,6 +901,37 @@ def build_fx_pipeline_ir_payload(
                 f"Layer '{module_id}' num_weights={expected_num_weights} but serialized {len(weight_values)} values."
             )
 
+        expected_input_width_bits = (
+            2
+            * channel_bus_bits_from_shape(
+                metadata["input_shape"],
+                context=f"{module_id}.input_shape",
+            )
+            if op_type == "add"
+            else channel_bus_bits_from_shape(
+                metadata["input_shape"],
+                context=f"{module_id}.input_shape",
+            )
+        )
+        expected_output_width_bits = channel_bus_bits_from_shape(
+            metadata["output_shape"],
+            context=f"{module_id}.output_shape",
+        )
+        input_width_bits = normalize_layer_bus_width_bits(
+            module_id=module_id,
+            field_name="input_width_bits",
+            stored_value=metadata.get("input_width_bits"),
+            expected_value=expected_input_width_bits,
+            legacy_value=16 if op_type == "add" else 8,
+        )
+        output_width_bits = normalize_layer_bus_width_bits(
+            module_id=module_id,
+            field_name="output_width_bits",
+            stored_value=metadata.get("output_width_bits"),
+            expected_value=expected_output_width_bits,
+            legacy_value=8,
+        )
+
         layer_input_vectors = resolve_golden_inputs(
             module_id=module_id,
             op_type=op_type,
@@ -721,8 +939,9 @@ def build_fx_pipeline_ir_payload(
             trace_index=index,
             operation_map=operation_map,
             input_name=input_name,
-            input_vectors=input_vectors,
+            input_tensors=input_stream,
             captured_outputs=captured_outputs,
+            input_width_bits=input_width_bits,
         )
         layer_payload = {
             "module_id": module_id,
@@ -743,14 +962,8 @@ def build_fx_pipeline_ir_payload(
                 else PIPELINE_LATENCY_CYCLES[op_type]
             ),
             "clock_period_ns": 20,
-            "input_width_bits": coerce_int(
-                metadata.get("input_width_bits", 16 if op_type == "add" else 8),
-                f"{module_id}.input_width_bits",
-            ),
-            "output_width_bits": coerce_int(
-                metadata.get("output_width_bits", 8),
-                f"{module_id}.output_width_bits",
-            ),
+            "input_width_bits": input_width_bits,
+            "output_width_bits": output_width_bits,
             **SIGNAL_LITERALS,
         }
         if op_type == "conv2d" and not bias_values:
@@ -760,8 +973,20 @@ def build_fx_pipeline_ir_payload(
             layer_payload["rhs_scale_factor"] = float(metadata["rhs_scale_factor"])
 
         goldin_path, goldout_path = get_golden_artifact_paths(repo_root, module_id)
-        write_golden_vector_file(layer_input_vectors, goldin_path)
-        write_golden_vector_file(captured_outputs[module_id], goldout_path)
+        write_golden_vector_file(
+            layer_input_vectors,
+            goldin_path,
+            bus_bits=layer_payload["input_width_bits"],
+        )
+        write_golden_vector_file(
+            pack_tensor_vectors_to_bus_words(
+                captured_outputs[module_id],
+                layer_payload["output_width_bits"],
+                context=f"{module_id}.goldout",
+            ),
+            goldout_path,
+            bus_bits=layer_payload["output_width_bits"],
+        )
         layer_payload["golden_inputs_path"] = goldin_path.resolve().as_posix()
         layer_payload["golden_outputs_path"] = goldout_path.resolve().as_posix()
 
@@ -884,8 +1109,8 @@ def capture_golden_outputs(
     trace_layers: Sequence[Mapping[str, str]],
     layers: Mapping[str, Mapping[str, Any]],
     input_stream: Sequence[torch.Tensor],
-) -> dict[str, list[list[int]]]:
-    outputs: dict[str, list[list[int]]] = {
+) -> dict[str, list[torch.Tensor]]:
+    outputs: dict[str, list[torch.Tensor]] = {
         trace_layer["module_id"]: [] for trace_layer in trace_layers
     }
 
@@ -900,13 +1125,14 @@ def capture_golden_outputs(
             value = interpreter.captured_outputs[node_name]
             if not isinstance(value, torch.Tensor):
                 raise GoldenGenerationError(f"fx node '{node_name}' returned a non-tensor output.")
-            actual_shape = [int(dim) for dim in quantize_tensor_to_int8_range(value).shape]
+            quantized_value = quantize_tensor_to_int8_range(value)
+            actual_shape = [int(dim) for dim in quantized_value.shape]
             expected_shape = coerce_shape(layers[module_id]["output_shape"], f"{module_id}.output_shape")
             if actual_shape != expected_shape:
                 raise GoldenGenerationError(
                     f"Layer '{module_id}' produced shape {actual_shape}, expected {expected_shape}."
                 )
-            outputs[module_id].append(tensor_to_int8_list(value))
+            outputs[module_id].append(quantized_value.clone())
 
     return outputs
 
@@ -982,39 +1208,18 @@ def pack_int8_pair(lhs: int, rhs: int) -> int:
     return packed
 
 
-def pack_paired_vectors(
-    lhs_vectors: Sequence[Sequence[int]],
-    rhs_vectors: Sequence[Sequence[int]],
-) -> list[list[int]]:
-    if len(lhs_vectors) != len(rhs_vectors):
-        raise GoldenGenerationError(
-            f"Packed add inputs require matching vector counts, got {len(lhs_vectors)} and {len(rhs_vectors)}."
-        )
-
-    packed_vectors: list[list[int]] = []
-    for lhs_vector, rhs_vector in zip(lhs_vectors, rhs_vectors):
-        if len(lhs_vector) != len(rhs_vector):
-            raise GoldenGenerationError(
-                f"Packed add inputs require matching element counts, got {len(lhs_vector)} and {len(rhs_vector)}."
-            )
-        packed_vectors.append(
-            [pack_int8_pair(lhs_value, rhs_value) for lhs_value, rhs_value in zip(lhs_vector, rhs_vector)]
-        )
-    return packed_vectors
-
-
-def resolve_vector_ref(
+def resolve_tensor_ref(
     ref: str,
     *,
     input_name: str,
-    input_vectors: Sequence[Sequence[int]],
-    captured_outputs: Mapping[str, list[list[int]]],
-) -> list[list[int]]:
+    input_tensors: Sequence[torch.Tensor],
+    captured_outputs: Mapping[str, list[torch.Tensor]],
+) -> list[torch.Tensor]:
     if ref == input_name:
-        return [list(vector) for vector in input_vectors]
+        return [tensor.clone() for tensor in input_tensors]
     if ref not in captured_outputs:
-        raise GoldenGenerationError(f"Checkpoint graph references unknown vector source '{ref}'.")
-    return captured_outputs[ref]
+        raise GoldenGenerationError(f"Checkpoint graph references unknown tensor source '{ref}'.")
+    return [tensor.clone() for tensor in captured_outputs[ref]]
 
 
 def resolve_golden_inputs(
@@ -1025,8 +1230,9 @@ def resolve_golden_inputs(
     trace_index: int,
     operation_map: Mapping[str, Mapping[str, Any]],
     input_name: str,
-    input_vectors: Sequence[Sequence[int]],
-    captured_outputs: Mapping[str, list[list[int]]],
+    input_tensors: Sequence[torch.Tensor],
+    captured_outputs: Mapping[str, list[torch.Tensor]],
+    input_width_bits: int,
 ) -> list[list[int]]:
     operation = operation_map.get(module_id)
     if operation is None:
@@ -1035,32 +1241,49 @@ def resolve_golden_inputs(
                 f"Layer '{module_id}' requires graph wiring metadata to build packed add inputs."
             )
         if trace_index == 0:
-            return [list(vector) for vector in input_vectors]
-        return captured_outputs[trace_layers[trace_index - 1]["module_id"]]
+            return pack_tensor_vectors_to_bus_words(
+                input_tensors,
+                input_width_bits,
+                context=f"{module_id}.goldin",
+            )
+        return pack_tensor_vectors_to_bus_words(
+            captured_outputs[trace_layers[trace_index - 1]["module_id"]],
+            input_width_bits,
+            context=f"{module_id}.goldin",
+        )
 
     if op_type == "add":
         lhs = require_string(operation, "lhs", f"operation '{module_id}'")
         rhs = require_string(operation, "rhs", f"operation '{module_id}'")
-        lhs_vectors = resolve_vector_ref(
+        lhs_tensors = resolve_tensor_ref(
             lhs,
             input_name=input_name,
-            input_vectors=input_vectors,
+            input_tensors=input_tensors,
             captured_outputs=captured_outputs,
         )
-        rhs_vectors = resolve_vector_ref(
+        rhs_tensors = resolve_tensor_ref(
             rhs,
             input_name=input_name,
-            input_vectors=input_vectors,
+            input_tensors=input_tensors,
             captured_outputs=captured_outputs,
         )
-        return pack_paired_vectors(lhs_vectors, rhs_vectors)
+        return pack_paired_tensors_to_bus_words(
+            lhs_tensors,
+            rhs_tensors,
+            input_width_bits,
+            context=f"{module_id}.goldin",
+        )
 
     input_ref = require_string(operation, "input", f"operation '{module_id}'")
-    return resolve_vector_ref(
-        input_ref,
-        input_name=input_name,
-        input_vectors=input_vectors,
-        captured_outputs=captured_outputs,
+    return pack_tensor_vectors_to_bus_words(
+        resolve_tensor_ref(
+            input_ref,
+            input_name=input_name,
+            input_tensors=input_tensors,
+            captured_outputs=captured_outputs,
+        ),
+        input_width_bits,
+        context=f"{module_id}.goldin",
     )
 
 

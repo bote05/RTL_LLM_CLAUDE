@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from scripts.golden_impl import (
     int8_to_hex,
     is_absolute_posix_path,
     read_golden_vector_file,
+    write_golden_vector_file,
     write_pipeline_ir,
     write_signed_int8_hex,
 )
@@ -124,6 +126,25 @@ def test_write_signed_int8_hex_writes_one_uppercase_value_per_line(tmp_path: Pat
     assert hex_path.read_text(encoding="utf8") == "FF\n00\n7F\n80\n"
 
 
+def test_golden_vector_files_store_bus_bytes_per_sample_in_v2_header(tmp_path: Path) -> None:
+    file_path = tmp_path / "packed.goldin"
+    write_golden_vector_file([[0x04030201, 0x00000005]], file_path, bus_bits=40)
+
+    with file_path.open("rb") as fh:
+        header = fh.read(struct.calcsize("<4sIIII"))
+
+    magic, version, num_vectors, samples_per_vector, bytes_per_sample = struct.unpack(
+        "<4sIIII",
+        header,
+    )
+    assert magic == b"NN2V"
+    assert version == 2
+    assert num_vectors == 1
+    assert samples_per_vector == 1
+    assert bytes_per_sample == 5
+    assert read_golden_vector_file(file_path, bus_bits=40) == [[0x04030201, 0x00000005]]
+
+
 def test_fold_batch_norm_into_conv_matches_the_standard_formula() -> None:
     weight = torch.tensor([[[[2.0]]]])
     bias = torch.tensor([1.0])
@@ -162,8 +183,14 @@ def test_build_pipeline_ir_payload_keeps_legacy_toy_flow_working(tmp_path: Path)
     assert layer["ready_in_signal"] == "ready_in"
     assert layer["data_in_signal"] == "data_in"
     assert layer["data_out_signal"] == "data_out"
-    assert read_golden_vector_file(Path(layer["golden_inputs_path"])) == [[0, 1, 2, 7]]
-    assert read_golden_vector_file(Path(layer["golden_outputs_path"])) == [[1, 3, 5, 15]]
+    assert read_golden_vector_file(
+        Path(layer["golden_inputs_path"]),
+        bus_bits=layer["input_width_bits"],
+    ) == [[0, 1, 2, 7]]
+    assert read_golden_vector_file(
+        Path(layer["golden_outputs_path"]),
+        bus_bits=layer["output_width_bits"],
+    ) == [[1, 3, 5, 15]]
     assert Path(layer["weights_path"]).exists()
     assert Path(layer["bias_path"]).exists()
 
@@ -193,8 +220,14 @@ def test_build_pipeline_ir_payload_captures_fx_layers_in_topological_order(tmp_p
     layer_goldens: dict[str, dict[str, list[list[int]]]] = {}
     for layer in pipeline_ir["layers"]:
         layer_goldens[layer["module_id"]] = {
-            "inputs": read_golden_vector_file(Path(layer["golden_inputs_path"])),
-            "outputs": read_golden_vector_file(Path(layer["golden_outputs_path"])),
+            "inputs": read_golden_vector_file(
+                Path(layer["golden_inputs_path"]),
+                bus_bits=layer["input_width_bits"],
+            ),
+            "outputs": read_golden_vector_file(
+                Path(layer["golden_outputs_path"]),
+                bus_bits=layer["output_width_bits"],
+            ),
         }
 
     for index, layer in enumerate(pipeline_ir["layers"]):

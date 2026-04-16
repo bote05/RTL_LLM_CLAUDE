@@ -59,7 +59,7 @@ async function resetOutput(): Promise<void> {
     }
   }
 
-  for (const fileName of ["layer_ir.json", "pipeline_state.json", "golden_vectors.json"]) {
+  for (const fileName of ["layer_ir.json", "layer_ir.json.checkpoint", "pipeline_state.json", "golden_vectors.json"]) {
     await rm(path.join(outputRoot, fileName), { force: true });
   }
 }
@@ -68,6 +68,16 @@ async function writeFixture(relativeFixturePath: string, destinationPath: string
   const raw = await readFile(path.join(repoRoot, "test", "fixtures", relativeFixturePath), "utf8");
   await writeFile(destinationPath, raw, "utf8");
   return JSON.parse(raw);
+}
+
+async function writePipelineIrFixture(): Promise<unknown> {
+  const pipelineIr = await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+  await writeFile(
+    path.join(outputRoot, "layer_ir.json.checkpoint"),
+    `${path.resolve("checkpoint.pth")}\n`,
+    "utf8",
+  );
+  return pipelineIr;
 }
 
 function successResult(structured_output: unknown): SDKResultMessage {
@@ -120,7 +130,7 @@ afterEach(async () => {
 
 describe("runPipeline", () => {
   it("uses an existing layer_ir.json without invoking Cartographer", async () => {
-    const pipelineIr = await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    const pipelineIr = await writePipelineIrFixture();
     const module = await writeFixture("verilog_module.json", path.join(rtlDir, "unit_module.meta.json"));
     await writeFile(path.join(rtlDir, "unit_module.v"), (module as { verilog_source: string }).verilog_source, "utf8");
     const verifPass = JSON.parse(
@@ -174,7 +184,7 @@ describe("runPipeline", () => {
   });
 
   it("runs the Surgeon repair path after a failed verification", async () => {
-    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
@@ -216,7 +226,7 @@ describe("runPipeline", () => {
   });
 
   it("runs the Surgeon repair path after a failed yosys synthesis report", async () => {
-    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
@@ -260,7 +270,7 @@ describe("runPipeline", () => {
   });
 
   it("treats fmax_mhz=0 as a pass when Yosys succeeded (Sky130 does not always emit a delay)", async () => {
-    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
@@ -294,7 +304,7 @@ describe("runPipeline", () => {
   });
 
   it("routes Fmax-below-target to Surgeon with missing_pipeline_register failure class", async () => {
-    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
@@ -330,7 +340,7 @@ describe("runPipeline", () => {
   });
 
   it("blocks resume when fail_retry has no prior verification result", async () => {
-    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    await writePipelineIrFixture();
     await writeFile(
       path.join(outputRoot, "pipeline_state.json"),
       JSON.stringify({
@@ -356,7 +366,7 @@ describe("runPipeline", () => {
   });
 
   it("reloads resume state before completing", async () => {
-    await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
+    await writePipelineIrFixture();
     await writeFile(
       path.join(outputRoot, "pipeline_state.json"),
       JSON.stringify({

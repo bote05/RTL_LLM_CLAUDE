@@ -47,18 +47,30 @@ Passed to the testbench as `argv[1]`. Assayer generates it. Shape:
   "ready_in_signal": "ready_in",
   "data_in_signal": "data_in",
   "data_out_signal": "data_out",
+  "bus_bytes_per_sample": 1,
   "input_width_bits": 8,
   "output_width_bits": 8,
   "pipeline_latency_cycles": 3,
   "clock_period_ns": 20.0,
-  "golden_inputs_path": "/abs/path/to/block_1_conv1.inputs.json",
-  "golden_outputs_path": "/abs/path/to/block_1_conv1.outputs.json",
+  "golden_inputs_path": "/abs/path/to/block_1_conv1.goldin",
+  "golden_outputs_path": "/abs/path/to/block_1_conv1.goldout",
   "results_path": "/abs/path/to/block_1_conv1.results.json",
   "testbench_template_path": "/abs/path/to/tb/static_verilator_tb.cpp"
 }
 ```
 
-The golden input/output files are JSON arrays of arrays of integers (signed INT8 values as numbers). One inner array per test vector.
+`bus_bytes_per_sample` is the explicit input bus width in bytes and must equal `input_width_bits / 8`.
+
+The golden input/output files use the binary NN2V v2 format:
+
+- `magic`: ASCII `NN2V`
+- `version`: uint32 LE = `2`
+- `num_vectors`: uint32 LE
+- `samples_per_vector`: uint32 LE
+- `bytes_per_sample`: uint32 LE
+- payload: `num_vectors * samples_per_vector * ceil(bytes_per_sample / 4)` little-endian int32 words
+
+Each logical sample is a packed bus value for one cycle. The bench uses `bytes_per_sample` from the header when unpacking channels and compares results per int8 channel, not per packed word.
 
 ## Results schema
 

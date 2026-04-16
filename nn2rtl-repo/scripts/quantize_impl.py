@@ -268,6 +268,14 @@ def _quantize_bias_tensor(
     return _flatten_int_tensor(quantized, torch.int32)
 
 
+def _channel_bus_width_bits_from_shape(shape: list[int], *, context: str) -> int:
+    if len(shape) < 2:
+        raise CheckpointValidationError(
+            f"{context} must have at least batch and channel dimensions, got {shape}."
+        )
+    return int(shape[1]) * DEFAULT_INPUT_WIDTH_BITS
+
+
 def _serialize_conv_layer(
     stats: LayerCalibrationStats,
     weight: torch.Tensor,
@@ -275,6 +283,14 @@ def _serialize_conv_layer(
 ) -> dict[str, Any]:
     weight_int8, weight_scale = _quantize_weight_tensor(weight)
     input_scale = _safe_scale(stats.input_max_abs)
+    input_width_bits = _channel_bus_width_bits_from_shape(
+        list(stats.input_shape),
+        context="conv2d.input_shape",
+    )
+    output_width_bits = _channel_bus_width_bits_from_shape(
+        list(stats.output_shape),
+        context="conv2d.output_shape",
+    )
 
     return {
         "op_type": "conv2d",
@@ -286,8 +302,8 @@ def _serialize_conv_layer(
         "num_weights": int(weight.numel()),
         "scale_factor": float(weight_scale),
         "zero_point": 0,
-        "input_width_bits": DEFAULT_INPUT_WIDTH_BITS,
-        "output_width_bits": DEFAULT_OUTPUT_WIDTH_BITS,
+        "input_width_bits": input_width_bits,
+        "output_width_bits": output_width_bits,
     }
 
 
@@ -302,6 +318,14 @@ def _serialize_activation_layer(
     if op_type not in {"add", "relu"}:
         raise ValueError(f"Unsupported activation op_type: {op_type}")
 
+    input_bus_width_bits = _channel_bus_width_bits_from_shape(
+        list(stats.input_shape),
+        context=f"{op_type}.input_shape",
+    )
+    output_bus_width_bits = _channel_bus_width_bits_from_shape(
+        list(stats.output_shape),
+        context=f"{op_type}.output_shape",
+    )
     payload = {
         "op_type": op_type,
         "input_shape": list(stats.input_shape),
@@ -310,10 +334,8 @@ def _serialize_activation_layer(
         "num_weights": 0,
         "scale_factor": float(scale_factor),
         "zero_point": 0,
-        "input_width_bits": (
-            DEFAULT_INPUT_WIDTH_BITS * 2 if op_type == "add" else DEFAULT_INPUT_WIDTH_BITS
-        ),
-        "output_width_bits": DEFAULT_OUTPUT_WIDTH_BITS,
+        "input_width_bits": input_bus_width_bits * 2 if op_type == "add" else input_bus_width_bits,
+        "output_width_bits": output_bus_width_bits,
     }
     if op_type == "add":
         if lhs_scale_factor is None or rhs_scale_factor is None:
@@ -734,11 +756,33 @@ def _validate_layer_payload(module_id: str, layer: Any) -> dict[str, Any]:
         raise CheckpointValidationError(
             f"Checkpoint layer '{module_id}' field 'zero_point' must be 0."
         )
+    expected_output_width_bits = _channel_bus_width_bits_from_shape(
+        [int(dim) for dim in output_shape],
+        context=f"{module_id}.output_shape",
+    )
     expected_input_width_bits = (
+        _channel_bus_width_bits_from_shape(
+            [int(dim) for dim in input_shape],
+            context=f"{module_id}.input_shape",
+        )
+        * (2 if op_type == "add" else 1)
+    )
+    actual_input_width_bits = _require_int(layer, "input_width_bits")
+    actual_output_width_bits = _require_int(layer, "output_width_bits")
+    legacy_input_width_bits = (
         DEFAULT_INPUT_WIDTH_BITS * 2 if op_type == "add" else DEFAULT_INPUT_WIDTH_BITS
     )
-    _require_int(layer, "input_width_bits", expected=expected_input_width_bits)
-    _require_int(layer, "output_width_bits", expected=DEFAULT_OUTPUT_WIDTH_BITS)
+    legacy_output_width_bits = DEFAULT_OUTPUT_WIDTH_BITS
+    if actual_input_width_bits not in {expected_input_width_bits, legacy_input_width_bits}:
+        raise CheckpointValidationError(
+            f"Checkpoint field 'input_width_bits' must be {expected_input_width_bits} "
+            f"(channel-packed) or legacy {legacy_input_width_bits}, got {actual_input_width_bits}."
+        )
+    if actual_output_width_bits not in {expected_output_width_bits, legacy_output_width_bits}:
+        raise CheckpointValidationError(
+            f"Checkpoint field 'output_width_bits' must be {expected_output_width_bits} "
+            f"(channel-packed) or legacy {legacy_output_width_bits}, got {actual_output_width_bits}."
+        )
     scale_factor = _require_number(layer, "scale_factor")
     if scale_factor <= 0.0:
         raise CheckpointValidationError(
@@ -760,7 +804,7 @@ def _validate_layer_payload(module_id: str, layer: Any) -> dict[str, Any]:
         "scale_factor": float(scale_factor),
         "zero_point": 0,
         "input_width_bits": expected_input_width_bits,
-        "output_width_bits": DEFAULT_OUTPUT_WIDTH_BITS,
+        "output_width_bits": expected_output_width_bits,
     }
 
     if op_type == "conv2d":

@@ -42,29 +42,55 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function wordsPerSample(bytesPerSample: number): number {
+  return Math.ceil(bytesPerSample / 4);
+}
+
+function packBusSamples(samples: number[][]): number[] {
+  return samples.flatMap((sample) => {
+    const packed = new Array(wordsPerSample(sample.length)).fill(0);
+    sample.forEach((value, byteIndex) => {
+      const wordIndex = Math.floor(byteIndex / 4);
+      const shift = (byteIndex % 4) * 8;
+      packed[wordIndex] |= (value & 0xFF) << shift;
+    });
+    return packed.map((word) => word | 0);
+  });
+}
+
 // Binary vector file format matches scripts/golden_impl.py's
 // write_golden_vector_file + tb/static_verilator_tb.cpp's loadVectorFile:
-//   4 bytes ASCII "NN2V", uint32 LE version=1, uint32 num_vectors,
-//   uint32 samples_per_vector, then num*samples int32 LE samples.
+//   4 bytes ASCII "NN2V", uint32 LE version=2, uint32 num_vectors,
+//   uint32 samples_per_vector, uint32 bytes_per_sample, then
+//   num_vectors * samples_per_vector * ceil(bytes_per_sample / 4)
+//   int32 LE packed-word payload.
 async function writeGoldenVectorFile(
   filePath: string,
   vectors: number[][],
+  bytesPerSample: number,
 ): Promise<void> {
   const numVectors = vectors.length;
-  const samplesPerVector = numVectors > 0 ? vectors[0].length : 0;
+  const sampleWords = wordsPerSample(bytesPerSample);
+  const samplesPerVector = numVectors > 0 ? vectors[0].length / sampleWords : 0;
   for (const row of vectors) {
-    if (row.length !== samplesPerVector) {
+    if (row.length % sampleWords !== 0) {
       throw new Error(
-        `writeGoldenVectorFile: row length mismatch, expected ${samplesPerVector} got ${row.length}`,
+        `writeGoldenVectorFile: row length ${row.length} is not a multiple of ${sampleWords} words/sample`,
+      );
+    }
+    if (row.length !== samplesPerVector * sampleWords) {
+      throw new Error(
+        `writeGoldenVectorFile: row length mismatch, expected ${samplesPerVector * sampleWords} got ${row.length}`,
       );
     }
   }
-  const buf = Buffer.alloc(16 + numVectors * samplesPerVector * 4);
+  const buf = Buffer.alloc(20 + numVectors * samplesPerVector * sampleWords * 4);
   buf.write("NN2V", 0, 4, "ascii");
-  buf.writeUInt32LE(1, 4);
+  buf.writeUInt32LE(2, 4);
   buf.writeUInt32LE(numVectors, 8);
   buf.writeUInt32LE(samplesPerVector, 12);
-  let offset = 16;
+  buf.writeUInt32LE(bytesPerSample, 16);
+  let offset = 20;
   for (const row of vectors) {
     for (const sample of row) {
       buf.writeInt32LE(sample | 0, offset);
@@ -93,6 +119,7 @@ async function writeSidecar(
     ready_in_signal: "ready_in",
     data_in_signal: "data_in",
     data_out_signal: "data_out",
+    bus_bytes_per_sample: 1,
     input_width_bits: 8,
     output_width_bits: 8,
     pipeline_latency_cycles: pipelineLatencyCycles,
@@ -104,8 +131,16 @@ async function writeSidecar(
     ...overrides,
   };
 
-  await writeGoldenVectorFile(sidecar.golden_inputs_path, [inputs]);
-  await writeGoldenVectorFile(sidecar.golden_outputs_path, [outputs]);
+  await writeGoldenVectorFile(
+    sidecar.golden_inputs_path,
+    [inputs],
+    Number(sidecar.bus_bytes_per_sample),
+  );
+  await writeGoldenVectorFile(
+    sidecar.golden_outputs_path,
+    [outputs],
+    Math.ceil(Number(sidecar.output_width_bits) / 8),
+  );
   await writeJson(sidecarPath, sidecar);
   return sidecarPath;
 }
@@ -156,6 +191,36 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       got: [1, 2, 7],
       max_error: 0,
     });
+  });
+
+  it("packs and unpacks 32-bit multi-channel bus samples correctly", async () => {
+    const tempDir = await makeTempDir("nn2rtl-verilator-wide32-");
+    const verilog = await loadFixture(verilatorFixtureRoot, "stream_wide32_passthrough.v");
+    const channelSamples = [
+      [1, -2, 3, -4],
+      [5, 6, -7, 8],
+    ];
+    const packedSamples = packBusSamples(channelSamples);
+    const sidecarPath = await writeSidecar(
+      tempDir,
+      "stream_wide32_passthrough",
+      packedSamples,
+      packedSamples,
+      1,
+      {
+        bus_bytes_per_sample: 4,
+        input_width_bits: 32,
+        output_width_bits: 32,
+      },
+    );
+
+    const result = await run_verilator(verilog, "stream_wide32_passthrough", sidecarPath);
+
+    expect(result.status).toBe("pass");
+    expect(result.timing_pass).toBe(true);
+    expect(result.expected).toEqual(channelSamples.flat());
+    expect(result.got).toEqual(channelSamples.flat());
+    expect(result.max_error).toBe(0);
   });
 
   it("surfaces numerical mismatches above the allowed tolerance", async () => {
@@ -285,14 +350,16 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
     expect(await readFile(pipelineIr.layers[0].weights_path, "utf8")).toMatch(/^[0-9A-F]+\n/);
     expect(await readFile(pipelineIr.layers[0].bias_path!, "utf8")).toMatch(/^[0-9A-F]+\n/);
 
-    // Binary vector files: 16-byte NN2V header + int32 LE samples. The stem
-    // input is [1, 3, 224, 224] = 150528 samples per vector, 8 vectors.
+    // Binary vector files: 20-byte NN2V v2 header + packed int32 words. The
+    // stem input is [1, 3, 224, 224], so each vector has 224*224 pixel samples
+    // and each sample carries 3 packed input bytes.
     expect(pipelineIr.layers[0].golden_inputs_path).toMatch(/layer0_0_conv1\.goldin$/);
     expect(pipelineIr.layers[0].golden_outputs_path).toMatch(/layer0_0_conv1\.goldout$/);
     const goldinBuf = await readFile(pipelineIr.layers[0].golden_inputs_path);
     expect(goldinBuf.subarray(0, 4).toString("ascii")).toBe("NN2V");
-    expect(goldinBuf.readUInt32LE(4)).toBe(1); // version
+    expect(goldinBuf.readUInt32LE(4)).toBe(2); // version
     expect(goldinBuf.readUInt32LE(8)).toBe(8); // num_vectors
-    expect(goldinBuf.readUInt32LE(12)).toBe(1 * 3 * 224 * 224); // samples_per_vector
+    expect(goldinBuf.readUInt32LE(12)).toBe(224 * 224); // samples_per_vector
+    expect(goldinBuf.readUInt32LE(16)).toBe(3); // bytes_per_sample
   });
 });

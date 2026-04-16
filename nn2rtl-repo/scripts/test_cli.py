@@ -186,8 +186,8 @@ def test_generate_golden_cli_populates_add_scale_factors_for_real_ptq(tmp_path: 
         assert layer["lhs_scale_factor"] > 0.0
         assert layer["rhs_scale_factor"] > 0.0
         assert layer["scale_factor"] > 0.0
-        assert layer["input_width_bits"] == 16
-        assert layer["output_width_bits"] == 8
+        assert layer["input_width_bits"] == 64
+        assert layer["output_width_bits"] == 32
 
 
 @pytest.mark.full

@@ -24,14 +24,16 @@
 // the sidecar. `run_verilator` reads that file and returns a full VerifResult.
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "third_party/json.hpp"
@@ -68,6 +70,7 @@ struct Sidecar {
   std::string ready_in_signal;
   std::string data_in_signal;
   std::string data_out_signal;
+  int bus_bytes_per_sample = 0;
   int input_width_bits = 0;
   int output_width_bits = 0;
   int pipeline_latency_cycles = 0;
@@ -76,6 +79,13 @@ struct Sidecar {
   std::string golden_outputs_path;
   std::string results_path;
   std::string testbench_template_path;
+};
+
+struct VectorFile {
+  uint32_t samples_per_vector = 0;
+  uint32_t bytes_per_sample = 0;
+  uint32_t words_per_sample = 0;
+  std::vector<std::vector<std::vector<uint32_t>>> vectors;
 };
 
 Sidecar loadSidecar(const std::string& path) {
@@ -88,34 +98,36 @@ Sidecar loadSidecar(const std::string& path) {
   in >> j;
 
   Sidecar s;
-  s.module_name             = j.at("module_name").get<std::string>();
-  s.module_id               = j.at("module_id").get<std::string>();
-  s.clock_signal            = j.at("clock_signal").get<std::string>();
-  s.reset_signal            = j.at("reset_signal").get<std::string>();
-  s.valid_in_signal         = j.at("valid_in_signal").get<std::string>();
-  s.valid_out_signal        = j.at("valid_out_signal").get<std::string>();
-  s.ready_in_signal         = j.at("ready_in_signal").get<std::string>();
-  s.data_in_signal          = j.at("data_in_signal").get<std::string>();
-  s.data_out_signal         = j.at("data_out_signal").get<std::string>();
-  s.input_width_bits        = j.at("input_width_bits").get<int>();
-  s.output_width_bits       = j.at("output_width_bits").get<int>();
+  s.module_name = j.at("module_name").get<std::string>();
+  s.module_id = j.at("module_id").get<std::string>();
+  s.clock_signal = j.at("clock_signal").get<std::string>();
+  s.reset_signal = j.at("reset_signal").get<std::string>();
+  s.valid_in_signal = j.at("valid_in_signal").get<std::string>();
+  s.valid_out_signal = j.at("valid_out_signal").get<std::string>();
+  s.ready_in_signal = j.at("ready_in_signal").get<std::string>();
+  s.data_in_signal = j.at("data_in_signal").get<std::string>();
+  s.data_out_signal = j.at("data_out_signal").get<std::string>();
+  s.bus_bytes_per_sample = j.at("bus_bytes_per_sample").get<int>();
+  s.input_width_bits = j.at("input_width_bits").get<int>();
+  s.output_width_bits = j.at("output_width_bits").get<int>();
   s.pipeline_latency_cycles = j.at("pipeline_latency_cycles").get<int>();
-  s.clock_period_ns         = j.at("clock_period_ns").get<double>();
-  s.golden_inputs_path      = j.at("golden_inputs_path").get<std::string>();
-  s.golden_outputs_path     = j.at("golden_outputs_path").get<std::string>();
-  s.results_path            = j.at("results_path").get<std::string>();
+  s.clock_period_ns = j.at("clock_period_ns").get<double>();
+  s.golden_inputs_path = j.at("golden_inputs_path").get<std::string>();
+  s.golden_outputs_path = j.at("golden_outputs_path").get<std::string>();
+  s.results_path = j.at("results_path").get<std::string>();
   s.testbench_template_path = j.at("testbench_template_path").get<std::string>();
   return s;
 }
 
 // Binary vector file format (.goldin / .goldout):
-//   [ 0..4)  magic        : ASCII "NN2V"
-//   [ 4..8)  version      : uint32 LE (= 1)
-//   [ 8..12) num_vectors  : uint32 LE
+//   [ 0..4)  magic            : ASCII "NN2V"
+//   [ 4..8)  version          : uint32 LE (= 2)
+//   [ 8..12) num_vectors      : uint32 LE
 //   [12..16) samples_per_vector : uint32 LE
-//   [16..)   data         : num_vectors * samples_per_vector * int32 LE
-// Documented in scripts/golden_impl.py (write_golden_vector_file).
-std::vector<std::vector<int64_t>> loadVectorFile(const std::string& path) {
+//   [16..20) bytes_per_sample : uint32 LE
+//   [20..)   data             : num_vectors * samples_per_vector *
+//                               ceil(bytes_per_sample / 4) int32 LE words
+VectorFile loadVectorFile(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in.is_open()) {
     throw std::runtime_error("Could not open vector file '" + path + "'.");
@@ -125,36 +137,54 @@ std::vector<std::vector<int64_t>> loadVectorFile(const std::string& path) {
   uint32_t version = 0;
   uint32_t num_vectors = 0;
   uint32_t samples_per_vector = 0;
+  uint32_t bytes_per_sample = 0;
   in.read(magic, sizeof(magic));
   in.read(reinterpret_cast<char*>(&version), sizeof(version));
   in.read(reinterpret_cast<char*>(&num_vectors), sizeof(num_vectors));
   in.read(reinterpret_cast<char*>(&samples_per_vector), sizeof(samples_per_vector));
+  in.read(reinterpret_cast<char*>(&bytes_per_sample), sizeof(bytes_per_sample));
   if (!in) {
     throw std::runtime_error("Vector file '" + path + "' header is truncated.");
   }
   if (magic[0] != 'N' || magic[1] != 'N' || magic[2] != '2' || magic[3] != 'V') {
     throw std::runtime_error("Vector file '" + path + "' has wrong magic; expected 'NN2V'.");
   }
-  if (version != 1) {
+  if (version != 2) {
     throw std::runtime_error("Vector file '" + path + "' has unsupported version.");
   }
+  if (bytes_per_sample == 0) {
+    throw std::runtime_error("Vector file '" + path + "' bytes_per_sample must be positive.");
+  }
 
-  std::vector<std::vector<int64_t>> vectors;
-  vectors.reserve(num_vectors);
-  std::vector<int32_t> row_buffer(samples_per_vector);
+  VectorFile file;
+  file.samples_per_vector = samples_per_vector;
+  file.bytes_per_sample = bytes_per_sample;
+  file.words_per_sample = (bytes_per_sample + 3U) / 4U;
+  file.vectors.reserve(num_vectors);
+
+  std::vector<int32_t> row_buffer(samples_per_vector * file.words_per_sample);
   for (uint32_t v = 0; v < num_vectors; ++v) {
-    in.read(reinterpret_cast<char*>(row_buffer.data()),
-            static_cast<std::streamsize>(samples_per_vector * sizeof(int32_t)));
+    in.read(
+        reinterpret_cast<char*>(row_buffer.data()),
+        static_cast<std::streamsize>(row_buffer.size() * sizeof(int32_t)));
     if (!in) {
       throw std::runtime_error("Vector file '" + path + "' data is truncated.");
     }
-    std::vector<int64_t> parsed(samples_per_vector);
-    for (uint32_t i = 0; i < samples_per_vector; ++i) {
-      parsed[i] = static_cast<int64_t>(row_buffer[i]);
+
+    std::vector<std::vector<uint32_t>> vector_samples;
+    vector_samples.reserve(samples_per_vector);
+    for (uint32_t sample = 0; sample < samples_per_vector; ++sample) {
+      std::vector<uint32_t> words(file.words_per_sample, 0U);
+      for (uint32_t word = 0; word < file.words_per_sample; ++word) {
+        const size_t index = static_cast<size_t>(sample) * file.words_per_sample + word;
+        words[word] = static_cast<uint32_t>(row_buffer[index]);
+      }
+      vector_samples.push_back(std::move(words));
     }
-    vectors.push_back(std::move(parsed));
+    file.vectors.push_back(std::move(vector_samples));
   }
-  return vectors;
+
+  return file;
 }
 
 void requireCanonicalSignals(const Sidecar& s) {
@@ -167,13 +197,162 @@ void requireCanonicalSignals(const Sidecar& s) {
           "' (canonical signal name); got '" + value + "'.");
     }
   };
-  check("clock_signal",     s.clock_signal,     "clk");
-  check("reset_signal",     s.reset_signal,     "rst_n");
-  check("valid_in_signal",  s.valid_in_signal,  "valid_in");
+  check("clock_signal", s.clock_signal, "clk");
+  check("reset_signal", s.reset_signal, "rst_n");
+  check("valid_in_signal", s.valid_in_signal, "valid_in");
   check("valid_out_signal", s.valid_out_signal, "valid_out");
-  check("ready_in_signal",  s.ready_in_signal,  "ready_in");
-  check("data_in_signal",   s.data_in_signal,   "data_in");
-  check("data_out_signal",  s.data_out_signal,  "data_out");
+  check("ready_in_signal", s.ready_in_signal, "ready_in");
+  check("data_in_signal", s.data_in_signal, "data_in");
+  check("data_out_signal", s.data_out_signal, "data_out");
+}
+
+void requireConsistentBusWidths(const Sidecar& sidecar) {
+  if (sidecar.input_width_bits <= 0 || sidecar.input_width_bits % 8 != 0) {
+    throw std::runtime_error(
+        "Sidecar input_width_bits must be a positive multiple of 8; got " +
+        std::to_string(sidecar.input_width_bits) + ".");
+  }
+  if (sidecar.output_width_bits <= 0 || sidecar.output_width_bits % 8 != 0) {
+    throw std::runtime_error(
+        "Sidecar output_width_bits must be a positive multiple of 8; got " +
+        std::to_string(sidecar.output_width_bits) + ".");
+  }
+  if (sidecar.bus_bytes_per_sample != sidecar.input_width_bits / 8) {
+    throw std::runtime_error(
+        "Sidecar bus_bytes_per_sample=" + std::to_string(sidecar.bus_bytes_per_sample) +
+        " does not match input_width_bits/8=" + std::to_string(sidecar.input_width_bits / 8) +
+        ".");
+  }
+}
+
+template <typename SignalT>
+void clearSignal(SignalT& signal) {
+  if constexpr (std::is_integral_v<SignalT>) {
+    signal = 0;
+  }
+}
+
+template <std::size_t N_Words>
+void clearSignal(VlWide<N_Words>& signal) {
+  for (size_t i = 0; i < N_Words; ++i) {
+    signal.at(i) = 0U;
+  }
+}
+
+template <std::size_t N_Words>
+void clearSignal(WData (&signal)[N_Words]) {
+  for (size_t i = 0; i < N_Words; ++i) {
+    signal[i] = 0U;
+  }
+}
+
+template <typename SignalT>
+void assignPackedWords(SignalT& signal, const std::vector<uint32_t>& words) {
+  if constexpr (std::is_integral_v<SignalT>) {
+    const size_t max_words = (sizeof(SignalT) + 3U) / 4U;
+    if (words.size() > max_words) {
+      throw std::runtime_error(
+          "Packed sample needs " + std::to_string(words.size()) +
+          " words but the DUT input port can hold only " + std::to_string(max_words) +
+          " words.");
+    }
+    uint64_t packed = 0;
+    for (size_t i = 0; i < words.size(); ++i) {
+      packed |= static_cast<uint64_t>(words[i]) << (32U * i);
+    }
+    signal = static_cast<SignalT>(packed);
+  }
+}
+
+template <std::size_t N_Words>
+void assignPackedWords(VlWide<N_Words>& signal, const std::vector<uint32_t>& words) {
+  if (words.size() > N_Words) {
+    throw std::runtime_error(
+        "Packed sample needs " + std::to_string(words.size()) +
+        " words but the DUT input port can hold only " + std::to_string(N_Words) +
+        " words.");
+  }
+  clearSignal(signal);
+  for (size_t i = 0; i < words.size(); ++i) {
+    signal.at(i) = words[i];
+  }
+}
+
+template <std::size_t N_Words>
+void assignPackedWords(WData (&signal)[N_Words], const std::vector<uint32_t>& words) {
+  if (words.size() > N_Words) {
+    throw std::runtime_error(
+        "Packed sample needs " + std::to_string(words.size()) +
+        " words but the DUT input port can hold only " + std::to_string(N_Words) +
+        " words.");
+  }
+  clearSignal(signal);
+  for (size_t i = 0; i < words.size(); ++i) {
+    signal[i] = words[i];
+  }
+}
+
+template <typename SignalT>
+std::vector<uint32_t> readPackedWords(const SignalT& signal, size_t words_per_sample) {
+  std::vector<uint32_t> words(words_per_sample, 0U);
+  if constexpr (std::is_integral_v<SignalT>) {
+    const size_t max_words = (sizeof(SignalT) + 3U) / 4U;
+    if (words_per_sample > max_words) {
+      throw std::runtime_error(
+          "Expected " + std::to_string(words_per_sample) +
+          " output words but the DUT output port can hold only " +
+          std::to_string(max_words) + " words.");
+    }
+    using UnsignedSignalT = std::make_unsigned_t<SignalT>;
+    const uint64_t packed = static_cast<uint64_t>(static_cast<UnsignedSignalT>(signal));
+    for (size_t i = 0; i < words_per_sample; ++i) {
+      words[i] = static_cast<uint32_t>(packed >> (32U * i));
+    }
+  }
+  return words;
+}
+
+template <std::size_t N_Words>
+std::vector<uint32_t> readPackedWords(const VlWide<N_Words>& signal, size_t words_per_sample) {
+  if (words_per_sample > N_Words) {
+    throw std::runtime_error(
+        "Expected " + std::to_string(words_per_sample) +
+        " output words but the DUT output port can hold only " +
+        std::to_string(N_Words) + " words.");
+  }
+  std::vector<uint32_t> words(words_per_sample, 0U);
+  for (size_t i = 0; i < words_per_sample; ++i) {
+    words[i] = signal.at(i);
+  }
+  return words;
+}
+
+template <std::size_t N_Words>
+std::vector<uint32_t> readPackedWords(const WData (&signal)[N_Words], size_t words_per_sample) {
+  if (words_per_sample > N_Words) {
+    throw std::runtime_error(
+        "Expected " + std::to_string(words_per_sample) +
+        " output words but the DUT output port can hold only " +
+        std::to_string(N_Words) + " words.");
+  }
+  std::vector<uint32_t> words(words_per_sample, 0U);
+  for (size_t i = 0; i < words_per_sample; ++i) {
+    words[i] = signal[i];
+  }
+  return words;
+}
+
+std::vector<int64_t> unpackInt8Channels(
+    const std::vector<uint32_t>& words,
+    uint32_t bytes_per_sample) {
+  std::vector<int64_t> channels;
+  channels.reserve(bytes_per_sample);
+  for (uint32_t byte_index = 0; byte_index < bytes_per_sample; ++byte_index) {
+    const uint32_t word = words[byte_index / 4U];
+    const uint8_t raw = static_cast<uint8_t>((word >> (8U * (byte_index % 4U))) & 0xFFU);
+    channels.push_back(static_cast<int64_t>(static_cast<int8_t>(raw)));
+  }
+  return channels;
 }
 
 template <typename Dut>
@@ -187,9 +366,9 @@ void tickClock(Dut* dut, int64_t& cycle_counter) {
 
 template <typename Dut>
 void applyReset(Dut* dut, int64_t& cycle_counter, int cycles = 5) {
-  dut->rst_n    = 0;
+  dut->rst_n = 0;
   dut->valid_in = 0;
-  dut->data_in  = 0;
+  clearSignal(dut->data_in);
   for (int i = 0; i < cycles; ++i) {
     tickClock(dut, cycle_counter);
   }
@@ -220,7 +399,7 @@ void writeFallbackError(const std::string& sidecar_path, const std::exception& e
       return;
     }
     const std::string results_path = j.at("results_path").get<std::string>();
-    const std::string module_id    = j.value("module_id", std::string(""));
+    const std::string module_id = j.value("module_id", std::string(""));
 
     json error_result = {
         {"module_id", module_id},
@@ -257,15 +436,28 @@ int main(int argc, char** argv) {
   try {
     const Sidecar sidecar = loadSidecar(sidecar_path);
     requireCanonicalSignals(sidecar);
+    requireConsistentBusWidths(sidecar);
 
-    const auto golden_inputs  = loadVectorFile(sidecar.golden_inputs_path);
-    const auto golden_outputs = loadVectorFile(sidecar.golden_outputs_path);
+    const VectorFile golden_inputs = loadVectorFile(sidecar.golden_inputs_path);
+    const VectorFile golden_outputs = loadVectorFile(sidecar.golden_outputs_path);
 
-    if (golden_inputs.size() != golden_outputs.size()) {
+    if (golden_inputs.vectors.size() != golden_outputs.vectors.size()) {
       throw std::runtime_error(
           "Golden inputs and outputs differ in vector count (" +
-          std::to_string(golden_inputs.size()) + " vs " +
-          std::to_string(golden_outputs.size()) + ").");
+          std::to_string(golden_inputs.vectors.size()) + " vs " +
+          std::to_string(golden_outputs.vectors.size()) + ").");
+    }
+    if (golden_inputs.bytes_per_sample != static_cast<uint32_t>(sidecar.bus_bytes_per_sample)) {
+      throw std::runtime_error(
+          "Golden inputs bytes_per_sample=" + std::to_string(golden_inputs.bytes_per_sample) +
+          " does not match sidecar bus_bytes_per_sample=" +
+          std::to_string(sidecar.bus_bytes_per_sample) + ".");
+    }
+    if (golden_outputs.bytes_per_sample != static_cast<uint32_t>(sidecar.output_width_bits / 8)) {
+      throw std::runtime_error(
+          "Golden outputs bytes_per_sample=" + std::to_string(golden_outputs.bytes_per_sample) +
+          " does not match sidecar output_width_bits/8=" +
+          std::to_string(sidecar.output_width_bits / 8) + ".");
     }
 
     auto dut = std::make_unique<VMODEL_CLASS>();
@@ -275,51 +467,32 @@ int main(int argc, char** argv) {
     std::vector<int64_t> expected_flat;
     std::vector<int64_t> actual_flat;
     int64_t max_abs_error = 0;
-    double  sum_abs_error = 0.0;
-    size_t  sample_count  = 0;
+    double sum_abs_error = 0.0;
+    size_t sample_count = 0;
 
-    int64_t first_valid_in_cycle  = -1;
+    int64_t first_valid_in_cycle = -1;
     int64_t first_valid_out_cycle = -1;
-    bool    timing_observed       = false;
+    bool timing_observed = false;
 
     // Per-vector timing check: every vector must honour the sidecar's declared
     // latency, not just the first one. A single boolean collapses the per-vector
     // results.
-    bool    all_vectors_timing_ok = true;
+    bool all_vectors_timing_ok = true;
     int64_t worst_vector_actual_cycles = -1;
-
-    // Sign-extend DUT outputs according to output_width_bits so negative int8s
-    // are not reported as their unsigned 8-bit encoding.
-    const int output_width_bits = sidecar.output_width_bits;
-    const uint64_t output_mask  = (output_width_bits >= 64)
-                                      ? ~static_cast<uint64_t>(0)
-                                      : ((static_cast<uint64_t>(1) << output_width_bits) - 1);
-    const uint64_t sign_bit     = (output_width_bits > 0 && output_width_bits < 64)
-                                      ? (static_cast<uint64_t>(1) << (output_width_bits - 1))
-                                      : 0;
-    const auto signExtendOutput = [&](uint64_t raw) -> int64_t {
-      const uint64_t masked = raw & output_mask;
-      if (sign_bit && (masked & sign_bit)) {
-        return static_cast<int64_t>(masked | ~output_mask);
-      }
-      return static_cast<int64_t>(masked);
-    };
 
     const int64_t hang_budget = sidecar.pipeline_latency_cycles * 4 + 16;
 
-    // Unified interleaved drive/sample loop. For each test vector we drive inputs
-    // whenever the DUT is ready and we sample outputs whenever valid_out is high,
-    // both in the same tick. This handles short-latency DUTs (output arrives
-    // before all inputs are sent) and bubbly DUTs (gaps between outputs) without
-    // smuggling state across vectors.
-    for (size_t v = 0; v < golden_inputs.size(); ++v) {
-      const auto& inputs  = golden_inputs[v];
-      const auto& outputs = golden_outputs[v];
+    // Unified interleaved drive/sample loop. For each test vector we drive
+    // packed input samples whenever the DUT is ready and we sample packed
+    // outputs whenever valid_out is high, both in the same tick.
+    for (size_t v = 0; v < golden_inputs.vectors.size(); ++v) {
+      const auto& inputs = golden_inputs.vectors[v];
+      const auto& outputs = golden_outputs.vectors[v];
 
-      size_t  input_idx    = 0;
-      size_t  output_idx   = 0;
-      int64_t idle_cycles  = 0;
-      int64_t vector_first_valid_in  = -1;
+      size_t input_idx = 0;
+      size_t output_idx = 0;
+      int64_t idle_cycles = 0;
+      int64_t vector_first_valid_in = -1;
       int64_t vector_first_valid_out = -1;
 
       while (output_idx < outputs.size()) {
@@ -331,7 +504,6 @@ int main(int argc, char** argv) {
               ") for " + std::to_string(idle_cycles) + " cycles without valid_out.");
         }
 
-        // Sample whatever the DUT is asserting this cycle before driving new inputs.
         if (dut->valid_out) {
           if (!timing_observed) {
             first_valid_out_cycle = cycle_counter;
@@ -341,17 +513,30 @@ int main(int argc, char** argv) {
             vector_first_valid_out = cycle_counter;
           }
 
-          const int64_t got      = signExtendOutput(static_cast<uint64_t>(dut->data_out));
-          const int64_t expected = outputs[output_idx];
-          expected_flat.push_back(expected);
-          actual_flat.push_back(got);
+          const auto got_words = readPackedWords(dut->data_out, golden_outputs.words_per_sample);
+          const auto got_channels = unpackInt8Channels(got_words, golden_outputs.bytes_per_sample);
+          const auto expected_channels =
+              unpackInt8Channels(outputs[output_idx], golden_outputs.bytes_per_sample);
 
-          const int64_t diff = got >= expected ? got - expected : expected - got;
-          if (diff > max_abs_error) {
-            max_abs_error = diff;
+          if (got_channels.size() != expected_channels.size()) {
+            throw std::runtime_error(
+                "Packed output width mismatch on vector " + std::to_string(v) +
+                " sample " + std::to_string(output_idx) + ".");
           }
-          sum_abs_error += static_cast<double>(diff);
-          ++sample_count;
+
+          for (size_t channel = 0; channel < expected_channels.size(); ++channel) {
+            const int64_t got = got_channels[channel];
+            const int64_t expected = expected_channels[channel];
+            expected_flat.push_back(expected);
+            actual_flat.push_back(got);
+
+            const int64_t diff = got >= expected ? got - expected : expected - got;
+            if (diff > max_abs_error) {
+              max_abs_error = diff;
+            }
+            sum_abs_error += static_cast<double>(diff);
+            ++sample_count;
+          }
 
           ++output_idx;
           idle_cycles = 0;
@@ -359,8 +544,6 @@ int main(int argc, char** argv) {
           ++idle_cycles;
         }
 
-        // Drive the next input on this cycle if we still have inputs to send and
-        // the DUT is ready to accept them. Otherwise deassert valid_in.
         if (input_idx < inputs.size() && dut->ready_in) {
           if (first_valid_in_cycle < 0) {
             first_valid_in_cycle = cycle_counter;
@@ -368,11 +551,12 @@ int main(int argc, char** argv) {
           if (vector_first_valid_in < 0) {
             vector_first_valid_in = cycle_counter;
           }
-          dut->data_in  = static_cast<uint64_t>(inputs[input_idx]);
+          assignPackedWords(dut->data_in, inputs[input_idx]);
           dut->valid_in = 1;
           ++input_idx;
         } else {
           dut->valid_in = 0;
+          clearSignal(dut->data_in);
         }
 
         // Always tick — including the cycle that sampled the vector's final
@@ -383,6 +567,7 @@ int main(int argc, char** argv) {
       }
 
       dut->valid_in = 0;
+      clearSignal(dut->data_in);
 
       if (vector_first_valid_in >= 0 && vector_first_valid_out >= 0) {
         const int64_t vector_actual = vector_first_valid_out - vector_first_valid_in;
@@ -399,9 +584,10 @@ int main(int argc, char** argv) {
 
     dut->final();
 
-    const double  mean_error             = sample_count ? sum_abs_error / static_cast<double>(sample_count) : 0.0;
+    const double mean_error =
+        sample_count ? sum_abs_error / static_cast<double>(sample_count) : 0.0;
     const int64_t timing_expected_cycles = sidecar.pipeline_latency_cycles;
-    const int64_t timing_actual_cycles   =
+    const int64_t timing_actual_cycles =
         (first_valid_in_cycle >= 0 && first_valid_out_cycle >= 0)
             ? first_valid_out_cycle - first_valid_in_cycle
             : -1;
@@ -414,7 +600,7 @@ int main(int argc, char** argv) {
             ? worst_vector_actual_cycles
             : timing_actual_cycles;
     const bool numerical_pass = max_abs_error <= kNumericalTolerance;
-    const std::string status  = (numerical_pass && timing_pass) ? "pass" : "fail";
+    const std::string status = (numerical_pass && timing_pass) ? "pass" : "fail";
 
     json results = {
         {"module_id", sidecar.module_id},

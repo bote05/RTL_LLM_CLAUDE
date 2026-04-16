@@ -116,6 +116,7 @@ export const verificationSidecarSchema = z
     ready_in_signal: z.literal("ready_in"),
     data_in_signal: z.literal("data_in"),
     data_out_signal: z.literal("data_out"),
+    bus_bytes_per_sample: z.number().int().positive(),
     input_width_bits: z.number().int().positive(),
     output_width_bits: z.number().int().positive(),
     pipeline_latency_cycles: z.number().int().positive(),
