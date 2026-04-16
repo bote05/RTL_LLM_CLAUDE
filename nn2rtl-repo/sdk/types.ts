@@ -1,4 +1,4 @@
-export type LayerOpType = "conv2d" | "relu" | "add";
+export type LayerOpType = "conv2d" | "relu" | "add" | "maxpool";
 
 export interface LayerIR {
   module_id: string;
@@ -26,6 +26,10 @@ export interface LayerIR {
   data_out_signal: "data_out";
   golden_inputs_path: string;
   golden_outputs_path: string;
+  // MaxPool2d geometry — only present when op_type == "maxpool"
+  kernel_size?: number[];
+  pool_stride?: number[];
+  pool_padding?: number[];
 }
 
 export interface PipelineIR {

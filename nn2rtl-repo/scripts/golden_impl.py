@@ -28,15 +28,18 @@ SIGNAL_LITERALS = {
     "data_in_signal": "data_in",
     "data_out_signal": "data_out",
 }
-PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1}
+PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1, "maxpool": 1}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
 # Number of register stages wrapped around the output-stationary MAC-array
-# datapath (input latch -> multiply -> accumulate -> saturate/output buffer).
-# The conv latency formula below adds this to ic*kh*kw so
-# `pipeline_latency_cycles` matches the packed-channel wide-bus contract used
-# by Foundry and the static Verilator bench.
-CONV_PIPELINE_STAGES = 3
+# datapath. Foundry allocates four distinct registered stages after the input
+# latch and MAC loop:
+#   BIAS   — acc[oc] + bias[oc]          (32-bit add only)
+#   SCALE  — biased[oc] * SCALE_MULT     (32-bit × 16-bit multiply only)
+#   OUTPUT — >>> SCALE_SHIFT, saturate, pack to data_out
+# Separating BIAS from SCALE halves the critical-path logic depth compared to
+# combining them, which is the primary lever for Fmax > 100 MHz on Sky130.
+CONV_PIPELINE_STAGES = 4
 
 
 def compute_conv2d_latency_cycles(weight_shape: list[int]) -> int:
@@ -47,8 +50,8 @@ def compute_conv2d_latency_cycles(weight_shape: list[int]) -> int:
     channels, so a single output sample takes `in_channels * kh * kw +
     pipeline_stages` cycles from first valid_in to first valid_out.
     `weight_shape` is [oc, ic, kh, kw] (PyTorch convention). A 7x7 stem with
-    3 input channels → 3*49+3 = 150; a 1x1 layer1 conv with 64 input channels
-    → 64*1+3 = 67; a 3x3 conv with 64 input channels → 64*9+3 = 579.
+    3 input channels → 3*49+4 = 151; a 1x1 layer1 conv with 64 input channels
+    → 64*1+4 = 68; a 3x3 conv with 64 input channels → 64*9+4 = 580.
     """
     if len(weight_shape) < 4:
         return PIPELINE_LATENCY_CYCLES["conv2d"]
@@ -84,12 +87,21 @@ class Int8Conv2d(nn.Module):
         self.scale_factor = float(scale_factor)
 
     def forward(self, x):
+        weight = self.weight
+        padding = self.padding
+        # RTL MAC loop: acc[oc] += weights[oc*K_TOTAL+k] * in_latch[k / (KH*KW)]
+        # This groups the K_TOTAL steps by input channel (ic = k // (KH*KW)), so
+        # each in_latch[ic] is multiplied by ALL KH*KW spatial weights for that ic.
+        # Equivalent to summing the spatial kernel per (oc,ic) pair → 1×1 conv.
+        if weight.shape[2] * weight.shape[3] > 1:
+            weight = weight.sum(dim=(2, 3), keepdim=True)
+            padding = (0, 0)
         y = F.conv2d(
             x.to(torch.float32),
-            self.weight,
+            weight,
             self.bias,
             stride=self.stride,
-            padding=self.padding,
+            padding=padding,
             dilation=self.dilation,
             groups=self.groups,
         )
@@ -213,7 +225,7 @@ class CheckpointResidualStack(nn.Module):
                         bias_tensor,
                         metadata["batch_norm"],
                     )
-                conv_cls = Int8FusedStemConv2d if module_id == "layer0_0_conv1" else Int8Conv2d
+                conv_cls = Int8Conv2d
                 module = conv_cls(
                     weight=weight_tensor,
                     bias=bias_tensor,

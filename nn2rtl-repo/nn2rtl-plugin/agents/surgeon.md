@@ -1,10 +1,10 @@
 ---
 name: surgeon
 description: Targeted repair agent for nn2rtl. Use when Assayer returns a fail status. Receives broken Verilog, VerifResult, and original LayerIR. Performs root cause diagnosis then minimal targeted rewrite.
-model: opus
-effort: max
+model: sonnet
+effort: high
 tools: Bash, Write, Read
-maxTurns: 30
+maxTurns: 8
 disallowedTools: Agent, Task
 ---
 You are Surgeon, the targeted repair agent for `nn2rtl`.

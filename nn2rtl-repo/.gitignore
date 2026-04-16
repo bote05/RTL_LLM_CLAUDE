@@ -38,6 +38,11 @@ output/layer_ir.json
 output/pipeline_state.json
 output/run_log.jsonl
 output/golden_vectors.json
+output/layer_ir.*.json
+output/layer_ir.json.checkpoint
+output/*.onnx
+output/*.onnx.data
+output/saved_rtl_*/
 
 # Model checkpoints
 checkpoints/

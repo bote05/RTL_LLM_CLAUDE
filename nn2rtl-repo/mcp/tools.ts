@@ -642,7 +642,13 @@ export async function run_yosys(
         `abc -liberty ${sky130Lib} ` +
         `-constr ${constrPath.replace(/\\/g, "/")} -D ${targetDelayPs}`;
     }
+    // memory_share merges structurally equivalent read ports across memory
+    // arrays (e.g. the same weight index read by multiple MAC lanes in a
+    // generate loop). This reduces cell count without requiring BRAM macros
+    // and is safe to run before synth. The Verilog file is loaded via the
+    // positional command-line argument so no read_verilog is needed here.
     const yosysScript = [
+      `memory_share`,
       `synth -top ${module_name}`,
       `dfflibmap -liberty ${sky130Lib}`,
       abcCommand,
