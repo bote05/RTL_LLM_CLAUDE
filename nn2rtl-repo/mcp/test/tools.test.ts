@@ -132,6 +132,7 @@ describe("mcp tools", () => {
     expect(parseYosysReport("LUT4 12\nEstimated fmax: 50.5 MHz")).toEqual({
       lut_count: 12,
       fmax_mhz: 50.5,
+      area_um2: 0,
     });
   });
 
@@ -153,6 +154,7 @@ describe("mcp tools", () => {
     expect(parseYosysReport("LUT4 3\nnothing measurable here")).toEqual({
       lut_count: 3,
       fmax_mhz: 0,
+      area_um2: 0,
     });
   });
 
@@ -167,6 +169,7 @@ describe("mcp tools", () => {
       success: true,
       lut_count: 4,
       fmax_mhz: 42,
+      area_um2: 0,
       report: "LUT4 4\nEstimated fmax: 42.0 MHz",
     });
   });
@@ -181,6 +184,7 @@ describe("mcp tools", () => {
       success: false,
       lut_count: 0,
       fmax_mhz: 0,
+      area_um2: 0,
       report: "yosys failed",
     });
   });

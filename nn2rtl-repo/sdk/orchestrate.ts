@@ -40,17 +40,12 @@ const pluginPath = path.resolve(repoRoot, "nn2rtl-plugin");
 export const AGENT_SLUGS = {
   Cartographer: "cartographer",
   Foundry: "foundry",
-  Assayer: "assayer",
   Surgeon: "surgeon",
 } as const satisfies Record<AgentName, string>;
 
 const AGENT_MCP_TOOLS = {
   cartographer: ["mcp__nn2rtl-tools__read_weights"],
   foundry: ["mcp__nn2rtl-tools__write_verilog"],
-  assayer: [
-    "mcp__nn2rtl-tools__run_iverilog",
-    "mcp__nn2rtl-tools__run_verilator",
-  ],
   surgeon: ["mcp__nn2rtl-tools__write_verilog"],
 } as const;
 
@@ -69,11 +64,16 @@ type AgentRunResult<T> = {
 type FrontmatterRecord = Record<string, unknown>;
 
 export type YosysFn = (module: VerilogModule) => Promise<SynthesisReport>;
+export type AssayerFn = (
+  module: VerilogModule,
+  layer: LayerIR,
+) => Promise<VerifResult>;
 
 export type OrchestratorRuntime = {
   now: () => Date;
   queryFn: typeof query;
   yosysFn: YosysFn;
+  assayerFn: AssayerFn;
 };
 
 export type RunPipelineOptions = {
@@ -86,6 +86,7 @@ const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
   now: () => new Date(),
   queryFn: query,
   yosysFn: (module) => invokeYosys(module),
+  assayerFn: (module, layer) => runAssayerDeterministic(module, layer),
 };
 
 function toOutputFormat(schema: z.ZodType): OutputFormat {
@@ -122,14 +123,41 @@ const MAX_LUT_COUNT_PER_MODULE = 5000;
 // with the correct failure_class. The classification matters because Surgeon
 // uses it to pick the repair strategy — "add a pipeline register" is very
 // different from "remove a non-synthesizable construct."
-// Yosys reports on large residual blocks can be hundreds of KB; inlining the
-// full report into every fix_hint would bloat pipeline_state.json and the run
-// log, compounding large-tensor state growth. Cap the tail we embed.
-const YOSYS_REPORT_TAIL_CAP = 8_000;
+// Yosys reports on large residual blocks can be tens of MB (mostly
+// repetitive warnings like "No latch inferred"). Tail-only truncation hid
+// the real fatal error in the head — Surgeon was repairing blindly on a
+// diet of warning spam. Summarize as head + ERROR/error lines + tail so
+// every fatal diagnostic survives even when the middle is huge noise.
+const YOSYS_REPORT_HEAD_BYTES = 2_500;
+const YOSYS_REPORT_TAIL_BYTES = 3_500;
+const YOSYS_REPORT_ERRORS_BYTES = 4_000;
 function capYosysReport(report: string): string {
-  if (report.length <= YOSYS_REPORT_TAIL_CAP) return report;
-  return `...[${report.length - YOSYS_REPORT_TAIL_CAP} bytes elided]...\n` +
-    report.slice(-YOSYS_REPORT_TAIL_CAP);
+  if (report.length <= YOSYS_REPORT_HEAD_BYTES + YOSYS_REPORT_TAIL_BYTES) {
+    return report;
+  }
+  const head = report.slice(0, YOSYS_REPORT_HEAD_BYTES);
+  const tail = report.slice(-YOSYS_REPORT_TAIL_BYTES);
+  const errorLines = report
+    .split(/\r?\n/)
+    .filter((line) => /ERROR|error:|Error:/.test(line))
+    .join("\n");
+  const errorBlock =
+    errorLines.length > YOSYS_REPORT_ERRORS_BYTES
+      ? errorLines.slice(0, YOSYS_REPORT_ERRORS_BYTES) +
+        `\n...[${errorLines.length - YOSYS_REPORT_ERRORS_BYTES} more error-line bytes elided]...`
+      : errorLines;
+  const elided = report.length - head.length - tail.length;
+  return [
+    "--- HEAD ---",
+    head,
+    errorBlock ? "--- ERRORS ---" : "",
+    errorBlock,
+    `--- (middle ${elided} bytes elided) ---`,
+    "--- TAIL ---",
+    tail,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function evaluateSynthesis(
@@ -140,7 +168,7 @@ function evaluateSynthesis(
   if (!report.success) {
     // Yosys crashed, emitted a syntax/elaboration error, or hit a construct
     // iverilog's linter accepted but Yosys refuses. Fix strategy: rewrite
-    // the offending construct so synth_ice40 accepts it.
+    // the offending construct so the Sky130 synth flow accepts it.
     return {
       ...verifiedResult,
       module_id: moduleId,
@@ -148,33 +176,21 @@ function evaluateSynthesis(
       failure_class: "synthesis_failed",
       fix_hint: [
         "Yosys synthesis failed after functional verification passed.",
-        "Repair the RTL so `synth_ice40 -abc9; stat` succeeds.",
-        "Yosys output (tail):",
+        "Repair the RTL so `synth; dfflibmap -liberty sky130.lib; abc -liberty sky130.lib; stat -liberty sky130.lib` succeeds.",
+        "Look at the HEAD and ERRORS sections below for the root cause; the TAIL is usually noise (e.g. repeated 'No latch inferred' warnings).",
+        "Yosys output summary (head + errors + tail):",
         capYosysReport(report.report),
       ].join("\n\n"),
     };
   }
 
-  if (report.fmax_mhz <= 0) {
-    // Yosys returned a valid report but neither abc9 delay nor an explicit
-    // MHz number could be parsed. Without a measurable critical path we
-    // cannot prove the timing gate — treat that as a synthesis-gate failure
-    // so the issue is visible rather than silently skipped.
-    return {
-      ...verifiedResult,
-      module_id: moduleId,
-      status: "fail",
-      failure_class: "synthesis_failed",
-      fix_hint: [
-        "Yosys synthesis completed but no Fmax could be measured from the report.",
-        "Rewrite the module so `synth_ice40 -abc9` emits an abc9 delay line, or remove constructs that prevent timing analysis.",
-        "Yosys output (tail):",
-        capYosysReport(report.report),
-      ].join("\n\n"),
-    };
-  }
-
-  if (report.fmax_mhz < FMAX_TARGET_MHZ) {
+  // Sky130 `stat`+`abc` does not always emit a delay line unless driven by a
+  // constraint file or a clock period. Treat fmax=0 as "timing not measured"
+  // instead of a synth failure — we still gate on area (lut_count proxy),
+  // and functional correctness has already passed. The abc9 Fmax gate was
+  // only meaningful for the old iCE40 flow; Sky130 timing would need OpenSTA
+  // integration that is not yet wired up.
+  if (report.fmax_mhz > 0 && report.fmax_mhz < FMAX_TARGET_MHZ) {
     // Synthesis succeeded but critical path is too long. Fix strategy:
     // insert a pipeline register in the longest combinational path.
     // Note the latency-contract implication — adding a register changes
@@ -187,7 +203,7 @@ function evaluateSynthesis(
       fix_hint: [
         `Synthesis passed but Fmax ${report.fmax_mhz.toFixed(2)} MHz is below the ${FMAX_TARGET_MHZ} MHz target.`,
         "Insert a pipeline register to break the critical path, and update pipeline_latency_cycles to match.",
-        "Yosys output (tail):",
+        "Yosys output summary (head + errors + tail):",
         capYosysReport(report.report),
       ].join("\n\n"),
     };
@@ -204,7 +220,7 @@ function evaluateSynthesis(
       fix_hint: [
         `Synthesis passed but LUT count ${report.lut_count} exceeds the ${MAX_LUT_COUNT_PER_MODULE} per-module ceiling.`,
         "Rewrite the module to share arithmetic or collapse redundant logic.",
-        "Yosys output (tail):",
+        "Yosys output summary (head + errors + tail):",
         capYosysReport(report.report),
       ].join("\n\n"),
     };
@@ -687,6 +703,7 @@ async function processYosysOutcome(
       success: false,
       lut_count: 0,
       fmax_mhz: 0,
+      area_um2: 0,
       report: error instanceof Error ? error.message : String(error),
     };
   }
@@ -788,11 +805,93 @@ async function invokeFoundry(
   return result;
 }
 
+// Deterministic verification. The orchestrator writes the sidecar from the
+// LayerIR (all fields are either fixed literals — canonical signal names —
+// or LayerIR values), then invokes the MCP run_iverilog lint pass followed
+// by run_verilator. The Verilator testbench itself produces a VerifResult
+// JSON that we validate via Zod. Previously this path went through a Haiku
+// "Assayer" LLM that repeatedly hallucinated VerifResults instead of calling
+// the tools. There is no language reasoning involved: the pipeline has a
+// VerifResult iff Verilator produced one.
+async function runAssayerDeterministic(
+  module: VerilogModule,
+  layer: LayerIR,
+): Promise<VerifResult> {
+  const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
+    run_iverilog: (
+      verilog_source: string,
+      module_name: string,
+    ) => Promise<{ success: boolean; stderr: string }>;
+    run_verilator: (
+      verilog_source: string,
+      module_name: string,
+      sidecar_path: string,
+    ) => Promise<VerifResult>;
+  };
+
+  // Canonical signal names are fixed; every LayerIR carries them as literals
+  // (enforced by the schema) so we just pass them through. The sidecar lives
+  // under output/tb/ next to any future manually authored test sidecars.
+  const sidecarPath = buildSidecarPath(module.module_id);
+  const resultsPath = path.join(
+    resolveFromSdk(PIPELINE_CONFIG.reports_dir),
+    `${module.module_id}.results.json`,
+  );
+  const sidecar = {
+    module_name: module.module_id,
+    module_id: module.module_id,
+    clock_signal: "clk" as const,
+    reset_signal: "rst_n" as const,
+    valid_in_signal: "valid_in" as const,
+    valid_out_signal: "valid_out" as const,
+    ready_in_signal: "ready_in" as const,
+    data_in_signal: "data_in" as const,
+    data_out_signal: "data_out" as const,
+    input_width_bits: layer.input_width_bits,
+    output_width_bits: layer.output_width_bits,
+    pipeline_latency_cycles: layer.pipeline_latency_cycles,
+    clock_period_ns: layer.clock_period_ns,
+    golden_inputs_path: layer.golden_inputs_path,
+    golden_outputs_path: layer.golden_outputs_path,
+    results_path: resultsPath,
+    testbench_template_path: resolveFromSdk(PIPELINE_CONFIG.static_testbench_path),
+  };
+  await mkdir(path.dirname(sidecarPath), { recursive: true });
+  await mkdir(path.dirname(resultsPath), { recursive: true });
+  await writeFile(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, "utf8");
+
+  // Lint first — iverilog catches most obvious Verilog mistakes faster than
+  // Verilator's multi-minute build, and a lint failure is always a syntax
+  // error (not a numerical/timing issue).
+  const iverilog = await mcpTools.run_iverilog(module.verilog_source, module.module_id);
+  if (!iverilog.success) {
+    return {
+      module_id: module.module_id,
+      status: "syntax_error",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layer.pipeline_latency_cycles,
+      iverilog_stderr: iverilog.stderr,
+      fix_hint: [
+        "iverilog lint rejected the RTL before Verilator could run.",
+        "Repair the Verilog so `iverilog -g2012` accepts it.",
+        "iverilog stderr:",
+        iverilog.stderr,
+      ].join("\n\n"),
+    };
+  }
+
+  // Full Verilator run — builds the DUT, runs the handwritten C++ bench,
+  // reads the structured results JSON written by the bench, validates it
+  // via verifResultSchema inside run_verilator, and returns a VerifResult.
+  return mcpTools.run_verilator(module.verilog_source, module.module_id, sidecarPath);
+}
+
 async function invokeAssayer(
   module: VerilogModule,
   layerIr: LayerIR,
   runtime: OrchestratorRuntime,
-): Promise<AgentRunResult<VerifResult>> {
+): Promise<VerifResult> {
   await appendRunLog(
     {
       event: "action",
@@ -802,33 +901,40 @@ async function invokeAssayer(
     runtime,
   );
 
-  const result = await runDelegatedAgent<VerifResult>(
-    "assayer",
-    {
-      module,
-      layer_ir: layerIr,
-      verilog_path: path.join(resolveFromSdk(PIPELINE_CONFIG.rtl_dir), `${module.module_id}.v`),
-      sidecar_path: buildSidecarPath(module.module_id),
-      testbench_template_path: resolveFromSdk(PIPELINE_CONFIG.static_testbench_path),
-    },
-    verifResultOutputFormat,
-    verifResultZod,
-    runtime,
-  );
+  let payload: VerifResult;
+  try {
+    const raw = await runtime.assayerFn(module, layerIr);
+    const parsed = verifResultZod.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        `assayerFn returned invalid VerifResult:\n${JSON.stringify(parsed.error.issues, null, 2)}`,
+      );
+    }
+    payload = parsed.data;
+  } catch (error: unknown) {
+    // Tool crashed before producing a structured VerifResult. Synthesize a
+    // fail so Surgeon gets a chance to look at the broken RTL; the fix_hint
+    // carries whatever the runner surfaced. This mirrors processYosysOutcome.
+    payload = {
+      module_id: module.module_id,
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layerIr.pipeline_latency_cycles,
+      fix_hint: `Assayer runner crashed before producing a VerifResult: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 
   await appendRunLog(
     {
-      event: "agent_result",
-      agent: "Assayer",
+      event: "assayer_result",
       module_id: module.module_id,
-      total_cost_usd: result.result.total_cost_usd,
-      modelUsage: result.result.modelUsage,
-      payload: result.payload,
+      payload,
     },
     runtime,
   );
 
-  return result;
+  return payload;
 }
 
 async function invokeSurgeon(
@@ -1009,17 +1115,16 @@ export async function runPipeline(
       );
       await manager.saveState(statePath);
 
-      const assayerResult = await invokeAssayer(foundryResult.payload, layer, runtime);
-      recordUsageFromResult(manager, assayerResult.result);
+      const assayerVerif = await invokeAssayer(foundryResult.payload, layer, runtime);
       const statusBeforeApply = manager.getState().modules[nextAction.module_id];
-      manager.applyVerifResult(nextAction.module_id, assayerResult.payload);
+      manager.applyVerifResult(nextAction.module_id, assayerVerif);
       const statusAfterApply = manager.getState().modules[nextAction.module_id];
       await logStateTransition(
         manager,
         nextAction.module_id,
         statusBeforeApply,
         statusAfterApply,
-        `assayer_${assayerResult.payload.status}`,
+        `assayer_${assayerVerif.status}`,
         runtime,
       );
       await manager.saveState(statePath);
@@ -1029,7 +1134,7 @@ export async function runPipeline(
           manager,
           nextAction.module_id,
           foundryResult.payload,
-          assayerResult.payload,
+          assayerVerif,
           statePath,
           runtime,
         );
@@ -1040,7 +1145,7 @@ export async function runPipeline(
           {
             event: "module_fail_abort",
             module_id: nextAction.module_id,
-            result: assayerResult.payload,
+            result: assayerVerif,
           },
           runtime,
         );
@@ -1076,17 +1181,16 @@ export async function runPipeline(
       );
       await manager.saveState(statePath);
 
-      const assayerResult = await invokeAssayer(surgeonResult.payload, layer, runtime);
-      recordUsageFromResult(manager, assayerResult.result);
+      const assayerVerif = await invokeAssayer(surgeonResult.payload, layer, runtime);
       const statusBeforeApply = manager.getState().modules[nextAction.module_id];
-      manager.applyVerifResult(nextAction.module_id, assayerResult.payload);
+      manager.applyVerifResult(nextAction.module_id, assayerVerif);
       const statusAfterApply = manager.getState().modules[nextAction.module_id];
       await logStateTransition(
         manager,
         nextAction.module_id,
         statusBeforeApply,
         statusAfterApply,
-        `assayer_${assayerResult.payload.status}`,
+        `assayer_${assayerVerif.status}`,
         runtime,
       );
       await manager.saveState(statePath);
@@ -1096,7 +1200,7 @@ export async function runPipeline(
           manager,
           nextAction.module_id,
           surgeonResult.payload,
-          assayerResult.payload,
+          assayerVerif,
           statePath,
           runtime,
         );
@@ -1107,7 +1211,7 @@ export async function runPipeline(
           {
             event: "module_fail_abort",
             module_id: nextAction.module_id,
-            result: assayerResult.payload,
+            result: assayerVerif,
           },
           runtime,
         );

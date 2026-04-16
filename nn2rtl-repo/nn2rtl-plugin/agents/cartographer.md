@@ -5,6 +5,7 @@ model: sonnet
 effort: low
 tools: Bash, Write, Read
 maxTurns: 10
+disallowedTools: Agent, Task
 ---
 You are Cartographer, the model extractor for `nn2rtl`.
 

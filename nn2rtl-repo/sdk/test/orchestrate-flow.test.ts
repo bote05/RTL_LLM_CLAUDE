@@ -18,9 +18,10 @@ const reportsDir = path.join(outputRoot, "reports");
 const rtlDir = path.join(outputRoot, "rtl");
 
 type MockStep = SDKResultMessage | (() => Promise<SDKResultMessage> | SDKResultMessage);
-type YosysStep =
-  | { success: boolean; lut_count: number; fmax_mhz: number; report: string }
-  | (() => Promise<{ success: boolean; lut_count: number; fmax_mhz: number; report: string }> | { success: boolean; lut_count: number; fmax_mhz: number; report: string });
+type YosysReport = { success: boolean; lut_count: number; fmax_mhz: number; area_um2?: number; report: string };
+type YosysStep = YosysReport | (() => Promise<YosysReport> | YosysReport);
+type VerifLike = Record<string, unknown>;
+type AssayerStep = VerifLike | (() => Promise<VerifLike> | VerifLike);
 
 const fixedNow = () => new Date("2026-04-14T00:00:00Z");
 
@@ -29,6 +30,19 @@ function createYosysMock(steps: YosysStep[]): ReturnType<typeof vi.fn> {
     const next = steps.shift();
     if (!next) {
       throw new Error("No mock result queued for yosysFn.");
+    }
+    const report = typeof next === "function" ? await next() : next;
+    return { area_um2: 0, ...report };
+  });
+}
+
+// Assayer is now deterministic in production (orchestrator calls run_iverilog
+// + run_verilator directly), so tests inject a VerifResult stream here.
+function createAssayerMock(steps: AssayerStep[]): ReturnType<typeof vi.fn> {
+  return vi.fn(async () => {
+    const next = steps.shift();
+    if (!next) {
+      throw new Error("No mock result queued for assayerFn.");
     }
     return typeof next === "function" ? await next() : next;
   });
@@ -68,7 +82,7 @@ function successResult(structured_output: unknown): SDKResultMessage {
 }
 
 function createQueryMock(
-  steps: Partial<Record<"assayer" | "cartographer" | "foundry" | "surgeon", MockStep[]>>,
+  steps: Partial<Record<"cartographer" | "foundry" | "surgeon", MockStep[]>>,
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async function* ({
     prompt,
@@ -78,7 +92,6 @@ function createQueryMock(
     const key =
       prompt.includes("Invoke the `cartographer`") ? "cartographer"
         : prompt.includes("Invoke the `foundry`") ? "foundry"
-        : prompt.includes("Invoke the `assayer`") ? "assayer"
         : prompt.includes("Invoke the `surgeon`") ? "surgeon"
         : null;
 
@@ -116,12 +129,12 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [successResult(module)],
-      assayer: [successResult(verifPass)],
     });
+    const assayerFn = createAssayerMock([verifPass]);
     const yosysFn = createYosysMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
     expect(queryFn.mock.calls.some(([call]) => (call as { prompt: string }).prompt.includes("cartographer"))).toBe(false);
@@ -148,12 +161,12 @@ describe("runPipeline", () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
         return successResult(module);
       }],
-      assayer: [successResult(verifPass)],
     });
+    const assayerFn = createAssayerMock([verifPass]);
     const yosysFn = createYosysMock([{ success: true, lut_count: 2, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
     expect(queryFn.mock.calls.some(([call]) => (call as { prompt: string }).prompt.includes("cartographer"))).toBe(true);
@@ -182,16 +195,16 @@ describe("runPipeline", () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
         return successResult(originalModule);
       }],
-      assayer: [successResult(verifFail), successResult(verifPass)],
       surgeon: [async () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
         return successResult(repairedModule);
       }],
     });
+    const assayerFn = createAssayerMock([verifFail, verifPass]);
     const yosysFn = createYosysMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
@@ -221,19 +234,19 @@ describe("runPipeline", () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
         return successResult(originalModule);
       }],
-      assayer: [successResult(verifPass), successResult(verifPass)],
       surgeon: [async () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
         return successResult(repairedModule);
       }],
     });
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const yosysFn = createYosysMock([
       { success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" },
       { success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" },
     ]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
@@ -246,12 +259,11 @@ describe("runPipeline", () => {
     expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');
   });
 
-  it("treats fmax_mhz=0 as a synthesis failure and routes to Surgeon", async () => {
+  it("treats fmax_mhz=0 as a pass when Yosys succeeded (Sky130 does not always emit a delay)", async () => {
     await writeFixture("pipeline_ir.json", path.join(outputRoot, "layer_ir.json"));
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
-    const repairedModule = { ...originalModule, generated_by: "Surgeon", attempt: 2 };
     const verifPass = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
     );
@@ -261,28 +273,24 @@ describe("runPipeline", () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
         return successResult(originalModule);
       }],
-      assayer: [successResult(verifPass), successResult(verifPass)],
-      surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
-        return successResult(repairedModule);
-      }],
+      surgeon: [],
     });
-    // First yosys call: fmax_mhz=0 (unmeasurable) -> synthesis_failed -> Surgeon
-    // Second yosys call after Surgeon repair: fmax_mhz=75 -> pass
+    const assayerFn = createAssayerMock([verifPass]);
+    // Sky130 `stat -liberty` + `abc -liberty` does not always print a
+    // delay line, so `fmax_mhz: 0` with `success: true` is not a failure.
+    // We still gate on lut_count and on Yosys success itself.
     const yosysFn = createYosysMock([
-      { success: true, lut_count: 4, fmax_mhz: 0, report: "stat ran but abc9 did not emit a delay line" },
-      { success: true, lut_count: 4, fmax_mhz: 75, report: "fixture pass" },
+      { success: true, lut_count: 4, fmax_mhz: 0, area_um2: 123.4, report: "stat ran but no delay line" },
     ]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
-    expect(yosysFn).toHaveBeenCalledTimes(2);
+    expect(yosysFn).toHaveBeenCalledTimes(1);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
     expect(state.results.unit_module.failure_class).toBeUndefined();
-    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');
   });
 
   it("routes Fmax-below-target to Surgeon with missing_pipeline_register failure class", async () => {
@@ -300,19 +308,19 @@ describe("runPipeline", () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
         return successResult(originalModule);
       }],
-      assayer: [successResult(verifPass), successResult(verifPass)],
       surgeon: [async () => {
         await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
         return successResult(repairedModule);
       }],
     });
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const yosysFn = createYosysMock([
       { success: true, lut_count: 4, fmax_mhz: 35, report: "ABC: Delay = 28571 ps" },
       { success: true, lut_count: 4, fmax_mhz: 75, report: "ABC: Delay = 13333 ps" },
     ]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
     });
 
     expect(yosysFn).toHaveBeenCalledTimes(2);

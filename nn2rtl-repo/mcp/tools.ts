@@ -20,6 +20,25 @@ const repoRoot = path.resolve(
 );
 export const TB_SOURCE_PATH = path.resolve(repoRoot, "tb", "static_verilator_tb.cpp");
 export const TB_JSON_HPP_PATH = path.resolve(repoRoot, "tb", "third_party", "json.hpp");
+export const SKY130_LIB_PATH = path.resolve(
+  repoRoot,
+  "vendor",
+  "sky130",
+  "sky130_fd_sc_hd__tt_025C_1v80.lib",
+);
+
+// Hard wall-clock cap for Yosys synthesis. Foundry can emit combinational
+// blobs that abc never finishes mapping (a 64x64 1x1 conv unrolled is
+// ~4096 parallel multipliers, which runs for hours). We'd rather fail fast
+// and tell Surgeon "synthesis timed out — the design is too combinational"
+// than burn host CPU forever.
+export const YOSYS_TIMEOUT_MS = 120_000;
+// Yosys can emit tens of MB of stdout on a single pass (mostly repetitive
+// warnings like "No latch inferred" from memory-heavy generate blocks).
+// Node's default execFile maxBuffer is 1 MiB — when exceeded the child is
+// killed and what looks like a synth failure is actually a buffer overflow.
+// Raise the cap to 64 MiB; anything larger than that is pathological.
+export const YOSYS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 // On Windows, the `verilator` entry point is a Perl script that OSS CAD Suite
 // does not ship Perl for; `verilator_bin.exe` is the native Windows binary and
@@ -191,6 +210,8 @@ export function augmentEnvForOssCadSuite(env: NodeJS.ProcessEnv): NodeJS.Process
 type CommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  timeout?: number;
+  maxBuffer?: number;
 };
 
 type CommandResult = {
@@ -266,7 +287,11 @@ export function isSystemSpawnError(error: unknown): boolean {
       c === "ENOMEM" ||
       c === "ETIMEDOUT" ||
       c === "EMFILE" ||
-      c === "ENFILE"
+      c === "ENFILE" ||
+      // Node's execFile kills the child when stdout/stderr exceeds
+      // `maxBuffer`. That is infra (our buffer config is too small), not an
+      // RTL bug — must not be routed to Surgeon as a synthesis failure.
+      c === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
     ) {
       return true;
     }
@@ -295,7 +320,7 @@ export function stderrFromUnknown(error: unknown): string {
 
 export function parseYosysReport(
   report: string,
-): { fmax_mhz: number; lut_count: number } {
+): { fmax_mhz: number; lut_count: number; area_um2: number } {
   // Yosys cell-naming varies by backend (and by version): synth_ice40 emits
   // `SB_LUT4`, other targets emit bare `LUT`, `LUT4`, `LUT5`, `LUT6`, and some
   // paths emit `ICESTORM_LC`. Sum any cell row whose name contains a LUT-ish
@@ -306,6 +331,23 @@ export function parseYosysReport(
     lut_count += Number(m[1]);
   }
 
+  // Sky130 / standard-cell flow: `stat -liberty ...` prints a line like
+  //   Chip area for module '\layer1_0_conv1': 12345.678900
+  // in um^2. When a .lib is used, fall back to total cell count as a proxy
+  // "complexity" metric if no LUT-style lines were found.
+  let area_um2 = 0;
+  const areaMatch = report.match(/Chip\s+area\s+for\s+module[^:]*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+  if (areaMatch) {
+    area_um2 = Number(areaMatch[1]);
+  }
+  if (lut_count === 0) {
+    // Fall back to "Number of cells" line printed by `stat`.
+    const cellsMatch = report.match(/Number\s+of\s+cells:\s*(\d+)/i);
+    if (cellsMatch) {
+      lut_count = Number(cellsMatch[1]);
+    }
+  }
+
   // Fmax extraction order — most specific first:
   // 1. Explicit "X MHz" (nextpnr-style report or test mocks)
   // 2. ABC/abc9 "Delay = X.XX ns" (Yosys sta/abc9 output)
@@ -314,22 +356,22 @@ export function parseYosysReport(
   // primary production signal.
   const mhzMatch = report.match(/([0-9]+(?:\.[0-9]+)?)\s*MHz/i);
   if (mhzMatch) {
-    return { lut_count, fmax_mhz: Number(mhzMatch[1]) };
+    return { lut_count, fmax_mhz: Number(mhzMatch[1]), area_um2 };
   }
 
   const nsMatch = report.match(/Delay\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*ns/i);
   if (nsMatch) {
     const ns = Number(nsMatch[1]);
-    return { lut_count, fmax_mhz: ns > 0 ? 1_000 / ns : 0 };
+    return { lut_count, fmax_mhz: ns > 0 ? 1_000 / ns : 0, area_um2 };
   }
 
   const psMatch = report.match(/Delay\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*ps/i);
   if (psMatch) {
     const ps = Number(psMatch[1]);
-    return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0 };
+    return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0, area_um2 };
   }
 
-  return { lut_count, fmax_mhz: 0 };
+  return { lut_count, fmax_mhz: 0, area_um2 };
 }
 
 export function resolveOutputRoot(outputDir: string): string {
@@ -516,25 +558,42 @@ export async function run_yosys(
   verilog_source: string,
   module_name: string,
   runtimeOverrides: Partial<ToolsRuntime> = {},
-): Promise<{ success: boolean; lut_count: number; fmax_mhz: number; report: string }> {
+): Promise<{
+  success: boolean;
+  lut_count: number;
+  fmax_mhz: number;
+  area_um2: number;
+  report: string;
+}> {
   const runtime = createToolsRuntime(runtimeOverrides);
   return withTempDir("nn2rtl-yosys-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
 
+    // Sky130 standard-cell flow. Previously targeted iCE40 with synth_ice40
+    // -abc9; that path hung indefinitely on deep combinational blobs because
+    // abc9 delay-aware mapping does unbounded search on large LUT cones.
+    // Sky130 (free Google/SkyWater standard-cell library) gives real area
+    // (um^2) and real timing (ns) numbers while using generic Yosys `synth`
+    // which is much better behaved on large designs. See vendor/sky130/.
+    const sky130Lib = SKY130_LIB_PATH.replace(/\\/g, "/");
+    const yosysScript = [
+      `synth -top ${module_name}`,
+      `dfflibmap -liberty ${sky130Lib}`,
+      `abc -liberty ${sky130Lib}`,
+      `stat -liberty ${sky130Lib}`,
+    ].join("; ");
+    let didTimeout = false;
     try {
-      // Yosys specifically needs its own bin/ + lib/ at the head of PATH so
-      // Windows finds the right DLLs; Verilator breaks if we force that
-      // globally because oss-cad-suite's bundled g++ shadows w64devkit's
-      // modern g++. Scope the augment to the yosys invocation only.
       const { stdout, stderr } = await runtime.commandRunner(
         "yosys",
-        [
-          "-p",
-          `synth_ice40 -abc9 -top ${module_name}; stat; ltp -noff`,
-          verilogPath,
-        ],
-        { cwd: tempDir, env: augmentEnvForOssCadSuite(runtime.env) },
+        ["-p", yosysScript, verilogPath],
+        {
+          cwd: tempDir,
+          env: augmentEnvForOssCadSuite(runtime.env),
+          timeout: YOSYS_TIMEOUT_MS,
+          maxBuffer: YOSYS_MAX_BUFFER_BYTES,
+        },
       );
 
       const report = [stdout, stderr].filter(Boolean).join("\n");
@@ -547,11 +606,51 @@ export async function run_yosys(
       if (isSystemSpawnError(error)) {
         throw error;
       }
+      // execFile sets error.killed=true when it killed the child for
+      // exceeding `timeout`. Distinguish timeout from ordinary synth failure
+      // so Surgeon sees a clear diagnostic instead of empty stderr.
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        (error as { killed?: boolean }).killed === true
+      ) {
+        didTimeout = true;
+      }
+      // Capture whatever Yosys managed to print before dying. execFile
+      // populates `stdout`/`stderr` on the rejected error even on non-zero
+      // exits and timeouts, so surface both instead of just `message`.
+      const errObj = error as { stdout?: unknown; stderr?: unknown };
+      const stdoutStr =
+        typeof errObj.stdout === "string"
+          ? errObj.stdout
+          : Buffer.isBuffer(errObj.stdout)
+            ? errObj.stdout.toString("utf8")
+            : "";
+      const stderrStr =
+        typeof errObj.stderr === "string"
+          ? errObj.stderr
+          : Buffer.isBuffer(errObj.stderr)
+            ? errObj.stderr.toString("utf8")
+            : stderrFromUnknown(error);
+      const captured = [stdoutStr, stderrStr].filter(Boolean).join("\n");
+      const report = didTimeout
+        ? [
+            `Yosys synthesis timed out after ${YOSYS_TIMEOUT_MS / 1000}s. ` +
+              `Likely cause: the design is a single very deep/wide combinational blob ` +
+              `(e.g. all MACs of a conv unrolled into one always block) that abc cannot ` +
+              `map quickly. Rewrite the module to time-multiplex its arithmetic — one ` +
+              `MAC per cycle accumulated across many cycles — so the combinational cone ` +
+              `between any two registers is small.`,
+            "---",
+            captured,
+          ].join("\n")
+        : captured || "Yosys exited non-zero with no output.";
       return {
         success: false,
         lut_count: 0,
         fmax_mhz: 0,
-        report: stderrFromUnknown(error),
+        area_um2: 0,
+        report,
       };
     }
   }, runtime);

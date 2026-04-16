@@ -31,6 +31,30 @@ SIGNAL_LITERALS = {
 PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
+# Number of register stages wrapped around a time-multiplexed MAC pipeline
+# (input latch -> multiply -> accumulate -> saturate/output buffer). The
+# conv latency formula below adds this to ic*kh*kw so `pipeline_latency_cycles`
+# matches what an actual one-MAC-per-clock RTL implementation achieves.
+CONV_PIPELINE_STAGES = 3
+
+
+def compute_conv2d_latency_cycles(weight_shape: list[int]) -> int:
+    """Return a realistic latency for a time-multiplexed conv2d.
+
+    Foundry is required to emit one 8x8 MAC per clock; a single output sample
+    therefore takes `in_channels * kh * kw + pipeline_stages` cycles from
+    first valid_in to first valid_out. `weight_shape` is [oc, ic, kh, kw]
+    (PyTorch convention). A 7x7 stem with 3 input channels → 3*49+3 = 150;
+    a 1x1 layer1 conv with 64 input channels → 64*1+3 = 67; a 3x3 conv with
+    64 input channels → 64*9+3 = 579. These replace the previous hardcoded
+    value of 2, which was physically impossible and caused synthesis to try
+    to map thousands of parallel multipliers in a single cycle.
+    """
+    if len(weight_shape) < 4:
+        return PIPELINE_LATENCY_CYCLES["conv2d"]
+    _oc, ic, kh, kw = weight_shape[:4]
+    return int(ic) * int(kh) * int(kw) + CONV_PIPELINE_STAGES
+
 
 class GoldenGenerationError(ValueError):
     """Raised when golden generation cannot satisfy the repo contract."""
@@ -711,7 +735,13 @@ def build_fx_pipeline_ir_payload(
             "num_weights": expected_num_weights,
             "scale_factor": float(metadata["scale_factor"]),
             "zero_point": coerce_int(metadata["zero_point"], f"{module_id}.zero_point"),
-            "pipeline_latency_cycles": PIPELINE_LATENCY_CYCLES[op_type],
+            "pipeline_latency_cycles": (
+                compute_conv2d_latency_cycles(
+                    coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape")
+                )
+                if op_type == "conv2d"
+                else PIPELINE_LATENCY_CYCLES[op_type]
+            ),
             "clock_period_ns": 20,
             "input_width_bits": coerce_int(
                 metadata.get("input_width_bits", 16 if op_type == "add" else 8),

@@ -3,16 +3,19 @@
 // effort is only supported in .claude/agents/ file-based agents, not in AgentDefinition
 // For SDK programmatic agents, model tier is the only override available
 
-// The deterministic TypeScript orchestrator plays the Conductor role itself,
-// so there is no "Conductor" LLM agent. The other four agents are the only
-// ones dispatched via the SDK's query() path.
+// The deterministic TypeScript orchestrator plays both the Conductor and
+// Assayer roles itself. Assayer used to be a Haiku "simulation runner" LLM
+// but had zero real reasoning to do (run iverilog, run Verilator, parse
+// JSON, return) and repeatedly hallucinated VerifResults instead of calling
+// the tools. Verification now goes through runtime.assayerFn — same pattern
+// as runtime.yosysFn for synthesis. The three remaining LLM agents below
+// are the only ones dispatched via the SDK's query() path.
 // `maxTurns` caps the agentic turn count per subagent call; the outer
 // query() also sets a parent cap that applies on top of these.
 export const AGENT_CONFIG = {
   Cartographer: { model: "sonnet" as const, maxTurns: 30, description: "Model extractor. Runs once at pipeline start. Emits output/layer_ir.json." },
   Foundry:      { model: "sonnet" as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
-  Assayer:      { model: "haiku"  as const, maxTurns: 12, description: "Simulation runner. Runs iverilog and Verilator, returns VerifResult JSON." },
-  Surgeon:      { model: "opus"   as const, maxTurns: 20, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Minimal rewrite only." },
+  Surgeon:      { model: "opus"   as const, maxTurns: 20, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
 } as const;
 
 export type AgentName = keyof typeof AGENT_CONFIG;

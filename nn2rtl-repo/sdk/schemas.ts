@@ -119,6 +119,7 @@ export const synthesisReportSchema = z
     success: z.boolean(),
     lut_count: z.number(),
     fmax_mhz: z.number(),
+    area_um2: z.number().default(0),
     report: z.string(),
   })
   .strict();
