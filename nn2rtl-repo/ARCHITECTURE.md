@@ -1,6 +1,6 @@
 # nn2rtl — Architecture Reference
 
-Last updated: April 14, 2026
+Last updated: April 16, 2026
 
 This document is a file-by-file tour of the codebase. It complements [README.md](./README.md) (the design spec — *what the project is and why*) by describing *where each decision lives in the code* and *what is still outstanding*.
 
@@ -25,6 +25,7 @@ nn2rtl-repo/
 ├── mcp/                       # Layer 3: MCP server exposing hardware toolchain
 ├── scripts/                   # Frontend prep plus shared maintenance checks
 ├── tb/                        # Static C++ Verilator testbench
+├── vendor/sky130/             # Sky130 standard-cell library + download script
 ├── test/fixtures/             # Cross-language fixtures used by Python & TS tests
 └── output/                    # Runtime artifacts (git-ignored; empty subdirs kept)
 ```
@@ -65,7 +66,7 @@ Workspace permissions for Claude Code. Permits Bash invocations for `node`, `npm
 
 ## Layer 1 — Claude Code Plugin (`nn2rtl-plugin/`)
 
-Defines the four specialized agents (Cartographer, Foundry, Assayer, Surgeon) and their supporting skill documentation. The pipeline-coordinator role is played by the deterministic TypeScript orchestrator in `sdk/orchestrate.ts`, not by an LLM agent. Loaded by the SDK orchestrator via `plugins: [{ type: "local", path: pluginPath }]`.
+Defines the three LLM agents (Cartographer, Foundry, Surgeon) and their supporting skill documentation. The pipeline-coordinator role and the verification (Assayer) role are both played by the deterministic TypeScript orchestrator in `sdk/orchestrate.ts`, not by LLM agents. Loaded by the SDK orchestrator via `plugins: [{ type: "local", path: pluginPath }]`.
 
 ### `.claude-plugin/plugin.json`
 Plugin manifest. Declares name, version, and paths to agent, skill, and MCP config directories.
@@ -79,14 +80,21 @@ Model extractor. Model: `sonnet`. Runs once. The prompt tells Cartographer to in
 ### `agents/foundry.md`
 Primary Verilog generator. Model: `sonnet`. Receives one `LayerIR`, produces one synthesizable `VerilogModule`. Hard rules: INT8 fixed-point, `8×8 → 16-bit` multipliers, signed datapath, saturating residual adds, `$readmemh` for weights, exact `pipeline_latency_cycles` from first `valid_in` to first `valid_out`, no simulation-only constructs. Canonical port names are mandatory (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`); `ready_in` is a module **output** (upstream backpressure) that may be tied high if stalling is not needed. Must call `write_verilog` to persist.
 
-### `agents/assayer.md`
-Simulation runner. Model: `haiku`. Generates the JSON sidecar consumed by the static testbench, runs `iverilog` for syntax, calls the `run_verilator` MCP tool, returns a structured `VerifResult` with timing fields and a classified `failure_class` on functional failure. Never writes source files (`disallowedTools: Write, Edit`).
+**Wide-bus packed-channel interface.** `data_in` is a packed channel bus, not a scalar 8-bit port. For conv/relu, `data_in[i*8 +: 8]` is channel `i` of the current pixel and the port width must be `IC*8` bits. `data_out[i*8 +: 8]` is channel `i` of the emitted output and the port width must be `OC*8` bits. All channels of a pixel arrive in a single clock cycle. For `op_type=add`, `data_in[W-1:0] = lhs` and `data_in[2W-1:W] = rhs` where `W = input_width_bits / 2`.
+
+**Output-stationary MAC array mandate.** Conv modules must instantiate `OC` parallel signed 8x8 MAC lanes, one accumulator per output channel, reused across input-channel × kernel-position cycles. `pipeline_latency_cycles = IC * KH * KW + 3` (fetch, multiply, accumulate, output buffer). Single-MAC designs are explicitly rejected. `ready_in` must deassert while the MAC array is running.
+
+**Disallowed tools**: `Agent`, `Task` (no implicit Opus subagent spawning). `maxTurns: 20`.
 
 ### `agents/surgeon.md`
-Targeted repair specialist. Model: `opus`. Activated on failure. Receives the broken module, the `VerifResult`, and the original `LayerIR`. Must classify the failure into one of the 16 taxonomy classes, locate the exact faulty lines, and rewrite only those lines while preserving the module's port interface. Capped at 3 retries per module.
+Targeted repair specialist. Model: `opus`. Activated on failure. Receives the broken module, the `VerifResult`, and the original `LayerIR`. Must classify the failure into one of the 17 taxonomy classes (the Verilator bench produces `status`, `timing_pass`, `expected`, `got`, `max_error`, and stderrs but does NOT emit `failure_class` — Surgeon owns that classification), locate the exact faulty lines, and rewrite only those lines while preserving the module's port interface. The prompt mandates terse output: "Output immediately. Do not explain." `maxTurns: 8`. Capped at 3 retries per module (via `PIPELINE_CONFIG.max_retries`).
 
-### `skills/{cartographer,foundry,assayer,surgeon}/SKILL.md`
+**Disallowed tools**: `Agent`, `Task`.
+
+### `skills/{cartographer,foundry,surgeon}/SKILL.md`
 Supplemental skill reference material loaded alongside the matching agent prompt. The orchestrator concatenates the skill markdown body onto the agent prompt at load time (see `loadPluginAgentDefinition` in `sdk/orchestrate.ts`). Contains schema reminders, RTL patterns, and canonical-signal-name reminders.
+
+**Note:** There is no `agents/assayer.md` and no `skills/assayer/` directory. Assayer was removed as an LLM agent and replaced with deterministic verification logic in `sdk/orchestrate.ts` (see `runAssayerDeterministic`).
 
 ---
 
@@ -112,11 +120,11 @@ Tiny CLI wrapper. Calls `runCli()` and routes uncaught errors through `handlePip
 ### `types.ts`
 Canonical TypeScript interfaces for the pipeline data contracts:
 
-- `LayerIR` — master per-module spec. `module_id`, `op_type`, input/output shapes, `weights_path` / `bias_path` / `weight_shape` / `num_weights` (weights on disk, not inline), `scale_factor`, `zero_point`, timing contract (`pipeline_latency_cycles`, `clock_period_ns`), port widths, **seven canonical signal names typed as string literals** (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`), and golden input/output vectors.
+- `LayerIR` — master per-module spec. `module_id`, `op_type`, input/output shapes, `weights_path` / `bias_path` / `weight_shape` / `num_weights` (weights on disk, not inline), `scale_factor`, `zero_point`, timing contract (`pipeline_latency_cycles`, `clock_period_ns`), port widths (`input_width_bits = in_channels * 8` for conv/relu, `= in_channels * 16` for add; `output_width_bits = out_channels * 8`), **seven canonical signal names typed as string literals** (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`), and golden input/output vector file paths.
 - `PipelineIR` — container for all LayerIRs plus model metadata.
 - `VerilogModule` — what Foundry and Surgeon produce.
-- `VerifResult` — what Assayer returns. Includes timing fields and `failure_class`.
-- `VerificationSidecar` — the JSON blob Assayer writes for the static testbench to consume; includes all seven signal names.
+- `VerifResult` — what the deterministic Assayer function returns. Includes timing fields, numerical diagnostics, and optional `failure_class`.
+- `VerificationSidecar` — the JSON blob the orchestrator writes for the static testbench to consume; includes all seven signal names and `bus_bytes_per_sample`.
 - `PipelineState` — authoritative run state. Includes `total_cost_usd` and per-model `model_usage`.
 - `ModuleStatus` and `NextAction` — discriminated unions for the state machine.
 - `FailureClass` — the README's 16-category repair taxonomy plus `synthesis_failed`, used when a module passes simulation but fails the post-pass Yosys synthesis step.
@@ -127,6 +135,7 @@ Zod 4 runtime schemas mirroring `types.ts`. Single source of truth for every JSO
 Constraint highlights:
 
 - `layerIrSchema`: all seven signal-name fields are `z.literal(...)`; `attempt`, widths, latency are `int().positive()`.
+- `synthesisReportSchema`: includes `area_um2` (defaults to 0 for non-Sky130 reports).
 - `verilogModuleSchema.attempt`: `z.number().int().positive()` (Foundry starts at 1).
 - `pipelineStateSchema`: `max_retries`, `attempts.value` are `int().nonnegative()`; `total_cost_usd` is `nonnegative()`. A `superRefine` enforces cross-field invariants:
   - Every `modules` key has an `attempts` entry and vice versa.
@@ -137,7 +146,12 @@ Constraint highlights:
   - Every `results[id].module_id` must equal `id`.
 
 ### `config.ts`
-`AGENT_CONFIG` maps each of the four LLM subagents (Cartographer, Foundry, Assayer, Surgeon) to its model tier, per-agent `maxTurns`, and description. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
+`AGENT_CONFIG` maps each of the three LLM subagents (Cartographer, Foundry, Surgeon) to its model tier, per-agent `maxTurns`, and description. There is no Assayer entry — the orchestrator plays both the Conductor and Assayer roles itself via deterministic code. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
+
+Agent configuration:
+- **Cartographer**: model `sonnet`, maxTurns 30
+- **Foundry**: model `sonnet`, maxTurns 20
+- **Surgeon**: model `opus`, maxTurns 8
 
 ### `claude-agent-sdk-compat.ts`
 Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The published SDK's `AgentDefinition`, `SDKMessage`, and `query()` option types are large, include fields we do not use (`mcpServers`, `source`, `criticalSystemReminder_EXPERIMENTAL`, various policy-settings knobs), and `model` is typed as `string` so any model name compiles. This shim re-exports only the fields the orchestrator actually touches (`description`, `prompt`, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` on `AgentDefinition`; `cwd`, `tools`, `allowedTools`, `plugins`, `agents`, `outputFormat`, `maxTurns` on the `query()` options) and narrows `model` to the `"sonnet" | "opus" | "haiku" | "inherit"` union we support. The runtime `query` function is cast back to this narrower signature via `as unknown as ...` — since the SDK runtime accepts any superset of our shape, the cast is sound. Upside: adding a field to the SDK's types does not silently change our API, and unsupported fields fail at compile time instead of at runtime. The SDK itself is now fully typed, so the shim is no longer a declarations workaround; removing it would mean accepting the SDK's wider surface, which we do not want.
@@ -157,7 +171,9 @@ Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The publishe
 - `summary()` — plain-text table used when writing the pipeline summary.
 
 ### `orchestrate.ts`
-Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus many helpers for tests (`AGENT_SLUGS`, `createOrchestratorRuntime`, `resolveFromSdk`, `normalizeAgentName`, `parseFrontmatter`, `toStringList`, `readText`, `pathExists`, `readJsonFile`, `writeJsonFile`, `appendRunLog`, `ensureOutputLayout`, `loadPluginAgentDefinition`, `loadAllAgentDefinitions`, `buildDelegationPrompt`, `requireStructuredOutput`, `findLayer`, `loadPersistedVerilogModule`, `ensureLayerIr`, `writePipelineSummary`, `parseCliArgs`).
+Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus many helpers for tests (`AGENT_SLUGS`, `createOrchestratorRuntime`, `resolveFromSdk`, `normalizeAgentName`, `parseFrontmatter`, `toStringList`, `readText`, `pathExists`, `readJsonFile`, `writeJsonFile`, `appendRunLog`, `ensureOutputLayout`, `loadPluginAgentDefinition`, `loadAllAgentDefinitions`, `buildDelegationPrompt`, `requireStructuredOutput`, `findLayer`, `loadPersistedVerilogModule`, `ensureLayerIr`, `writePipelineSummary`, `parseCliArgs`, `preflightVerilogModule`).
+
+`AGENT_SLUGS` lists only three agents: `Cartographer`, `Foundry`, `Surgeon`.
 
 `runPipeline(checkpointPath, options)` is the whole autonomous loop:
 
@@ -165,14 +181,24 @@ Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus man
 2. If `output/layer_ir.json` is missing, dispatch Cartographer and persist its result.
 3. Initialize `PipelineStateManager`, or resume from `output/pipeline_state.json` if `options.resume`.
 4. Loop on `tick()`:
-   - `invoke_foundry` → call Foundry for the current `LayerIR`, validate the returned `VerilogModule`, persist it, then invoke Assayer on that module.
-   - `invoke_surgeon` → load the persisted broken module plus the prior `VerifResult`, call Surgeon, validate/persist the repaired `VerilogModule`, then invoke Assayer on the repaired module.
+   - `invoke_foundry` → call Foundry for the current `LayerIR`, validate the returned `VerilogModule`, persist it, then invoke the deterministic Assayer on that module.
+   - `invoke_surgeon` → load the persisted broken module plus the prior `VerifResult`, call Surgeon, validate/persist the repaired `VerilogModule`, then invoke the deterministic Assayer on the repaired module.
    - Every structured agent return is validated through Zod before it is trusted.
-5. Feed Assayer's `VerifResult` into `PipelineStateManager.applyVerifResult()`, save state, and append run-log events after each transition.
-6. On a passing module, invoke `run_yosys` via a direct SDK call and write `output/reports/<module_id>.yosys.json`. If Yosys reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"` and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
+5. Feed the Assayer's `VerifResult` into `PipelineStateManager.applyVerifResult()`, save state, and append run-log events after each transition.
+6. On a passing module, invoke `run_yosys` via direct MCP import (Sky130 flow) and write `output/reports/<module_id>.yosys.json`. If Yosys reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"` and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
 7. On terminal state, write `output/reports/pipeline_summary.json`.
 
-**Runtime injection** via `OrchestratorRuntime = { now, queryFn, yosysFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks, a mock `query()` implementation, and a mock Yosys invocation. The default is `{ now: () => new Date(), queryFn: query, yosysFn: invokeYosys }` where `invokeYosys` dynamically imports `run_yosys` from the MCP package and validates the report against `synthesisReportSchema`. The target-module path is resolved at module load time via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` and branches on whether the SDK is running straight from `sdk/` source (tsx) or from `sdk/dist/` (compiled) — a relative `"../mcp/tools.js"` specifier would resolve incorrectly from `dist/`, surfacing as a misleading "Cannot find module" error that gets classified as `synthesis_failed` and routed to Surgeon.
+**Deterministic Assayer (`runAssayerDeterministic`).** Verification is no longer an LLM agent. The orchestrator writes the sidecar JSON from LayerIR fields (all signal names are fixed literals, widths and paths copied from the LayerIR), runs a deterministic RTL preflight that parses the ANSI port list to catch port-direction, port-width, and missing-port errors before invoking the toolchain, then calls `run_iverilog` for a fast lint pass followed by `run_verilator` for full simulation — both imported directly from the MCP package. The Verilator testbench produces a structured `VerifResult` JSON validated by Zod. No Haiku, no hallucination — a module has a `VerifResult` iff Verilator produced one.
+
+The sidecar includes `bus_bytes_per_sample` (= `input_width_bits / 8`), which the testbench cross-checks against the NN2V binary header's `bytes_per_sample` field.
+
+**Deterministic Yosys invocation (`invokeYosys`).** Yosys is also invoked via direct MCP import, not through an LLM mediator. The result is validated against `synthesisReportSchema`.
+
+**RTL Preflight (`preflightVerilogModule`).** Before running any toolchain, the orchestrator parses the generated Verilog's ANSI port list and checks: (1) all seven canonical ports are present, (2) directions match the spec (e.g. `ready_in` must be `output`), (3) bus widths match `input_width_bits` / `output_width_bits` from the LayerIR. Preflight failures return a `VerifResult` with `failure_class: port_width_mismatch` and skip the iverilog/Verilator invocations entirely, saving minutes of build time.
+
+**PPA gates (`evaluateSynthesis`).** After Yosys succeeds, `evaluateSynthesis` checks: (1) Fmax >= 50 MHz target (else `failure_class: missing_pipeline_register`), (2) `fmax_mhz > 0` (else `synthesis_failed` — timing could not be measured), (3) when no standard-cell area metric is present, LUT count <= 5000 per module. Under the current Sky130 flow, `lut_count` is a total standard-cell count proxy (from `stat -liberty`), not a real LUT count, so the 5k LUT ceiling is only enforced as a fallback. Reports larger than ~6 KB are summarized as head + ERROR lines + tail so Surgeon sees the actual diagnostics instead of warning spam.
+
+**Runtime injection** via `OrchestratorRuntime = { now, queryFn, yosysFn, assayerFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks, a mock `query()` implementation, a mock Yosys invocation, and a mock Assayer function. The default is `{ now: () => new Date(), queryFn: query, yosysFn: invokeYosys, assayerFn: runAssayerDeterministic }`.
 
 Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resultSchema, runtime)`. Both the SDK `outputFormat` (JSON Schema, generated from Zod via `z.toJSONSchema`) and the local `resultSchema` (Zod) are derived from the same schema export, so drift is structurally impossible.
 
@@ -180,7 +206,7 @@ Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resu
 
 `requireStructuredOutput` unwraps the SDK's `structured_output`, falls back to `JSON.parse(result.result)` if missing, validates through the supplied Zod schema, and throws a field-level error on mismatch.
 
-Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, Assayer, Surgeon, and direct Yosys invocations.
+Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, Surgeon, and direct Yosys invocations.
 
 ---
 
@@ -209,20 +235,22 @@ Byte-for-byte mirror of `sdk/types.ts`. The two packages have separate `rootDir`
 ### `schemas.ts`
 Single source of truth for MCP-side schemas. Exports:
 
-- Shared data contracts: `failureClassSchema`, `layerIrSchema` (with all seven canonical signal literals), `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`, `verificationSidecarSchema` (with all seven canonical signal literals).
-- Per-tool input schemas: `runIverilogInput`, `runVerilatorInput`, `runYosysInput`, `readWeightsInput`, `writeVerilogInput`.
-- Per-tool output schemas: `runIverilogOutput`, `runYosysOutput`, `writeVerilogOutput`.
+- Shared data contracts: `failureClassSchema`, `layerIrSchema` (with all seven canonical signal literals), `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`, `verificationSidecarSchema` (with all seven canonical signal literals plus `bus_bytes_per_sample`).
+- Per-tool input schemas: `runIverilogInput`, `runVerilatorInput`, `runYosysInput` (includes optional `clock_period_ns`), `readWeightsInput`, `writeVerilogInput`.
+- Per-tool output schemas: `runIverilogOutput`, `runYosysOutput` (includes `area_um2`), `writeVerilogOutput`.
 
 `server.ts` advertises each tool's `inputSchema` and `outputSchema` via `z.toJSONSchema(...)` from these Zod definitions — no hand-written JSON Schema.
 
 ### `tools.ts`
-Tool implementations. Each exposes a `ToolsRuntime` override parameter so tests can supply a mock `commandRunner`, `cwd`, `env`, and `tmpDirRoot`. The default runtime uses `execFile`, the repo root as `cwd`, `process.env`, and a writable temp root chosen by `resolveTmpDirRoot()` (`os.tmpdir()` on Windows, otherwise an absolute `TMPDIR` or `/tmp`). It also exposes platform-aware `VERILATOR_COMMAND` and `PYTHON_COMMAND` constants so Windows callers can avoid the broken Perl/MS Store launcher paths that frequently show up in default installs. It does not set an explicit child-process timeout; that is intentional because real Verilator builds can take minutes. If a timeout is added later, production runs should use a generous ceiling (roughly 10 minutes, not smoke-test scale).
+Tool implementations. Each exposes a `ToolsRuntime` override parameter so tests can supply a mock `commandRunner`, `cwd`, `env`, and `tmpDirRoot`. The default runtime uses `execFile`, the repo root as `cwd`, `process.env`, and a writable temp root chosen by `resolveTmpDirRoot()` (`os.tmpdir()` on Windows, otherwise an absolute `TMPDIR` or `/tmp`). It also exposes platform-aware `VERILATOR_COMMAND` and `PYTHON_COMMAND` constants so Windows callers can avoid the broken Perl/MS Store launcher paths that frequently show up in default installs.
 
-Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `stderrFromUnknown`, `parseYosysReport`, `resolveOutputRoot`, `resolveRepoRootFromEnv`, `TB_SOURCE_PATH`, `TB_JSON_HPP_PATH`, `VERILATOR_COMMAND`, `PYTHON_COMMAND`, `run_iverilog`, `run_verilator`, `run_yosys`, `read_weights`, `write_verilog`, `readSidecarIfPresent`.
+`isSystemSpawnError` distinguishes Node-level spawn failures (ENOENT, EACCES, EPERM, ENOMEM, ETIMEDOUT, EMFILE, ENFILE, `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`, killed-by-signal) from tool-level exit-code errors. System spawn errors are thrown rather than laundered into Verilog syntax/synthesis failures, so Surgeon does not try to "fix" an out-of-memory error by rewriting correct code.
 
-- `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o <os.devNull> -g2012`, returns `{ success, stderr }`. **Implemented.**
+Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `stderrFromUnknown`, `isSystemSpawnError`, `parseYosysReport`, `resolveOutputRoot`, `resolveRepoRootFromEnv`, `TB_SOURCE_PATH`, `TB_JSON_HPP_PATH`, `SKY130_LIB_PATH`, `VERILATOR_COMMAND`, `PYTHON_COMMAND`, `YOSYS_TIMEOUT_MS`, `YOSYS_MAX_BUFFER_BYTES`, `augmentEnvForOssCadSuite`, `augmentEnvForOssCadSuiteLibOnly`, `augmentEnvForVerilatorCxx`, `run_iverilog`, `run_verilator`, `run_yosys`, `read_weights`, `write_verilog`, `readSidecarIfPresent`.
+
+- `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o <os.devNull> -g2012`, returns `{ success, stderr }`. System spawn errors are re-thrown. **Implemented.**
 - `run_verilator(verilog_source, module_name, sidecar_path)` — loads and validates the sidecar via `readSidecarIfPresent` (Zod-checked), rejects relative `golden_inputs_path` / `golden_outputs_path` / `results_path`, copies the static testbench plus vendored `third_party/json.hpp` into a temp build dir, invokes `VERILATOR_COMMAND --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS`, runs the produced binary with the sidecar path, reads `sidecar.results_path`, validates it through `verifResultSchema`, and maps build / execution failures into well-formed `VerifResult` payloads. **Implemented.**
-- `run_yosys(verilog_source, module_name)` — runs `yosys -p "synth_ice40 -abc9 -top <module_name>; stat; ltp -noff"` (no `tee -o /dev/stdout` — Windows has no such path and the bench captures Yosys' stdout directly), uses the exported `parseYosysReport` helper to sum LUT-family cell rows (`LUT`/`LUT4`/`LUT5`/`SB_LUT4`/`ICESTORM_LC`) and extract an `MHz` figure (including abc9 delay lines), and returns `{ success, lut_count, fmax_mhz, report }`. **Implemented.**
+- `run_yosys(verilog_source, module_name, clock_period_ns)` — **Sky130 standard-cell flow.** Runs `yosys -p "synth -top <module_name>; dfflibmap -liberty sky130.lib; abc -liberty sky130.lib [-constr ... -D <period_ps>]; stat -liberty sky130.lib"`. When `clock_period_ns > 0`, generates an ABC constraint file setting `set_driving_cell sky130_fd_sc_hd__buf_1` and `set_load 10.0`, and passes `-constr <file> -D <period_ps>` to `abc` to enable timing-aware mapping and `stime -p` critical-path reporting. The lib is `vendor/sky130/sky130_fd_sc_hd__tt_025C_1v80.lib` (downloaded via `vendor/sky130/download.sh`). `parseYosysReport` extracts `Chip area for module` (um^2), `Number of cells` (or `N cells` summary lines), and ABC delay lines (ns/ps → MHz). Has a **120-second timeout** (`YOSYS_TIMEOUT_MS`) and a **64 MiB maxBuffer** (`YOSYS_MAX_BUFFER_BYTES`). Timeout errors include a diagnostic explaining the likely cause (deep combinational blob that abc cannot map) and advising the registered output-stationary MAC-array structure. **Implemented.**
 - `read_weights(checkpoint_path, quantization_config)` — spawns `PYTHON_COMMAND scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. `generate_golden.py` now writes the canonical artifact to `output/layer_ir.json` and mirrors the same JSON to `output/golden_vectors.json` for MCP compatibility, so `read_weights` still sees a valid `PipelineIR` without any TypeScript changes.
 - `write_verilog(module, output_dir)` — the persistence path agents are expected to use. Writes `<output_dir>/rtl/<module_id>.v` and `<module_id>.meta.json`, returns the absolute `.v` path. The orchestrator also has a `persistVerilogModule()` safety net in `sdk/orchestrate.ts` for cases where an agent returns valid structured RTL but skipped the MCP tool call. **Implemented.**
 - `readSidecarIfPresent(filePath)` — returns the parsed `VerificationSidecar` or `null` if the file is missing (ENOENT). Any other error, or a schema mismatch, throws with a field-level message.
@@ -237,6 +265,17 @@ MCP stdio server factory. Exports:
 - `startServer(impls?)` — same plus `connect(new StdioServerTransport())`. Called by `main.ts`.
 
 Each handler parses its arguments through the matching Zod schema before invoking the (possibly injected) tool implementation, so malformed MCP calls fail immediately with field-level errors.
+
+---
+
+## Vendor Libraries (`vendor/`)
+
+### `vendor/sky130/`
+Contains the Sky130 open standard-cell library used for ASIC synthesis.
+
+- `sky130_fd_sc_hd__tt_025C_1v80.lib` — the Liberty timing library for the SkyWater Sky130 high-density standard-cell family, typical-typical corner at 25C and 1.80V. Used by `run_yosys` for `dfflibmap -liberty`, `abc -liberty`, and `stat -liberty`.
+- `download.sh` — script to fetch the Liberty file from the SkyWater PDK repository.
+- `README.md` — provenance and license notes.
 
 ---
 
@@ -275,14 +314,17 @@ Importable helpers for the golden-vector / layer-IR extraction flow. Core pieces
 
 - `get_output_paths(...)`, `get_weight_artifact_paths(...)`, `get_goldens_dir(...)`, `get_golden_artifact_paths(...)` — canonical output/weights/goldens layout.
 - `int8_to_hex(...)`, `int32_to_hex(...)`, `write_signed_int8_hex(...)`, `write_signed_int32_hex(...)` — `$readmemh`-compatible signed INT8/INT32 weight/bias serialization.
-- `write_golden_vector_file(...)`, `read_golden_vector_file(...)` — per-module binary activation streams. File layout: 4-byte ASCII magic `NN2V`, uint32 LE version (=1), uint32 LE `num_vectors`, uint32 LE `samples_per_vector`, then `num_vectors × samples_per_vector` int32 LE samples. Int32 samples cover plain int8 and packed-int16 add-operand widths with a single format. The C++ testbench's `loadVectorFile` reads the same format directly from disk.
+- `write_golden_vector_file(...)`, `read_golden_vector_file(...)` — per-module binary activation streams in **NN2V v2 format**. File layout: 20-byte header — 4-byte ASCII magic `NN2V`, uint32 LE version (=2), uint32 LE `num_vectors`, uint32 LE `samples_per_vector`, uint32 LE `bytes_per_sample` — then `num_vectors × samples_per_vector × ceil(bytes_per_sample/4)` int32 LE words. Each logical sample is a packed bus value for one cycle; bytes are little-endian within each word. The C++ testbench's `loadVectorFile` reads the same format directly from disk.
+- `requantize_tensor_with_scale(tensor, scale_factor)` — applies the requantization multiplier and clamps to INT8 range: `clamp(round(tensor * scale_factor), -128, 127)`. Used by `Int8Conv2d` and `Int8FusedStemConv2d` for conv modules (multiply by `scale_factor`). `Int8Add` converts both operands to the real domain (`lhs * lhs_scale_factor + rhs * rhs_scale_factor`) then divides by `output_scale_factor` to get back to INT8.
+- `compute_conv2d_latency_cycles(weight_shape)` — returns `IC * KH * KW + CONV_PIPELINE_STAGES` (where `CONV_PIPELINE_STAGES = 3`) for the output-stationary MAC-array pipeline latency.
 - `fold_batch_norm_into_conv(...)` — folds BN parameters into convolution weights/bias.
 - `CheckpointResidualStack`, `ResidualStackTracer`, `ActivationCaptureInterpreter` — rebuild or load the residual stack, preserve module IDs through `torch.fx`, and capture per-node activations.
 - `build_deterministic_input_stream(...)`, `capture_golden_outputs(...)` — generate the required 8 seeded INT8 vectors and record golden inputs/outputs per traced node in topological order.
 - `build_pipeline_ir_payload(...)`, `validate_pipeline_ir_payload(...)`, `write_pipeline_ir(...)` — produce a schema-shaped `PipelineIR`, write canonical `output/layer_ir.json`, and mirror it to `output/golden_vectors.json` for existing MCP consumers.
 - Format-version-2 checkpoints go through a single path: `CheckpointResidualStack` is built from the `residual_stack_spec` embedded in the checkpoint, `ResidualStackTracer` produces an `fx.GraphModule`, and `capture_golden_outputs` runs 8 deterministic input vectors through it to produce per-node int8 activation streams. Weights come from the flat `layers` dict's `weight_int8` / `bias_int32` fields (`resolve_layer_parameters` understands both the v2 names and the legacy `weights` / `bias` keys used by hand-crafted fixtures).
-- **Add module packing**: `build_fx_pipeline_ir_payload` drives add modules with `input_width_bits = 2 × operand_width` and writes the per-vector samples as packed 16-bit values where `bits[W-1:0] = lhs` and `bits[2W-1:W] = rhs` into the binary `.goldin` file. This matches the canonical single-`data_in` port contract without needing multi-port modules. Foundry is told about the packing via `nn2rtl-plugin/agents/foundry.md`'s PATTERN A (see [Layer 1](#layer-1--claude-code-plugin-nn2rtl-plugin)).
-- **Binary golden-vector breakout**: real torchvision ResNet-50 activations would otherwise inflate `output/layer_ir.json` into a multi-GB JSON file that exceeds Node's 512 MB `readFileSync` string cap and the MCP argument-size limit. To keep the LayerIR small (tens of KB), per-module golden vectors now live in separate binary files under `output/goldens/<module_id>.goldin` and `<module_id>.goldout`, referenced by absolute-POSIX `golden_inputs_path` / `golden_outputs_path` fields on each LayerIR entry. The verification sidecar already carried those path fields, so the Assayer now copies them verbatim from LayerIR → sidecar instead of regenerating inline arrays, and the C++ testbench reads the binary format directly from disk without involving the MCP transport.
+- **Wide-bus packing**: `input_width_bits = in_channels * 8` for conv/relu, `= in_channels * 16` for add (lhs + rhs packed into a single `data_in` bus). `output_width_bits = out_channels * 8`. Golden vectors are packed at the channel granularity — `data_in[i*8 +: 8]` corresponds to channel `i`.
+- **Add module packing**: `build_fx_pipeline_ir_payload` drives add modules with `input_width_bits = 2 × operand_width` and writes the per-vector samples as packed 16-bit values where `bits[W-1:0] = lhs` and `bits[2W-1:W] = rhs` into the binary `.goldin` file. This matches the canonical single-`data_in` port contract without needing multi-port modules.
+- **Binary golden-vector breakout**: real torchvision ResNet-50 activations would otherwise inflate `output/layer_ir.json` into a multi-GB JSON file that exceeds Node's 512 MB `readFileSync` string cap and the MCP argument-size limit. To keep the LayerIR small (tens of KB), per-module golden vectors now live in separate binary files under `output/goldens/<module_id>.goldin` and `<module_id>.goldout`, referenced by absolute-POSIX `golden_inputs_path` / `golden_outputs_path` fields on each LayerIR entry.
 - **Stem fusion**: `layer0_0_conv1`'s golden capture runs Conv + BN + ReLU + 3×3 stride-2 MaxPool in a single step so the recorded activations already reflect the fused output. Foundry's PATTERN B rule tells the agent to generate the fused hardware to match.
 - **Scale-aware add**: `Int8Add` uses `lhs_scale_factor` and `rhs_scale_factor` from the LayerIR to requantize both operands before adding, matching the math Foundry must implement in RTL.
 - Format-version-2 checkpoints that lack a `residual_stack_spec` (or equivalent `model` / `model_spec` / `graph`) raise `GoldenGenerationError` rather than silently emitting empty golden arrays — this was the caveat that motivated emitting the spec from `quantize_impl.py`.
@@ -304,19 +346,30 @@ Small Node maintenance script invoked by the root `check:twins` script before th
 Handwritten C++ Verilator driver. Intentionally *not* agent-generated — the README flags this as an architectural decision to avoid the two-bug problem (wrong RTL + wrong testbench).
 
 ### `static_verilator_tb.cpp`
-**Implemented.** Loads the sidecar JSON (`argv[1]`), reads golden input/output vectors from the paths it references, applies reset for five cycles, and then runs a single unified interleaved drive/sample loop per vector:
+**Implemented.** Loads the sidecar JSON (`argv[1]`), reads golden input/output vectors from the NN2V v2 binary files at the paths the sidecar references, applies reset for five cycles, and then runs a single unified interleaved drive/sample loop per vector:
 
 - On each tick: first, if `valid_out` is asserted, sample `data_out` as the current expected output index and advance; second, if the DUT's `ready_in` is high and inputs remain, drive `data_in` / `valid_in`; finally, `tickClock()` unconditionally — including on the cycle that just sampled a vector's final output, to avoid bleeding `valid_out` / `data_out` state into the next vector.
 - Per-vector state (`input_idx`, `output_idx`, `idle_cycles`) is scoped to the vector, so every vector samples starting at output 0.
 - Hang budget is `pipeline_latency_cycles * 4 + 16`. Exceeding it throws with the stuck vector / output index and the cycle count.
 
+**Wide-bus handling.** The testbench uses a three-way template dispatch to handle buses of any width:
+- `IData`/`QData` (scalar types, up to 64 bits) — packed into a single integer.
+- `VlWide<N>` — Verilator's wide-signal class for ports > 64 bits.
+- `WData[N]` — raw array form for the same.
+
+`assignPackedWords(signal, words)` writes a vector of uint32 words into the DUT's `data_in` port. `readPackedWords(signal, words_per_sample)` reads the DUT's `data_out` port into a vector of uint32 words. `unpackInt8Channels(words, bytes_per_sample)` extracts per-channel INT8 values with proper sign extension from the packed representation.
+
+**Sidecar cross-checks.** `requireCanonicalSignals()` validates all seven signal names. `requireConsistentBusWidths()` checks that `bus_bytes_per_sample == input_width_bits / 8`.
+
+**NN2V v2 binary reader (`loadVectorFile`).** Reads the 20-byte header (magic "NN2V", version=2, num_vectors, samples_per_vector, bytes_per_sample), then reads `num_vectors × samples_per_vector × ceil(bytes_per_sample/4)` int32 LE words.
+
 Handshake semantics documented in the file header and enforced against the sidecar: `valid_in` / `data_in` are bench-driven inputs; `ready_in` is a DUT output (upstream backpressure); `valid_out` / `data_out` are DUT outputs and `data_out` is sampled only when `valid_out == 1`.
 
 Build-time contract: the DUT is selected via preprocessor macros `VMODEL_HEADER` (path to the generated Verilator header) and `VMODEL_CLASS` (the Verilator-generated class name). `run_verilator` sets both when it invokes `verilator --cc --exe --build`.
 
-Run-time contract: the DUT must use canonical port names `clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`. `requireCanonicalSignals()` validates all seven sidecar fields against the literal names before the first tick; a mismatch throws immediately.
+Numerical pass threshold is `max_error <= 3`. Timing pass requires `timing_actual_cycles == pipeline_latency_cycles` exactly. `failure_class` is emitted as `null` — Surgeon classifies after reading the results file.
 
-Numerical pass threshold is `max_error <= 3`. Timing pass requires `timing_actual_cycles == pipeline_latency_cycles` exactly. `failure_class` is emitted as `null` — Assayer classifies after reading the results file.
+**Diagnostic cap.** When a results JSON is emitted, the `expected` and `got` arrays are capped at 1000 samples (500 head + 500 tail) to keep the JSON small enough for LLM context windows.
 
 Best-effort error path: if the testbench throws before finishing, a fallback writes a `fail`-shaped results JSON to the sidecar's `results_path` so `run_verilator` always has a result file to parse.
 
@@ -349,11 +402,12 @@ All runtime artifacts live here. The four subdirectories (`rtl/`, `tb/`, `report
 
 - `output/rtl/<module_id>.v` — Foundry / Surgeon output, normally written through `write_verilog` and force-persisted by `persistVerilogModule()` as a safety net.
 - `output/rtl/<module_id>.meta.json` — sidecar metadata for each generated module.
-- `output/tb/<module_id>.sidecar.json` — Assayer's per-run sidecar for the static testbench.
+- `output/tb/<module_id>.sidecar.json` — orchestrator's per-run sidecar for the static testbench (written by `runAssayerDeterministic`).
 - `output/weights/<module_id>_weights.hex`, `<module_id>_bias.hex` — Cartographer's hex-format tensors.
-- `output/goldens/<module_id>.goldin`, `<module_id>.goldout` — per-module binary golden-activation streams written by `scripts/generate_golden.py` and referenced by the LayerIR's `golden_inputs_path` / `golden_outputs_path` fields (see `golden_impl.py` → `write_golden_vector_file` for the format).
+- `output/goldens/<module_id>.goldin`, `<module_id>.goldout` — per-module binary golden-activation streams in NN2V v2 format, written by `scripts/generate_golden.py` and referenced by the LayerIR's `golden_inputs_path` / `golden_outputs_path` fields (see `golden_impl.py` → `write_golden_vector_file` for the format).
 - `output/reports/run_log.jsonl` — JSONL event stream for the full run, produced by `appendRunLog`.
 - `output/reports/<module_id>.yosys.json` — Yosys synthesis report per passing module.
+- `output/reports/<module_id>.results.json` — Verilator testbench results per verification run.
 - `output/reports/pipeline_summary.json` — final summary including total cost and model usage.
 - `output/layer_ir.json` — Cartographer's canonical `PipelineIR`, Zod-validated on load. `scripts/generate_golden.py` now writes this file directly.
 - `output/pipeline_state.json` — authoritative `PipelineState`, updated after every transition, Zod-validated (with `superRefine` cross-field checks) on resume.
@@ -370,9 +424,11 @@ Every JSON trust boundary is Zod-validated. The same schemas drive both local va
 | MCP tool arguments | `mcp/server.ts` handlers | `mcp/schemas.ts` per-tool input schemas |
 | MCP tool outputs advertised to clients | `mcp/server.ts` tool definitions | `mcp/schemas.ts` (generated JSON Schema) |
 | Agent `structured_output` | `sdk/orchestrate.ts` `requireStructuredOutput` | `sdk/schemas.ts` (per agent) |
+| Deterministic Assayer sidecar write | `sdk/orchestrate.ts` `runAssayerDeterministic` | `assayerLayerBusContractZod` (bus-width cross-checks) |
+| Deterministic Assayer preflight | `sdk/orchestrate.ts` `preflightVerilogModule` | ANSI port-list parser + `CANONICAL_TOP_PORTS` |
 | `run_verilator` sidecar read | `mcp/tools.ts` `readSidecarIfPresent` | `verificationSidecarSchema` |
 | `read_weights` PipelineIR read | `mcp/tools.ts` `read_weights` | `pipelineIrSchema` |
-| `output/layer_ir.json` on load | `sdk/orchestrate.ts` `ensureLayerIr` | `pipelineIrSchema` |
+| `output/layer_ir.json` on load | `sdk/orchestrate.ts` `ensureLayerIr` | `pipelineIrSchema` + `validateAddModulePacking` |
 | `output/rtl/<id>.meta.json` on load | `sdk/orchestrate.ts` `loadPersistedVerilogModule` | `verilogModuleSchema` |
 | `output/pipeline_state.json` on resume | `sdk/pipeline.ts` `loadState` | `pipelineStateSchema` (incl. `superRefine`) |
 | Yosys direct MCP result | `sdk/orchestrate.ts` `invokeYosys` | `synthesisReportSchema` |
@@ -411,7 +467,6 @@ For the record, these items from earlier revisions are complete:
 - `VerifResult` extended with `timing_pass`, `timing_actual_cycles`, `timing_expected_cycles`, `failure_class`.
 - `PipelineState` extended with `total_cost_usd` and `model_usage`, both tracked across agent calls, with cross-field invariants enforced via `superRefine`.
 - Foundry and Cartographer system prompts rewritten to require `$readmemh`, valid/ready streaming, exact pipeline latency, and canonical signal-name literal constants.
-- Assayer system prompt rewritten to generate the JSON sidecar and surface timing results.
 - Stale TODO comments on `run_iverilog`, `run_yosys`, and `write_verilog` removed — those tools are implemented.
 - Zod runtime validation added at every JSON trust boundary, including MCP tool inputs/outputs, agent structured outputs, `read_weights` PipelineIR read, `run_verilator` sidecar read, and the resume state file.
 - JSON-Schema blobs deduplicated: `sdk/orchestrate.ts` and `mcp/server.ts` now derive every advertised schema from the Zod exports via `z.toJSONSchema()`.
@@ -419,7 +474,7 @@ For the record, these items from earlier revisions are complete:
 - `run_verilator` fully wired end-to-end: copies the static testbench into a tempdir with preserved `third_party/json.hpp` layout, invokes `verilator --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS` macros, runs the produced binary against the sidecar, reads and Zod-validates the results JSON, and maps build / execution failures to properly shaped `VerifResult`s.
 - `PipelineStateManager.loadState` now recovers transient `generating` / `verifying` statuses from a crashed prior run, correctly rolling back the attempts counter for Surgeon-path crashes so the retry budget is not over-billed.
 - Entry points separated: `sdk/main.ts` and `mcp/main.ts` are the runnable CLIs, leaving `orchestrate.ts` / `server.ts` as library code importable by tests.
-- Dependency injection seams in place: `OrchestratorRuntime` (`now`, `queryFn`) in the SDK, `ToolsRuntime` (`commandRunner`, `cwd`, `env`, `tmpDirRoot`) in the MCP tools, `ToolImplementations` in the MCP server — all testable without touching the real toolchain, real clock, or real Claude API.
+- Dependency injection seams in place: `OrchestratorRuntime` (`now`, `queryFn`, `yosysFn`, `assayerFn`) in the SDK, `ToolsRuntime` (`commandRunner`, `cwd`, `env`, `tmpDirRoot`) in the MCP tools, `ToolImplementations` in the MCP server — all testable without touching the real toolchain, real clock, or real Claude API.
 - Test infrastructure implemented: root `package.json` with `test:fast` / `test:full` / `coverage`, `pytest.ini` with markers, per-package `vitest.config.ts` with coverage thresholds, SDK and MCP test suites, Python helper tests, and shared fixtures under `test/fixtures/`.
 - Python preprocessing split into importable `*_impl.py` helpers (`paths.py`, `quantize_impl.py`, `golden_impl.py`), with a real ResNet-50 PTQ export path, the `torch.fx` golden-capture path driven by an embedded `residual_stack_spec`, and the older deterministic toy compatibility path.
 - **Real PTQ path implemented**: `scripts/quantize_model.py` / `scripts/quantize_impl.py` now load torchvision ResNet-50, run deterministic synthetic calibration, fold BN into conv weights, quantize to symmetric INT8 per tensor, and persist the flattened `format_version: 2` checkpoint schema validated by `load_quantized_checkpoint`.
@@ -427,17 +482,25 @@ For the record, these items from earlier revisions are complete:
 - **Twin-file check protects the add-scale fields**: `scripts/check-twins.mjs` covers the `layerIrSchema` shared export, so the two new optional add-scale fields cannot drift between `sdk/` and `mcp/`. The twin check runs first in every root test target.
 - **MCP `run_verilator` test no longer leaks `mcp/relative-inputs.json`**: `writeSidecar` in `mcp/test/tools.test.ts` now materializes the golden input/output vector files only when the sidecar paths are absolute, so the "rejects relative path" test case no longer writes into the package root cwd on Windows runs.
 - Yosys policy decided and implemented: a failed post-pass Yosys synthesis report now feeds back into the retry loop as `failure_class: "synthesis_failed"` instead of being recorded as a degraded-but-still-passing module.
-- **Fmax gate tightened**: `parseYosysReport` now extracts abc9's `Delay = X ns` / `Delay = X ps` lines in addition to explicit `MHz` numbers, and the Yosys invocation is `synth_ice40 -abc9 -top <module>; stat; tee -o /dev/stdout ltp -noff`. `evaluateSynthesis` no longer silently skips the timing gate when `fmax_mhz === 0` — that path now emits a `synthesis_failed` VerifResult with `fix_hint` explaining that timing could not be measured, so Surgeon is forced to address the issue instead of the gate being quietly bypassed.
+- **Fmax gate tightened**: `parseYosysReport` now extracts ABC delay lines (`Delay = X ns`, `Delay = X ps`, `Current delay (X ns/ps)`) in addition to explicit `MHz` numbers. `evaluateSynthesis` no longer silently skips the timing gate when `fmax_mhz === 0` — that path now emits a `synthesis_failed` VerifResult with `fix_hint` explaining that timing could not be measured, so Surgeon is forced to address the issue instead of the gate being quietly bypassed.
 - **Surgeon retry loop tested**: `test/orchestrate-flow.test.ts` now exercises two forced-failure yosys paths end-to-end — `fmax_mhz === 0` (synthesis_failed) and `fmax_mhz` below the PPA target (missing_pipeline_register). Both route through `applyVerifResult` into a Surgeon dispatch and a second Assayer + Yosys round. A new `yosysFn` runtime seam on `OrchestratorRuntime` makes these tests possible without invoking the real toolchain.
 - **Frontmatter parser replaced**: the hand-rolled `---`-delimited parser in `orchestrate.ts` is gone; frontmatter now goes through the `yaml` package. A new `toStringList` helper accepts both CSV strings (`tools: Bash, Read`) and YAML lists (`tools: [Bash, Read]`), and the legacy `splitCsvField` export was deleted.
 - **SDK typing hacks resolved**: `@anthropic-ai/claude-agent-sdk@0.2.107` exposes `AgentDefinition.skills` and `AgentDefinition.maxTurns`, so the local compat shim now advertises both fields and `loadPluginAgentDefinition` propagates them from `AGENT_CONFIG` (per-agent `maxTurns`) and from agent-markdown frontmatter (`skills`). The parent `query()` call keeps its own `maxTurns: 6` as an outer safety cap.
-- **Conductor agent removed**: there is no LLM "Conductor" anymore. The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` owns the role directly, and `nn2rtl-plugin/agents/conductor.md` plus `nn2rtl-plugin/skills/conductor/` were deleted. `AGENT_CONFIG` and `AGENT_SLUGS` now list only the four real subagents (Cartographer, Foundry, Assayer, Surgeon).
+- **Conductor agent removed**: there is no LLM "Conductor" anymore. The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` owns the role directly, and `nn2rtl-plugin/agents/conductor.md` plus `nn2rtl-plugin/skills/conductor/` were deleted. `AGENT_CONFIG` and `AGENT_SLUGS` now list only the three real subagents (Cartographer, Foundry, Surgeon).
+- **Assayer agent removed**: there is no LLM "Assayer" anymore. The Haiku-based simulation runner repeatedly hallucinated `VerifResult` payloads instead of calling the MCP tools, and had zero real reasoning to do (run iverilog, run Verilator, parse JSON, return). Verification is now handled by `runAssayerDeterministic` in `sdk/orchestrate.ts`, which writes the sidecar from LayerIR fields, runs `run_iverilog` then `run_verilator` directly via MCP import, and returns a Zod-validated `VerifResult`. `nn2rtl-plugin/agents/assayer.md` and `nn2rtl-plugin/skills/assayer/` are deleted. `AGENT_CONFIG` and `AGENT_SLUGS` list only three agents: Cartographer, Foundry, Surgeon. The `assayerFn` runtime seam on `OrchestratorRuntime` allows tests to mock this path.
+- **Sky130 replaces iCE40 for synthesis**: `run_yosys` now targets the Sky130 open standard-cell library instead of iCE40. The Yosys script is `synth -top X; dfflibmap -liberty sky130.lib; abc -liberty sky130.lib [-constr ... -D <period_ps>]; stat -liberty sky130.lib`. `parseYosysReport` extracts `Chip area for module` (um^2), total cell count, and ABC critical-path delay. The lib is vendored at `vendor/sky130/sky130_fd_sc_hd__tt_025C_1v80.lib`. Yosys has a 120s timeout and 64 MiB maxBuffer to prevent hung synthesis and buffer overflow. `isSystemSpawnError` distinguishes infra failures from synth failures.
+- **Wide-bus packed-channel interface**: `data_in` is `IC*8` bits wide (all channels of a pixel arrive in one clock), `data_out` is `OC*8` bits wide. LayerIR carries `input_width_bits = in_channels * 8` and `output_width_bits = out_channels * 8`. For add modules, `input_width_bits = in_channels * 16` (lhs + rhs packed). The golden model, Foundry prompt, deterministic verification path, and C++ testbench all implement this contract.
+- **Output-stationary MAC array**: Foundry prompt mandates OC parallel MAC lanes with one accumulator per output channel. `pipeline_latency_cycles = IC * KH * KW + 3` (from `compute_conv2d_latency_cycles`). Single-MAC designs are rejected. Foundry prompt includes a Verilog pseudo-template for the MAC-array state machine.
+- **Golden model applies scale_factor**: `requantize_tensor_with_scale(tensor, sf)` does `clamp(round(tensor * sf), -128, 127)` for conv (multiply). `Int8Add` divides by `output_scale_factor` (real → int domain).
+- **NN2V v2 binary format**: 20-byte header: magic "NN2V", version=2, num_vectors, samples_per_vector, bytes_per_sample. Each sample is `ceil(bytes_per_sample/4)` int32 LE words. Both the Python writer and C++ reader implement the same format.
+- **Testbench handles wide buses**: three-way template dispatch for IData/QData (up to 64b), VlWide<N>, WData[N]. `assignPackedWords`/`readPackedWords`/`unpackInt8Channels` handle pack/unpack. Per-channel INT8 sign-extension. Diagnostic cap: 1000 samples in results JSON.
+- **Sidecar has `bus_bytes_per_sample`**: cross-checks against NN2V header. Sidecar is written by `runAssayerDeterministic`, not by an LLM agent.
+- **Surgeon capped**: maxTurns=8, prompt says "Output immediately. Do not explain."
+- **All agents disallow Agent/Task tools**: `disallowedTools: Agent, Task` in every agent markdown. No implicit Opus subagent spawning.
+- **Deterministic RTL preflight**: `preflightVerilogModule` in `orchestrate.ts` parses ANSI port list, checks canonical port names, directions, and bus widths before running Verilator.
 - **CLI knobs extended**: `parseCliArgs` accepts `--max-retries N` (with both `--max-retries N` and `--max-retries=N` forms) and rejects unknown `--flag` arguments with a clear error. `runPipeline` / `RunPipelineOptions` gained an optional `maxRetries` field that overrides `PIPELINE_CONFIG.max_retries`. Unknown flags now error instead of being silently ignored.
-- **Unreachable Assayer action comment cleaned up**: `runPipeline`'s fall-through `throw` no longer carries a stale "TODO: first-class Assayer action" note; the comment now correctly documents that the branch is a defensive guard for a future `PipelineStateManager.tick()` action type.
-- **Golden generation widened for v2 checkpoints**: `scripts/golden_impl.py` and `scripts/generate_golden.py` now support both flattened PTQ checkpoints from `quantize_model.py` and richer format-version-2 residual-stack checkpoints. The flat bridge writes stored INT8/INT32 tensors back out to hex and emits strict `PipelineIR` under `output/layer_ir.json`, while the `torch.fx` path still handles graph-backed activation capture. `output/golden_vectors.json` remains a compatibility mirror for MCP `read_weights`.
-- **Frontend smoke harness added**: `scripts/prepare_pipeline.py` now chains quantization, golden generation, TypeScript-schema validation of `output/layer_ir.json`, and a human-readable pipeline summary table. `scripts/test_prepare_pipeline.py` covers the success path, missing-checkpoint failure, and schema-invalid revalidation path.
-- **Golden vectors broken out to binary sidecar files**: the inline `golden_inputs` / `golden_outputs` arrays on `layerIrSchema` are gone — replaced with `golden_inputs_path` / `golden_outputs_path` strings pointing at `output/goldens/<module_id>.goldin` / `.goldout` binary files. Format is a 16-byte header (`NN2V` magic, uint32 version, uint32 num_vectors, uint32 samples_per_vector) followed by int32 LE samples. Real torchvision ResNet-50 layer1 goldens went from a 2.0 GB inline JSON (over Node's 512 MB `readFileSync` string cap) to a 21 KB LayerIR plus a 538 MB `output/goldens/` directory the testbench reads directly. The change is twin-protected through `layerIrSchema` and validated by `scripts/golden_impl.py`'s `validate_pipeline_ir_payload`; the C++ testbench's `loadVectorFile` was rewritten to read the same binary format instead of JSON; the Assayer prompt now explicitly instructs the agent to forward LayerIR's golden paths verbatim into the sidecar rather than regenerate them. `output/goldens/` is gitignored alongside the other runtime `output/` subdirs.
-- **`invokeYosys` compiled-path fix**: the dynamic import specifier for the MCP `run_yosys` helper used to be the relative string `"../mcp/tools.js"`, which resolves correctly from `sdk/orchestrate.ts` source but points at the non-existent `sdk/mcp/tools.js` when running `node sdk/dist/main.js`. Node's `ERR_MODULE_NOT_FOUND` message was then captured by `synthesisReportSchema` validation and classified as `failure_class: "synthesis_failed"`, routing the non-bug to Surgeon. Fixed by computing the specifier at module load via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` with a branch on whether `__dirname` is `dist` (→ `mcp/dist/tools.js`) or source (→ `mcp/tools.ts`).
+- **`invokeYosys` compiled-path fix**: the dynamic import specifier for the MCP `run_yosys` helper used to be the relative string `"../mcp/tools.js"`, which resolves correctly from `sdk/orchestrate.ts` source but points at the non-existent `sdk/mcp/tools.js` when running `node sdk/dist/main.js`. Fixed by computing the specifier at module load via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` with a branch on whether `__dirname` is `dist` (→ `mcp/dist/tools.js`) or source (→ `mcp/tools.ts`).
+- **Proven end-to-end result**: `layer1_0_conv1` (1x1 conv, IC=64, OC=64) passes end-to-end: max_error=1, timing=67/67 cycles (matching `IC*KH*KW + 3 = 64*1*1 + 3 = 67`), Fmax=77.4 MHz on Sky130, area=669K um^2, cost=$0.35, zero Surgeon retries.
 
 ---
 

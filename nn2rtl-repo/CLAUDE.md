@@ -21,9 +21,15 @@ Read this file before touching the repo.
 
 ## Agents
 
-The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` plays the
-pipeline-coordinator role itself; the LLM agents below are the only ones
-dispatched via the SDK's `query()` path.
+The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` plays both
+the pipeline-coordinator role and the verification (Assayer) role itself.
+Verification goes through `runAssayerDeterministic` — a deterministic function
+that writes the sidecar from LayerIR fields, runs `run_iverilog` then
+`run_verilator` via direct MCP import, and returns a Zod-validated `VerifResult`.
+No LLM is involved in verification; there is no Assayer agent.
+
+The three LLM agents below are the only ones dispatched via the SDK's
+`query()` path.
 
 - `cartographer`
   - Role: PyTorch checkpoint and layer IR extractor
@@ -33,10 +39,6 @@ dispatched via the SDK's `query()` path.
   - Role: synthesizable Verilog generator for one `LayerIR`
   - Model: `sonnet`
   - Defined in `nn2rtl-plugin/agents/foundry.md`
-- `assayer`
-  - Role: simulation and verification runner
-  - Model: `haiku`
-  - Defined in `nn2rtl-plugin/agents/assayer.md`
 - `surgeon`
   - Role: targeted Verilog repair specialist
   - Model: `opus`
