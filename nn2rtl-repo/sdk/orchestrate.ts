@@ -1047,6 +1047,32 @@ async function processYosysOutcome(
   }
 }
 
+async function tryRecoverVerilogModuleFromDisk(
+  layerIr: LayerIR,
+  generatedBy: "Foundry" | "Surgeon",
+  attempt: number,
+): Promise<VerilogModule | null> {
+  // Foundry/Surgeon sometimes return a bare path or plain text as their final
+  // message even though they already wrote the .v via the write_verilog MCP
+  // tool.  If the file is on disk we can reconstruct a VerilogModule and keep
+  // the pipeline moving instead of failing the whole run.
+  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const verilogPath = path.join(rtlDir, `${layerIr.module_id}.v`);
+  try {
+    const source = await readFile(verilogPath, "utf8");
+    if (!source.trim()) return null;
+    return {
+      module_id: layerIr.module_id,
+      spec_hash: computeExpectedSpecHash(layerIr),
+      verilog_source: source,
+      generated_by: generatedBy,
+      attempt,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function persistVerilogModule(module: VerilogModule): Promise<void> {
   // Agents are supposed to call the write_verilog MCP tool themselves, but
   // Sonnet/Opus under outputFormat: json_schema sometimes skip tool calls
@@ -1073,16 +1099,54 @@ async function invokeFoundry(
     runtime,
   );
 
-  const result = await runDelegatedAgent<VerilogModule>(
-    "foundry",
-    {
-      layer_ir: layerIr,
-      write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
-    },
-    verilogModuleOutputFormat,
-    verilogModuleZod,
-    runtime,
-  );
+  // Foundry occasionally returns a path or bare text as its final message
+  // instead of the VerilogModule JSON, even though it correctly called
+  // write_verilog.  Recover from disk when the JSON parse / schema validation
+  // fails but the .v file is present.
+  let result: AgentRunResult<VerilogModule>;
+  try {
+    result = await runDelegatedAgent<VerilogModule>(
+      "foundry",
+      {
+        layer_ir: layerIr,
+        write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+      },
+      verilogModuleOutputFormat,
+      verilogModuleZod,
+      runtime,
+    );
+  } catch (err) {
+    const recovered = await tryRecoverVerilogModuleFromDisk(
+      layerIr,
+      "Foundry",
+      /* attempt */ 1,
+    );
+    if (!recovered) {
+      throw err;
+    }
+    await appendRunLog(
+      {
+        event: "agent_result_recovered",
+        agent: "Foundry",
+        module_id: layerIr.module_id,
+        reason: err instanceof Error ? err.message : String(err),
+      },
+      runtime,
+    );
+    // Build a minimal AgentRunResult stub.  cost/messages are unknown on the
+    // recovery path but the pipeline doesn't need them for state transition.
+    result = {
+      payload: recovered,
+      result: {
+        type: "result",
+        subtype: "success",
+        result: "",
+        total_cost_usd: 0,
+        modelUsage: {},
+      } as unknown as SDKResultMessage,
+      messages: [],
+    };
+  }
 
   await persistVerilogModule(result.payload);
 
@@ -1271,18 +1335,50 @@ async function invokeSurgeon(
     runtime,
   );
 
-  const result = await runDelegatedAgent<VerilogModule>(
-    "surgeon",
-    {
-      broken_module: brokenModule,
-      verif_result: verifResult,
-      layer_ir: layerIr,
-      write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
-    },
-    verilogModuleOutputFormat,
-    verilogModuleZod,
-    runtime,
-  );
+  let result: AgentRunResult<VerilogModule>;
+  try {
+    result = await runDelegatedAgent<VerilogModule>(
+      "surgeon",
+      {
+        broken_module: brokenModule,
+        verif_result: verifResult,
+        layer_ir: layerIr,
+        write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+      },
+      verilogModuleOutputFormat,
+      verilogModuleZod,
+      runtime,
+    );
+  } catch (err) {
+    const recovered = await tryRecoverVerilogModuleFromDisk(
+      layerIr,
+      "Surgeon",
+      /* attempt */ Math.max(brokenModule.attempt + 1, 2),
+    );
+    if (!recovered) {
+      throw err;
+    }
+    await appendRunLog(
+      {
+        event: "agent_result_recovered",
+        agent: "Surgeon",
+        module_id: brokenModule.module_id,
+        reason: err instanceof Error ? err.message : String(err),
+      },
+      runtime,
+    );
+    result = {
+      payload: recovered,
+      result: {
+        type: "result",
+        subtype: "success",
+        result: "",
+        total_cost_usd: 0,
+        modelUsage: {},
+      } as unknown as SDKResultMessage,
+      messages: [],
+    };
+  }
 
   await persistVerilogModule(result.payload);
 

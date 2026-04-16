@@ -202,7 +202,12 @@ def _collect_layer1_stats(
             x = model.conv1(x)
             x = model.bn1(x)
             x = model.relu(x)
-            x = model.maxpool(x)
+            # MaxPool is NOT folded into layer0_0_conv1 on the legacy .pth path:
+            # the single-MAC streaming RTL has no spatial line buffer to
+            # implement 3x3 pooling, so golden_impl.py's Int8Conv2d stops at
+            # ReLU and downstream layer1 blocks operate on 112x112 activations.
+            # Record the post-ReLU shape so calibration stats and the FX-traced
+            # golden model agree.
             _update_stats(stats, "layer0_0_conv1", stem_input, x)
 
             for block_index, block in enumerate(layer1_blocks):

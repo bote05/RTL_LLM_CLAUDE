@@ -64,6 +64,26 @@ class GoldenGenerationError(ValueError):
 
 
 class Int8Conv2d(nn.Module):
+    """INT8 Conv2d used to produce golden vectors.
+
+    The class supports two simulation modes:
+
+    * ``rtl_compat=True`` (default) — matches the current Foundry RTL, which
+      streams one input pixel at a time and has no spatial line buffer.  In
+      that MAC loop ``acc[oc] += w[oc,k] * in_latch[k / (KH*KW)]``, so for
+      ``KH*KW > 1`` the effective weight is ``w.sum(dim=(2,3))`` — a 1×1
+      spatially-summed approximation of the real 2D convolution.  Golden
+      vectors generated this way match the RTL but do **not** match the
+      float ONNX model for spatial kernels.  This is a known limitation of
+      the current RTL datapath (not of the frontend).
+
+    * ``rtl_compat=False`` — performs a faithful INT8 2D convolution with
+      the full KH×KW receptive field.  Use this for model-accuracy sweeps or
+      when the RTL gains a proper line-buffer datapath.  Existing single-MAC
+      RTL will fail verification against goldens generated in this mode on
+      any non-1×1 kernel.
+    """
+
     def __init__(
         self,
         weight: torch.Tensor,
@@ -73,6 +93,7 @@ class Int8Conv2d(nn.Module):
         dilation: Sequence[int] = (1, 1),
         groups: int = 1,
         scale_factor: float = 1.0,
+        rtl_compat: bool = True,
     ) -> None:
         super().__init__()
         self.register_buffer("weight", weight.to(torch.float32))
@@ -85,15 +106,15 @@ class Int8Conv2d(nn.Module):
         self.dilation = tuple(int(v) for v in dilation)
         self.groups = int(groups)
         self.scale_factor = float(scale_factor)
+        self.rtl_compat = bool(rtl_compat)
 
     def forward(self, x):
         weight = self.weight
         padding = self.padding
-        # RTL MAC loop: acc[oc] += weights[oc*K_TOTAL+k] * in_latch[k / (KH*KW)]
-        # This groups the K_TOTAL steps by input channel (ic = k // (KH*KW)), so
-        # each in_latch[ic] is multiplied by ALL KH*KW spatial weights for that ic.
-        # Equivalent to summing the spatial kernel per (oc,ic) pair → 1×1 conv.
-        if weight.shape[2] * weight.shape[3] > 1:
+        if self.rtl_compat and weight.shape[2] * weight.shape[3] > 1:
+            # RTL-compat: current single-MAC datapath can only implement the
+            # spatially-summed 1×1 approximation.  Collapse the kernel so the
+            # golden matches the RTL bitwise.
             weight = weight.sum(dim=(2, 3), keepdim=True)
             padding = (0, 0)
         y = F.conv2d(

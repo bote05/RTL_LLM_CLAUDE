@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import re
 import tempfile
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -389,6 +390,36 @@ def extract_layer_specs(model: onnx.ModelProto) -> list[OnnxLayerSpec]:
     return specs
 
 
+def validate_graph_completeness(
+    specs: list[OnnxLayerSpec],
+    graph_input_names: set[str],
+) -> None:
+    """Fail fast if a spec consumes a tensor no prior spec or graph input produces.
+
+    A gap means an unsupported op sits between two supported ops — running the
+    INT8 simulation with a silent fallback would corrupt the goldens.  Raising
+    here surfaces the missing op while the error trail is still precise.
+
+    Reports the longest prefix of the spec chain that *is* reachable so the
+    user can see exactly where the graph breaks.
+    """
+    produced: set[str] = set(graph_input_names)
+    for spec in specs:
+        for inp_name in spec.input_tensor_names:
+            if inp_name not in produced:
+                reachable_ids = [s.module_id for s in specs if s.output_tensor_name in produced]
+                raise GoldenGenerationError(
+                    f"ONNX graph has an unsupported op between supported layers. "
+                    f"Layer '{spec.module_id}' ({spec.op_type}) consumes tensor "
+                    f"'{inp_name}', but no prior supported layer or graph input "
+                    f"produces it. "
+                    f"Reachable chain so far: {reachable_ids or '(empty)'}. "
+                    f"Supported ops: Conv, Relu, MaxPool, Add (+ Clip min=0). "
+                    f"Extend the frontend or pre-process the offending subgraph."
+                )
+        produced.add(spec.output_tensor_name)
+
+
 # ---------------------------------------------------------------------------
 # Calibration via ONNX Runtime
 # ---------------------------------------------------------------------------
@@ -407,26 +438,47 @@ def _expose_intermediates(model: onnx.ModelProto) -> onnx.ModelProto:
     return m
 
 
+def _real_graph_inputs(model: onnx.ModelProto) -> list[onnx.ValueInfoProto]:
+    """Return only genuine model inputs — excluding initializer shadows.
+
+    In ONNX opset ≤ 6, initializers also appear in ``graph.input``.  Filter
+    them out so a single-real-input model doesn't look like a multi-input one.
+    """
+    init_names = {i.name for i in model.graph.initializer}
+    return [gi for gi in model.graph.input if gi.name not in init_names]
+
+
 def resolve_concrete_shapes(
     model: onnx.ModelProto,
-    sample_input: np.ndarray,
+    feeds: dict[str, np.ndarray],
 ) -> dict[str, list[int]]:
-    """Run one forward pass and return tensor_name → concrete shape for all outputs."""
+    """Run one forward pass and return tensor_name → concrete shape for all outputs.
+
+    ``feeds`` must supply one ndarray per real model input (as returned by
+    ``_real_graph_inputs``).  Legacy single-input callers can still pass
+    a bare ndarray via ``resolve_concrete_shapes_single``.
+    """
     exposed = _expose_intermediates(model)
     with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as fh:
         tmp = fh.name
     try:
         onnx.save(exposed, tmp)
         sess = ort.InferenceSession(tmp, providers=["CPUExecutionProvider"])
-        in_name = sess.get_inputs()[0].name
+        session_inputs = [i.name for i in sess.get_inputs()]
+        missing = [name for name in session_inputs if name not in feeds]
+        if missing:
+            raise GoldenGenerationError(
+                f"resolve_concrete_shapes is missing ndarrays for graph inputs: {missing}. "
+                f"Provide one feed per model input."
+            )
         out_names = [o.name for o in sess.get_outputs()]
-        results = sess.run(None, {in_name: sample_input})
+        results = sess.run(None, {n: feeds[n] for n in session_inputs})
         shapes: dict[str, list[int]] = {}
         for name, arr in zip(out_names, results):
             if arr is not None and hasattr(arr, "shape"):
                 shapes[name] = list(arr.shape)
-        # Also record the input shape
-        shapes[in_name] = list(sample_input.shape)
+        for name, arr in feeds.items():
+            shapes[name] = list(arr.shape)
     finally:
         Path(tmp).unlink(missing_ok=True)
     return shapes
@@ -454,22 +506,36 @@ def backfill_spec_shapes(
 
 def calibrate_onnx(
     model: onnx.ModelProto,
-    calibration_inputs: list[np.ndarray],
+    calibration_feeds: list[dict[str, np.ndarray]],
 ) -> dict[str, float]:
-    """Return tensor_name → max_abs_value for all intermediate tensors."""
+    """Return tensor_name → max_abs_value for all intermediate tensors.
+
+    Each ``calibration_feeds`` entry must contain one ndarray per real model
+    input.  Supports multi-input graphs.
+    """
     exposed = _expose_intermediates(model)
     with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as fh:
         tmp = fh.name
     try:
         onnx.save(exposed, tmp)
         sess = ort.InferenceSession(tmp, providers=["CPUExecutionProvider"])
-        in_name = sess.get_inputs()[0].name
+        session_inputs = [i.name for i in sess.get_inputs()]
         out_names = [o.name for o in sess.get_outputs()]
         stats: dict[str, float] = {}
-        for inp in calibration_inputs:
-            results = sess.run(None, {in_name: inp})
+        for feed in calibration_feeds:
+            missing = [name for name in session_inputs if name not in feed]
+            if missing:
+                raise GoldenGenerationError(
+                    f"calibrate_onnx feed is missing inputs: {missing}."
+                )
+            results = sess.run(None, {n: feed[n] for n in session_inputs})
             for name, arr in zip(out_names, results):
                 if arr is not None and hasattr(arr, "shape") and arr.size > 0:
+                    max_abs = float(np.abs(arr).max())
+                    stats[name] = max(stats.get(name, 0.0), max_abs)
+            # Also track input tensor stats
+            for name, arr in feed.items():
+                if arr.size > 0:
                     max_abs = float(np.abs(arr).max())
                     stats[name] = max(stats.get(name, 0.0), max_abs)
     finally:
@@ -538,8 +604,16 @@ def _quantize_bias_int32(
 # Build and run the quantised INT8 forward network
 # ---------------------------------------------------------------------------
 
-def _build_int8_module(spec: OnnxLayerSpec) -> nn.Module:
-    """Instantiate an Int8 PyTorch module from an OnnxLayerSpec."""
+def _build_int8_module(spec: OnnxLayerSpec, rtl_compat_conv: bool = True) -> nn.Module:
+    """Instantiate an Int8 PyTorch module from an OnnxLayerSpec.
+
+    ``rtl_compat_conv`` selects between two Conv2d golden-generation modes:
+
+    * ``True``  — match the current RTL's single-MAC / spatially-summed
+      datapath.  Goldens verify against RTL bit-for-bit.
+    * ``False`` — faithful 2D convolution.  Goldens match the float ONNX
+      model but will fail against single-MAC RTL on any non-1×1 kernel.
+    """
     if spec.op_type == "conv2d":
         assert spec.weight is not None
         # Weights stored as INT8 values in float32 tensor (same as current path)
@@ -555,6 +629,7 @@ def _build_int8_module(spec: OnnxLayerSpec) -> nn.Module:
             dilation=spec.dilation,
             groups=spec.groups,
             scale_factor=float(spec.weight_scale),
+            rtl_compat=rtl_compat_conv,
         )
     if spec.op_type == "relu":
         return Int8ReLU()
@@ -612,16 +687,23 @@ def _require_tensor(
     mid: str,
     role: str,
 ) -> torch.Tensor:
+    """Look up a tensor by name, failing fast if it is missing.
+
+    Silent fallback (e.g. "most recently produced") would corrupt golden
+    vectors: a downstream Conv consuming a tensor produced by an unsupported
+    op (Resize, AveragePool, GroupNorm, …) would be fed the wrong activation
+    and its goldens would silently validate against the wrong RTL behaviour.
+    Fail loudly so the user can either extend the supported-op set or
+    pre-process the ONNX graph.
+    """
     if name in tensors:
         return tensors[name]
-    # A tensor produced by an unsupported/skipped op isn't in the dict.
-    # Fall back to the most recently produced tensor as a best-effort fallback.
-    if tensors:
-        last = list(tensors.values())[-1]
-        return last
     raise GoldenGenerationError(
-        f"Layer '{mid}' {role} tensor '{name}' is not available in the INT8 simulation "
-        f"(produced by an unsupported ONNX op that was skipped)."
+        f"Layer '{mid}' {role} tensor '{name}' is not available in the INT8 simulation. "
+        f"The ONNX graph contains an unsupported op that produces '{name}'. "
+        f"Supported ops: Conv, Relu, MaxPool, Add (and Clip with min=0). "
+        f"Inspect the simplified graph (onnxsim) and either extend the frontend "
+        f"or rewrite the offending subgraph."
     )
 
 
@@ -755,6 +837,7 @@ def build_pipeline_ir_from_onnx(
     generated_at: str | None = None,
     num_calibration_samples: int = 8,
     calibration_seed: int = 0,
+    rtl_compat_conv: bool = True,
 ) -> dict[str, Any]:
     """Build a complete PipelineIR dict from an ONNX model file.
 
@@ -793,33 +876,52 @@ def build_pipeline_ir_from_onnx(
     # --- Step 2: Extract layer specs ----------------------------------------
     specs = extract_layer_specs(model)
 
-    # --- Step 3: Determine network input name and shape ---------------------
-    network_input_name = specs[0].input_tensor_names[0]
-    first_input_shape = specs[0].input_shape
+    # --- Step 2b: Resolve real model inputs (excluding initializer shadows) -
+    real_inputs = _real_graph_inputs(model)
+    if not real_inputs:
+        raise GoldenGenerationError(
+            "ONNX model exposes no real graph inputs (all graph.input entries are initializers)."
+        )
+    if len(real_inputs) > 1:
+        # The RTL pipeline is streaming-single-input.  Multi-input ONNX graphs
+        # need explicit pre-processing (merge inputs via Concat, strip auxiliary
+        # inputs, etc.) before they can drive a single data_in port.
+        names = [i.name for i in real_inputs]
+        raise GoldenGenerationError(
+            f"ONNX model has {len(real_inputs)} real inputs ({names}); the nn2rtl "
+            f"pipeline is single-input (one streaming data_in bus). Merge or drop "
+            f"auxiliary inputs before passing the model to this frontend."
+        )
+    network_input_name = real_inputs[0].name
+
+    # --- Step 2c: Fail fast if the supported-op chain has a gap ------------
+    graph_input_names = {gi.name for gi in real_inputs}
+    validate_graph_completeness(specs, graph_input_names)
+
+    # --- Step 3: Determine input shape --------------------------------------
+    # Prefer the first spec's input shape; fall back to the graph input's shape.
+    first_input_shape = list(specs[0].input_shape)
     if any(d <= 0 for d in first_input_shape):
-        # Fall back to the ONNX graph input shape
-        graph_inputs = list(model.graph.input)
-        if graph_inputs:
-            ti = graph_inputs[0].type.tensor_type
-            first_input_shape = [
-                int(d.dim_value) if d.dim_value > 0 else 1
-                for d in ti.shape.dim
-            ]
-            # Override batch dimension to 1
-            if first_input_shape:
-                first_input_shape[0] = 1
+        ti = real_inputs[0].type.tensor_type
+        first_input_shape = [
+            int(d.dim_value) if d.dim_value > 0 else 1
+            for d in ti.shape.dim
+        ]
+        if first_input_shape:
+            first_input_shape[0] = 1  # force batch=1
 
     # --- Step 4: Build synthetic calibration inputs -------------------------
     rng = np.random.default_rng(calibration_seed)
-    cal_inputs_np = [
-        rng.integers(-128, 128, size=tuple(first_input_shape), dtype=np.int32).astype(np.float32)
+    cal_feeds: list[dict[str, np.ndarray]] = [
+        {network_input_name: rng.integers(
+            -128, 128, size=tuple(first_input_shape), dtype=np.int32
+        ).astype(np.float32)}
         for _ in range(num_calibration_samples)
     ]
 
     # --- Step 4b: Resolve concrete shapes (dynamic ONNX exports have -1 dims)
-    concrete_shapes = resolve_concrete_shapes(model, cal_inputs_np[0])
+    concrete_shapes = resolve_concrete_shapes(model, cal_feeds[0])
     backfill_spec_shapes(specs, concrete_shapes)
-    # Also fix first_input_shape if it had -1s
     first_input_shape = [
         concrete_shapes.get(network_input_name, [1] * len(first_input_shape))[i]
         if i < len(concrete_shapes.get(network_input_name, [])) else d
@@ -827,21 +929,43 @@ def build_pipeline_ir_from_onnx(
     ]
 
     # --- Step 5: Calibrate via ONNX Runtime ---------------------------------
-    cal_stats = calibrate_onnx(model, cal_inputs_np)
+    cal_stats = calibrate_onnx(model, cal_feeds)
     fill_calibration_stats(
         specs, cal_stats,
         network_input_name=network_input_name,
         network_input_max_abs=128.0,
     )
 
+    # --- Step 5b: Warn loudly if RTL-compat mode is approximating real convs
+    if rtl_compat_conv:
+        spatial_convs = [
+            s.module_id for s in specs
+            if s.op_type == "conv2d"
+            and s.weight is not None
+            and int(s.weight.shape[2]) * int(s.weight.shape[3]) > 1
+        ]
+        if spatial_convs:
+            warnings.warn(
+                "rtl_compat_conv=True: the following Conv layers have KH*KW>1 and will "
+                f"be simulated as spatially-summed 1x1 approximations (to match the current "
+                f"single-MAC RTL datapath): {spatial_convs}. "
+                "Golden vectors will NOT match the float ONNX model for these layers. "
+                "Pass rtl_compat_conv=False for faithful 2D-conv goldens (incompatible with "
+                "current RTL until a line-buffer datapath lands).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     # --- Step 6: Build INT8 modules -----------------------------------------
-    modules: dict[str, nn.Module] = {s.module_id: _build_int8_module(s) for s in specs}
+    modules: dict[str, nn.Module] = {
+        s.module_id: _build_int8_module(s, rtl_compat_conv=rtl_compat_conv) for s in specs
+    }
 
     # --- Step 7: Run INT8 simulation to capture golden activations ----------
     torch.manual_seed(calibration_seed)
     input_tensors = [
         quantize_tensor_to_int8_range(
-            torch.tensor(cal_inputs_np[i]).reshape(first_input_shape)
+            torch.tensor(cal_feeds[i][network_input_name]).reshape(first_input_shape)
         )
         for i in range(num_calibration_samples)
     ]

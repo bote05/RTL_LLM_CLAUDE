@@ -23,7 +23,7 @@ export const failureClassSchema = z.enum([
 export const layerIrSchema = z
   .object({
     module_id: z.string(),
-    op_type: z.enum(["conv2d", "relu", "add"]),
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
     input_shape: z.array(z.number().int().positive()),
     output_shape: z.array(z.number().int().positive()),
     weights_path: z.string(),
@@ -47,6 +47,10 @@ export const layerIrSchema = z
     data_out_signal: z.literal("data_out"),
     golden_inputs_path: z.string(),
     golden_outputs_path: z.string(),
+    // MaxPool2d geometry — only present when op_type == "maxpool"
+    kernel_size: z.array(z.number().int().positive()).optional(),
+    pool_stride: z.array(z.number().int().positive()).optional(),
+    pool_padding: z.array(z.number().int().nonnegative()).optional(),
   })
   .strict();
 

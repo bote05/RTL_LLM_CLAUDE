@@ -146,7 +146,9 @@ def test_generate_golden_cli_writes_pipeline_ir_for_real_ptq_checkpoint(tmp_path
     assert summary["num_layers"] == 17
     assert len(payload["layers"]) == 17
     assert payload["layers"][0]["module_id"] == "layer0_0_conv1"
-    assert payload["layers"][0]["output_shape"] == [1, 4, 56, 56]
+    # layer0_0_conv1 does not fold the ResNet maxpool (see _collect_layer1_stats);
+    # the stem conv+BN+ReLU produces 112x112 and all layer1 ops run at that size.
+    assert payload["layers"][0]["output_shape"] == [1, 4, 112, 112]
     assert payload["layers"][0]["op_type"] == "conv2d"
     assert "layer1_0_downsample" in module_ids
     assert payload["layers"][module_ids.index("layer1_0_downsample")]["op_type"] == "conv2d"

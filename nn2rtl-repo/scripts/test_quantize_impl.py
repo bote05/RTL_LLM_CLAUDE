@@ -149,7 +149,7 @@ def test_resnet50_checkpoint_round_trip_preserves_new_schema(tmp_path: Path) -> 
     stem = loaded["layers"]["layer0_0_conv1"]
     assert stem["op_type"] == "conv2d"
     assert stem["input_shape"] == [1, 3, 224, 224]
-    assert stem["output_shape"] == [1, 4, 56, 56]
+    assert stem["output_shape"] == [1, 4, 112, 112]
     assert stem["zero_point"] == 0
     assert stem["input_width_bits"] == 24
     assert stem["output_width_bits"] == 32
@@ -159,14 +159,14 @@ def test_resnet50_checkpoint_round_trip_preserves_new_schema(tmp_path: Path) -> 
 
     downsample = loaded["layers"]["layer1_0_downsample"]
     assert downsample["op_type"] == "conv2d"
-    assert downsample["input_shape"] == [1, 4, 56, 56]
-    assert downsample["output_shape"] == [1, 4, 56, 56]
+    assert downsample["input_shape"] == [1, 4, 112, 112]
+    assert downsample["output_shape"] == [1, 4, 112, 112]
     assert downsample["num_weights"] == math.prod(downsample["weight_shape"])
 
     add_layer = loaded["layers"]["layer1_0_add"]
     assert add_layer["op_type"] == "add"
-    assert add_layer["input_shape"] == [1, 4, 56, 56]
-    assert add_layer["output_shape"] == [1, 4, 56, 56]
+    assert add_layer["input_shape"] == [1, 4, 112, 112]
+    assert add_layer["output_shape"] == [1, 4, 112, 112]
     assert add_layer["weight_shape"] == [1]
     assert add_layer["num_weights"] == 0
     assert add_layer["scale_factor"] > 0.0

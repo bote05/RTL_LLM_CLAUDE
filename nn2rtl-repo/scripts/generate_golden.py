@@ -64,6 +64,18 @@ def parse_args() -> argparse.Namespace:
         default=8,
         help="Number of synthetic calibration samples (ONNX path only; default 8).",
     )
+    parser.add_argument(
+        "--faithful-conv",
+        dest="faithful_conv",
+        action="store_true",
+        help=(
+            "Generate goldens that match a real 2D convolution instead of the "
+            "current RTL's spatially-summed 1x1 approximation (ONNX path only). "
+            "Only works against an RTL datapath that implements full KH x KW "
+            "receptive fields — the default single-MAC RTL will fail verification "
+            "on non-1x1 kernels."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -106,6 +118,7 @@ def main() -> None:
             repo_root=repo_root,
             model_name=args.name,
             num_calibration_samples=args.samples,
+            rtl_compat_conv=not args.faithful_conv,
         )
         output_path = _write_layer_ir_json(repo_root, payload)
         summary = {
