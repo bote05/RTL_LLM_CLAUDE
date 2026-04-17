@@ -29,6 +29,7 @@ from scripts.onnx_frontend import (
     load_onnx,
     simplify_onnx,
     validate_graph_completeness,
+    validate_graph_outputs_covered,
 )
 
 
@@ -88,6 +89,49 @@ def test_validate_graph_completeness_passes_on_chain():
         OnnxLayerSpec("r0", "relu", ["t1"], "t2", [1, 4, 8, 8], [1, 4, 8, 8]),
     ]
     validate_graph_completeness(specs, {"input"})  # should not raise
+
+
+def test_validate_graph_outputs_covered_passes_when_spec_produces_output():
+    specs = [
+        OnnxLayerSpec("c0", "conv2d", ["input"], "t1", [1, 3, 8, 8], [1, 4, 8, 8],
+                      weight=np.zeros((4, 3, 1, 1), np.float32)),
+    ]
+    # graph output is t1 — produced by spec c0
+    validate_graph_outputs_covered(specs, graph_output_names={"t1"}, graph_input_names={"input"})
+
+
+def test_validate_graph_outputs_covered_raises_on_unsupported_tail():
+    # Simulates Conv -> Flatten -> Gemm where Flatten+Gemm are skipped.
+    # The spec set only covers the Conv; graph.output points at Gemm's tensor
+    # which no spec produces.
+    specs = [
+        OnnxLayerSpec("c0", "conv2d", ["input"], "conv_out", [1, 3, 8, 8], [1, 4, 8, 8],
+                      weight=np.zeros((4, 3, 1, 1), np.float32)),
+    ]
+    with pytest.raises(GoldenGenerationError, match="unsupported ops AFTER"):
+        validate_graph_outputs_covered(
+            specs, graph_output_names={"classifier_out"}, graph_input_names={"input"},
+        )
+
+
+def test_end_to_end_rejects_conv_flatten_gemm(tmp_path):
+    """Regression: a Conv -> Flatten -> Gemm model must NOT silently truncate to Conv."""
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.c = nn.Conv2d(3, 4, 1, bias=True)
+            self.fc = nn.Linear(4 * 8 * 8, 10)
+        def forward(self, x):
+            x = self.c(x)
+            x = x.flatten(1)
+            return self.fc(x)
+
+    onnx_path = _export(M().eval(), tmp_path / "classifier.onnx", shape=(1, 3, 8, 8))
+    with pytest.raises(GoldenGenerationError, match="AFTER the last extracted"):
+        build_pipeline_ir_from_onnx(
+            onnx_path=onnx_path, repo_root=tmp_path,
+            num_calibration_samples=2,
+        )
 
 
 def test_validate_graph_completeness_raises_on_gap():

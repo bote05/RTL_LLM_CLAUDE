@@ -29,7 +29,9 @@ export const moduleStatusSchema = z.enum([
   "fail_abort",
 ]);
 
-export const layerIrSchema = z
+// Base ZodObject — exposes .pick / .omit / .partial for callers that need
+// structural slicing (tests, delegation output-format derivation).
+export const layerIrBaseSchema = z
   .object({
     module_id: z.string(),
     op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
@@ -56,12 +58,34 @@ export const layerIrSchema = z
     data_out_signal: z.literal("data_out"),
     golden_inputs_path: z.string(),
     golden_outputs_path: z.string(),
-    // MaxPool2d geometry — only present when op_type == "maxpool"
+    // MaxPool2d geometry — optional at the type level because only present
+    // when op_type === "maxpool". The *refined* schema below requires them
+    // for maxpool layers; this base schema does not so that .pick()/.omit()
+    // keep working for callers that don't care about the refinement.
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
     pool_padding: z.array(z.number().int().nonnegative()).optional(),
   })
   .strict();
+
+// Runtime-validation schema. Every .parse / .safeParse path on a LayerIR
+// must go through this one — it enforces maxpool geometry presence.
+export const layerIrSchema = layerIrBaseSchema.superRefine((layer, ctx) => {
+  if (layer.op_type !== "maxpool") return;
+  const missing: string[] = [];
+  if (!layer.kernel_size || layer.kernel_size.length < 2) missing.push("kernel_size");
+  if (!layer.pool_stride || layer.pool_stride.length < 2) missing.push("pool_stride");
+  if (!layer.pool_padding || layer.pool_padding.length < 2) missing.push("pool_padding");
+  if (missing.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["op_type"],
+      message:
+        `maxpool LayerIR '${layer.module_id}' is missing required geometry fields: ${missing.join(", ")}. ` +
+        `Each of kernel_size / pool_stride / pool_padding must be a 2-element array [H, W].`,
+    });
+  }
+});
 
 export const pipelineIrSchema = z
   .object({

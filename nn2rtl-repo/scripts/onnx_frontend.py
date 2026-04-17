@@ -390,6 +390,40 @@ def extract_layer_specs(model: onnx.ModelProto) -> list[OnnxLayerSpec]:
     return specs
 
 
+def validate_graph_outputs_covered(
+    specs: list[OnnxLayerSpec],
+    graph_output_names: set[str],
+    graph_input_names: set[str],
+) -> None:
+    """Fail fast if any model output isn't produced by an extracted supported spec.
+
+    Without this check, a graph that ends in an unsupported tail (e.g.
+    ``Conv -> Flatten -> Gemm`` or ``Conv -> Sigmoid``) silently truncates
+    to the supported prefix. validate_graph_completeness() only looks
+    backward from each spec's inputs, so it cannot detect that the model's
+    real outputs lie *after* the last extracted spec. This function closes
+    that gap: every declared graph output must either be produced by a
+    spec or be a raw graph input (the degenerate identity case).
+    """
+    produced = {spec.output_tensor_name for spec in specs} | graph_input_names
+    missing = [name for name in graph_output_names if name not in produced]
+    if not missing:
+        return
+
+    final_supported = specs[-1].output_tensor_name if specs else "(none)"
+    raise GoldenGenerationError(
+        f"ONNX graph has unsupported ops AFTER the last extracted supported "
+        f"layer. Model output tensors {missing} are not produced by any "
+        f"Conv/Relu/MaxPool/Add/Clip(min=0) spec — truncating to the "
+        f"supported prefix would produce an RTL pipeline that does not "
+        f"match the ONNX model. "
+        f"Last supported-spec output tensor: '{final_supported}'. "
+        f"Either extend the frontend to cover the missing op, or "
+        f"pre-process the ONNX graph to strip the unsupported tail "
+        f"(e.g. remove the classifier head for a feature-extraction pipeline)."
+    )
+
+
 def validate_graph_completeness(
     specs: list[OnnxLayerSpec],
     graph_input_names: set[str],
@@ -938,6 +972,13 @@ def build_pipeline_ir_from_onnx(
     # --- Step 2c: Fail fast if the supported-op chain has a gap ------------
     graph_input_names = {gi.name for gi in real_inputs}
     validate_graph_completeness(specs, graph_input_names)
+
+    # Also require that every model output tensor is produced by the spec set.
+    # Without this, a Conv->Flatten->Gemm (or Conv->Sigmoid) graph would
+    # silently collapse to just Conv — technically valid by completeness but
+    # semantically wrong.
+    graph_output_names = {o.name for o in model.graph.output}
+    validate_graph_outputs_covered(specs, graph_output_names, graph_input_names)
 
     # --- Step 3: Determine input shape --------------------------------------
     # Prefer the first spec's input shape; fall back to the graph input's shape.

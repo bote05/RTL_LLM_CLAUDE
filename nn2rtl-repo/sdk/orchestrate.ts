@@ -1435,9 +1435,17 @@ function computeExpectedSpecHash(layer: LayerIR): string {
     return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
   }
   if (layer.op_type === "maxpool") {
-    const ks = (layer.kernel_size ?? []).join("x") || "0x0";
-    const st = (layer.pool_stride ?? []).join("x") || "0x0";
-    const pd = (layer.pool_padding ?? []).join("x") || "0x0";
+    // The schema's superRefine guarantees these three arrays exist and are
+    // at least 2-long for maxpool layers. A null-safe fallback here would
+    // mask schema regressions silently.
+    if (!layer.kernel_size || !layer.pool_stride || !layer.pool_padding) {
+      throw new Error(
+        `spec_hash for maxpool layer '${layer.module_id}' requires kernel_size, pool_stride, pool_padding — schema should have rejected this upstream.`,
+      );
+    }
+    const ks = layer.kernel_size.join("x");
+    const st = layer.pool_stride.join("x");
+    const pd = layer.pool_padding.join("x");
     return `maxpool_${ic}x${oc}_k${ks}_s${st}_p${pd}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
   }
   return `${layer.op_type}_${ic}x${oc}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;

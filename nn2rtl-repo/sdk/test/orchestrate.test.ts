@@ -20,7 +20,7 @@ import {
   toStringList,
   writeJsonFile,
 } from "../orchestrate.js";
-import { layerIrSchema } from "../schemas.js";
+import { layerIrBaseSchema, layerIrSchema } from "../schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -92,7 +92,7 @@ describe("orchestrate helpers", () => {
           result: JSON.stringify({ module_id: "m2" }),
         },
         "foundry",
-        layerIrSchema.pick({ module_id: true }),
+        layerIrBaseSchema.pick({ module_id: true }),
       ),
     ).toEqual({ module_id: "m2" });
   });
@@ -108,7 +108,7 @@ describe("orchestrate helpers", () => {
           result: JSON.stringify({ nope: true }),
         },
         "cartographer",
-        layerIrSchema.pick({ module_id: true }),
+        layerIrBaseSchema.pick({ module_id: true }),
       ),
     ).toThrow("returned invalid output");
   });

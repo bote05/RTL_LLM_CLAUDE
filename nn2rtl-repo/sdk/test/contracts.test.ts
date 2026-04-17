@@ -58,6 +58,61 @@ describe("contract parity", () => {
     expect(mcpLayerIrSchema.parse(layer)).toEqual(layer);
   });
 
+  it("rejects maxpool LayerIR missing kernel_size / pool_stride / pool_padding", () => {
+    // Regression guard for finding #4: before the superRefine, a
+    // {op_type: "maxpool"} LayerIR with no geometry fields validated clean
+    // and reached Foundry with zeroed placeholders in spec_hash.
+    const baseLayer = {
+      module_id: "m1",
+      op_type: "maxpool" as const,
+      input_shape: [1, 64, 112, 112],
+      output_shape: [1, 64, 56, 56],
+      weights_path: "/tmp/w.hex",
+      bias_path: null,
+      weight_shape: [1],
+      num_weights: 0,
+      scale_factor: 1.0,
+      zero_point: 0,
+      pipeline_latency_cycles: 227,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+
+    // Missing every geometry field → must fail.
+    for (const schema of [sdkLayerIrSchema, mcpLayerIrSchema]) {
+      const parsed = schema.safeParse(baseLayer);
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        const issue = parsed.error.issues.find((i) =>
+          i.message.includes("missing required geometry fields"),
+        );
+        expect(issue).toBeDefined();
+      }
+    }
+
+    // Present on all three → must succeed.
+    const ok = { ...baseLayer, kernel_size: [3, 3], pool_stride: [2, 2], pool_padding: [1, 1] };
+    for (const schema of [sdkLayerIrSchema, mcpLayerIrSchema]) {
+      expect(schema.safeParse(ok).success).toBe(true);
+    }
+
+    // conv2d without geometry stays legal (superRefine only fires for maxpool).
+    const conv = { ...baseLayer, op_type: "conv2d" as const, weight_shape: [64, 64, 3, 3], num_weights: 36864 };
+    for (const schema of [sdkLayerIrSchema, mcpLayerIrSchema]) {
+      expect(schema.safeParse(conv).success).toBe(true);
+    }
+  });
+
   it("keeps the verification sidecar schema byte-identical across sdk and mcp", async () => {
     const sdkSchemas = await readFile(path.join(repoRoot, "sdk", "schemas.ts"), "utf8");
     const mcpSchemas = await readFile(path.join(repoRoot, "mcp", "schemas.ts"), "utf8");
