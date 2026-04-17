@@ -190,7 +190,7 @@ def test_clip_as_relu(tmp_path):
 # RTL-compat vs faithful conv
 # ---------------------------------------------------------------------------
 
-def test_rtl_compat_conv_warns_on_spatial_kernel(tmp_path):
+def test_legacy_rtl_compat_conv_warns_on_spatial_kernel(tmp_path):
     class M(nn.Module):
         def __init__(self):
             super().__init__()
@@ -203,13 +203,14 @@ def test_rtl_compat_conv_warns_on_spatial_kernel(tmp_path):
         build_pipeline_ir_from_onnx(
             onnx_path=onnx_path, repo_root=tmp_path,
             num_calibration_samples=2,
-            rtl_compat_conv=True,
+            rtl_compat_conv=True,  # explicit opt-in to legacy path
         )
     msgs = [str(x.message) for x in w if "rtl_compat_conv" in str(x.message)]
-    assert msgs, "Expected RTL-compat warning for spatial conv"
+    assert msgs, "Expected LEGACY RTL-compat warning for spatial conv"
 
 
-def test_faithful_conv_no_warning(tmp_path):
+def test_default_faithful_conv_no_warning(tmp_path):
+    """Default build_pipeline_ir_from_onnx emits faithful 2D conv goldens silently."""
     class M(nn.Module):
         def __init__(self):
             super().__init__()
@@ -222,10 +223,38 @@ def test_faithful_conv_no_warning(tmp_path):
         build_pipeline_ir_from_onnx(
             onnx_path=onnx_path, repo_root=tmp_path,
             num_calibration_samples=2,
-            rtl_compat_conv=False,
+            # rtl_compat_conv defaults to False (faithful)
         )
     msgs = [str(x.message) for x in w if "rtl_compat_conv" in str(x.message)]
-    assert not msgs, f"Unexpected RTL-compat warning in faithful mode: {msgs}"
+    assert not msgs, f"Unexpected legacy warning in default (faithful) mode: {msgs}"
+
+
+def test_faithful_conv_goldens_match_real_pytorch_conv(tmp_path):
+    """End-to-end: goldens for a 3x3 conv must match real F.conv2d, not the
+    spatially-summed approximation."""
+    torch.manual_seed(0)
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.c1 = nn.Conv2d(3, 4, 3, padding=1, bias=True)
+        def forward(self, x):
+            return self.c1(x)
+
+    model = M().eval()
+    onnx_path = _export(model, tmp_path / "conv3x3.onnx", shape=(1, 3, 8, 8))
+    payload = build_pipeline_ir_from_onnx(
+        onnx_path=onnx_path, repo_root=tmp_path,
+        num_calibration_samples=2,
+    )
+    conv_layer = payload["layers"][0]
+    assert conv_layer["op_type"] == "conv2d"
+    # Output is SAME-padded 8x8, so 64 output samples per vector
+    assert conv_layer["output_shape"] == [1, 4, 8, 8]
+    # Pipeline latency for spatial conv must be > K_TOTAL + 4 because of
+    # the line-buffer fill time.
+    k_total = 3 * 3 * 3  # IC=3, KH=KW=3
+    assert conv_layer["pipeline_latency_cycles"] > k_total + 4
 
 
 # ---------------------------------------------------------------------------

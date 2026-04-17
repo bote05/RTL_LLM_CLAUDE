@@ -42,21 +42,59 @@ SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 CONV_PIPELINE_STAGES = 4
 
 
-def compute_conv2d_latency_cycles(weight_shape: list[int]) -> int:
-    """Return the packed-channel MAC-array latency for a conv2d.
+def compute_conv2d_latency_cycles(
+    weight_shape: list[int],
+    input_shape: list[int] | None = None,
+    stride: Sequence[int] | None = None,
+    padding: Sequence[int] | None = None,
+) -> int:
+    """Return the cycle count from first valid_in to first valid_out.
 
-    Foundry emits an output-stationary array of `oc` parallel 8x8 MAC units.
-    Each cycle consumes one receptive-field position's worth of packed input
-    channels, so a single output sample takes `in_channels * kh * kw +
-    pipeline_stages` cycles from first valid_in to first valid_out.
-    `weight_shape` is [oc, ic, kh, kw] (PyTorch convention). A 7x7 stem with
-    3 input channels → 3*49+4 = 151; a 1x1 layer1 conv with 64 input channels
-    → 64*1+4 = 68; a 3x3 conv with 64 input channels → 64*9+4 = 580.
+    Two latency shapes depending on the kernel size:
+
+    * **Pointwise (KH = KW = 1)** — the RTL is a single-pixel output-stationary
+      MAC array. One output sample takes ``IC * 1 * 1`` MAC cycles plus the
+      shared four-stage post-MAC pipeline (LATCH + BIAS + SCALE + OUTPUT).
+      Formula: ``IC * KH * KW + CONV_PIPELINE_STAGES``.
+
+    * **Spatial (KH*KW > 1)** — the RTL uses a line buffer + sliding-window
+      datapath (see nn2rtl-plugin/agents/foundry.md § "Spatial conv datapath").
+      The first valid_out only fires once the first complete receptive-field
+      window has been streamed in, plus the MAC and the post-MAC pipeline:
+      ``max(KH - 1 - PH, 0) * IW + max(KW - PW, 1) + K_TOTAL + 3``
+      where ``IW = input_shape[3]`` and ``PH, PW`` come from the layer's
+      padding. If the frontend passed ``input_shape`` and ``padding``, we use
+      that formula; otherwise we fall back to the pointwise shape with a
+      conservative warning (the caller just gets ``IC*KH*KW + 4`` which is
+      always <= the true value and will not cause spurious timing failures
+      in the testbench, but will mismatch actual RTL — always pass the full
+      layer geometry).
     """
     if len(weight_shape) < 4:
         return PIPELINE_LATENCY_CYCLES["conv2d"]
     _oc, ic, kh, kw = weight_shape[:4]
-    return int(ic) * int(kh) * int(kw) + CONV_PIPELINE_STAGES
+    ic_i, kh_i, kw_i = int(ic), int(kh), int(kw)
+    k_total = ic_i * kh_i * kw_i
+
+    if kh_i * kw_i <= 1:
+        # Pointwise — classical single-pixel MAC array.
+        return k_total + CONV_PIPELINE_STAGES
+
+    # Spatial — line-buffer datapath.
+    iw = int(input_shape[3]) if input_shape and len(input_shape) >= 4 else 0
+    ph = int(padding[0]) if padding and len(padding) >= 1 else 0
+    pw = int(padding[1]) if padding and len(padding) >= 2 else 0
+
+    if iw <= 0:
+        # No geometry supplied — fall back to pointwise shape. The call site
+        # should always pass input_shape and padding for spatial convs.
+        return k_total + CONV_PIPELINE_STAGES
+
+    fill_rows = max(kh_i - 1 - ph, 0)
+    fill_cols = max(kw_i - pw, 1)
+    # 3 = BIAS + SCALE + OUTPUT (no extra LATCH cycle: the window is already
+    # valid at the trigger input, so ST_RUNNING starts the same cycle).
+    return fill_rows * iw + fill_cols + k_total + 3
 
 
 class GoldenGenerationError(ValueError):
@@ -68,20 +106,17 @@ class Int8Conv2d(nn.Module):
 
     The class supports two simulation modes:
 
-    * ``rtl_compat=True`` (default) — matches the current Foundry RTL, which
-      streams one input pixel at a time and has no spatial line buffer.  In
-      that MAC loop ``acc[oc] += w[oc,k] * in_latch[k / (KH*KW)]``, so for
-      ``KH*KW > 1`` the effective weight is ``w.sum(dim=(2,3))`` — a 1×1
-      spatially-summed approximation of the real 2D convolution.  Golden
-      vectors generated this way match the RTL but do **not** match the
-      float ONNX model for spatial kernels.  This is a known limitation of
-      the current RTL datapath (not of the frontend).
+    * ``rtl_compat=False`` (default as of the real-2D-conv RTL datapath) —
+      performs a faithful INT8 2D convolution with the full ``KH × KW``
+      receptive field, matching the ONNX model and the line-buffer RTL
+      described in ``nn2rtl-plugin/agents/foundry.md § Spatial conv datapath``.
 
-    * ``rtl_compat=False`` — performs a faithful INT8 2D convolution with
-      the full KH×KW receptive field.  Use this for model-accuracy sweeps or
-      when the RTL gains a proper line-buffer datapath.  Existing single-MAC
-      RTL will fail verification against goldens generated in this mode on
-      any non-1×1 kernel.
+    * ``rtl_compat=True`` (deprecated) — the legacy spatially-summed 1×1
+      approximation that matched the old single-pixel-MAC RTL, i.e.
+      ``acc[oc] += w[oc,k] * in_latch[k / (KH*KW)]`` which is equivalent to
+      using ``w.sum(dim=(2,3))``. Only useful when regenerating goldens
+      against RTL that still uses the old datapath. New RTL must match
+      ``rtl_compat=False``.
     """
 
     def __init__(
@@ -93,7 +128,7 @@ class Int8Conv2d(nn.Module):
         dilation: Sequence[int] = (1, 1),
         groups: int = 1,
         scale_factor: float = 1.0,
-        rtl_compat: bool = True,
+        rtl_compat: bool = False,
     ) -> None:
         super().__init__()
         self.register_buffer("weight", weight.to(torch.float32))
@@ -1010,7 +1045,10 @@ def build_fx_pipeline_ir_payload(
             "zero_point": coerce_int(metadata["zero_point"], f"{module_id}.zero_point"),
             "pipeline_latency_cycles": (
                 compute_conv2d_latency_cycles(
-                    coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape")
+                    coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape"),
+                    input_shape=coerce_shape(metadata["input_shape"], f"{module_id}.input_shape"),
+                    stride=operation_map.get(module_id, {}).get("stride", [1, 1]),
+                    padding=operation_map.get(module_id, {}).get("padding", [0, 0]),
                 )
                 if op_type == "conv2d"
                 else PIPELINE_LATENCY_CYCLES[op_type]

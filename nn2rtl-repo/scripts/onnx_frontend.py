@@ -819,7 +819,12 @@ def _spec_output_width_bits(spec: OnnxLayerSpec) -> int:
 def _pipeline_latency(spec: OnnxLayerSpec) -> int:
     if spec.op_type == "conv2d":
         weight_shape = list(spec.weight.shape) if spec.weight is not None else [1, 1, 1, 1]
-        return compute_conv2d_latency_cycles(weight_shape)
+        return compute_conv2d_latency_cycles(
+            weight_shape,
+            input_shape=spec.input_shape,
+            stride=spec.stride,
+            padding=spec.padding,
+        )
     if spec.op_type == "maxpool":
         return compute_maxpool_latency_cycles(spec)
     # relu, add: 1 cycle
@@ -837,7 +842,7 @@ def build_pipeline_ir_from_onnx(
     generated_at: str | None = None,
     num_calibration_samples: int = 8,
     calibration_seed: int = 0,
-    rtl_compat_conv: bool = True,
+    rtl_compat_conv: bool = False,
 ) -> dict[str, Any]:
     """Build a complete PipelineIR dict from an ONNX model file.
 
@@ -936,7 +941,7 @@ def build_pipeline_ir_from_onnx(
         network_input_max_abs=128.0,
     )
 
-    # --- Step 5b: Warn loudly if RTL-compat mode is approximating real convs
+    # --- Step 5b: Warn loudly if caller opts into the legacy RTL-compat path
     if rtl_compat_conv:
         spatial_convs = [
             s.module_id for s in specs
@@ -946,12 +951,12 @@ def build_pipeline_ir_from_onnx(
         ]
         if spatial_convs:
             warnings.warn(
-                "rtl_compat_conv=True: the following Conv layers have KH*KW>1 and will "
-                f"be simulated as spatially-summed 1x1 approximations (to match the current "
-                f"single-MAC RTL datapath): {spatial_convs}. "
-                "Golden vectors will NOT match the float ONNX model for these layers. "
-                "Pass rtl_compat_conv=False for faithful 2D-conv goldens (incompatible with "
-                "current RTL until a line-buffer datapath lands).",
+                "rtl_compat_conv=True is the LEGACY path: the following spatial conv "
+                f"layers {spatial_convs} will be approximated as spatially-summed 1x1 "
+                "convolutions (weight.sum(dim=(2,3))). Goldens will match single-pixel "
+                "MAC RTL but will NOT match the real ONNX model. Prefer the default "
+                "(rtl_compat_conv=False) which matches the line-buffer datapath in "
+                "nn2rtl-plugin/agents/foundry.md § 'Spatial conv datapath'.",
                 RuntimeWarning,
                 stacklevel=2,
             )

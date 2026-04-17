@@ -35,6 +35,7 @@ Hard RTL rules:
 - For `op_type=add`, unpack lhs/rhs internally, apply the INT8 quantized-add formula using `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor` from the LayerIR, saturate the result to INT8, and emit on `data_out`.
 - `layer0_0_conv1` is a standard conv2d (IC=3, OC=64, 7×7 kernel, stride=2) with BatchNorm folded into weights. No ReLU, no MaxPool. Treat identically to any other conv2d layer.
 - **Conv modules must use an output-stationary MAC array. Single-MAC designs are rejected.** Instantiate `OC` parallel signed 8×8 MAC lanes, one accumulator per output channel, reused across `IC × KH × KW` cycles.
+- **For KH×KW > 1 convolutions, you MUST implement a proper 2D line-buffer + sliding-window datapath** (see "Spatial conv datapath" below). The old spatially-summed 1×1 approximation (`in_latch[k / (KH*KW)]`) is mathematically wrong for real 2D convolutions and will fail against the goldens. 1×1 / pointwise convolutions keep the simpler single-pixel MAC.
 
 ---
 
@@ -99,21 +100,210 @@ Weight and bias arrays **must** carry `(* ram_style = "block" *)` to hint the sy
 
 ---
 
-## Conv2d pipeline staging — four registered stages after the MAC loop
+## Conv2d datapath — two shapes, one pipeline
 
-`pipeline_latency_cycles = IC × KH × KW + 4`. The `+4` allocates four distinct registered stages after the input latch:
+There are two distinct RTL datapaths for conv2d, chosen by kernel size:
+
+- **Pointwise (1×1) conv** — `KH = KW = 1`. Each output pixel depends on a
+  single input pixel. The classical output-stationary MAC array described
+  below is sufficient.
+- **Spatial (KH×KW > 1) conv** — e.g. 3×3, 7×7. Each output pixel depends on
+  a `KH × KW` input window. The RTL **must** buffer prior input rows in a
+  line buffer and slide a receptive-field window across the stream.
+  See **"Spatial conv datapath"** further down — single-pixel MAC designs
+  are mathematically incorrect for KH×KW > 1 kernels and will fail
+  verification against the goldens.
+
+### Shared four-stage pipeline (both shapes)
+
+After the MAC loop finishes a full receptive-field accumulation, the
+remaining four registered stages are identical:
 
 | Stage | What happens | Registers written |
 |---|---|---|
-| **LATCH** | Capture `data_in` into `in_latch[]`, clear `acc[]`, start `k_counter` | `in_latch[]`, `acc[]` |
-| **RUNNING** (K_TOTAL cycles) | `OC` parallel 8×8 MACs per cycle | `acc[oc] += weight[oc][k] * in_latch[k / (KH*KW)]` |
+| **LATCH / FILL** | Capture current receptive-field window, clear `acc[]`, start `k_counter` | `window[][][]`, `acc[]` |
+| **RUNNING** (K_TOTAL cycles) | `OC` parallel 8×8 MACs per cycle | `acc[oc] += weight[oc][k] * window_tap(k)` |
 | **BIAS** | Add per-channel bias: `biased[oc] <= acc[oc] + bias[oc]` | `biased[]` |
 | **SCALE** | Multiply: `scaled[oc] <= biased[oc] * SCALE_MULT` | `scaled[]` |
 | **OUTPUT** | Right-shift by `SCALE_SHIFT`, saturate to INT8, pack → `data_out`, assert `valid_out` | `data_out`, `valid_out` |
 
-**Never combine BIAS and SCALE in the same registered stage.** The bias-add is a `BIASED_W`-wide integer add and the scale step is a `BIASED_W × SCALE_CONST_W` integer multiply. Keeping them in separate pipeline stages reduces post-MAC logic depth and improves Fmax.
+`K_TOTAL = IC * KH * KW`. The MAC tap `window_tap(k)` depends on the datapath:
 
-**Note on Sky130 memory:** Sky130 has no dedicated BRAM macros. The `(* ram_style = "block" *)` attribute is a hint that Yosys preserves but cannot honour with real BRAM on this PDK — weight arrays map to flip-flops regardless. Keep the attribute for portability to other targets, but do not expect area reduction from it on Sky130.
+- **Pointwise** — `window_tap(k) = in_latch[k]` (only one spatial position exists).
+- **Spatial** — `window_tap(k) = window[kh][kw][ic]` where
+  `ic = k / (KH*KW)`, `kh = (k % (KH*KW)) / KW`, `kw = k % KW`.
+
+**Never combine BIAS and SCALE in the same registered stage.** The bias-add is
+a `BIASED_W`-wide integer add and the scale step is a `BIASED_W × SCALE_CONST_W`
+integer multiply. Keeping them in separate pipeline stages reduces post-MAC
+logic depth and improves Fmax.
+
+**Note on Sky130 memory:** Sky130 has no dedicated BRAM macros. The
+`(* ram_style = "block" *)` attribute is a hint that Yosys preserves but
+cannot honour with real BRAM on this PDK — weight arrays and line buffers
+map to flip-flops regardless. Keep the attribute for portability; do not
+expect area reduction from it on Sky130.
+
+---
+
+## Spatial conv datapath — line buffer + sliding window (KH*KW > 1)
+
+A spatial convolution at output position `(oh, ow)` reads an entire
+`KH × KW × IC` receptive field of inputs:
+
+```
+output[oc, oh, ow] = sum over (ic, kh, kw) of
+    input[ic, oh*SH + kh - PH, ow*SW + kw - PW] * weight[oc, ic, kh, kw]
+    (input values outside the padded boundary are zero)
+```
+
+Because the testbench streams one input pixel per cycle, the module must
+buffer prior rows so that a full `KH × KW` window is available before any
+output can fire. The standard FPGA / ASIC pattern is a **line buffer** plus
+a small **window shift register**. Both are required — single-pixel designs
+that short-circuit `weight.sum(dim=(2,3))` are **forbidden** and will fail
+verification.
+
+### Module geometry (derive from LayerIR)
+
+```verilog
+localparam IC = input_shape[1];   // input channels
+localparam OC = output_shape[1];  // output channels
+localparam IH = input_shape[2];   // input rows
+localparam IW = input_shape[3];   // input columns
+localparam OH = output_shape[2];  // output rows
+localparam OW = output_shape[3];  // output columns
+localparam KH = weight_shape[2];  // kernel height
+localparam KW = weight_shape[3];  // kernel width
+localparam SH = /* operation stride[0], default 1 */;
+localparam SW = /* operation stride[1], default 1 */;
+localparam PH = /* operation padding[0], default 0 */;
+localparam PW = /* operation padding[1], default 0 */;
+localparam K_TOTAL = IC * KH * KW;
+```
+
+### Storage
+
+```verilog
+// Weights and biases (same as pointwise path):
+(* ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
+(* ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
+
+// Line buffer: holds the last (KH-1) complete input rows.
+// One row is IW packed pixels; one pixel is IC bytes.
+(* ram_style = "block" *) reg signed [IC*8-1:0] line_buf [0:KH-2][0:IW-1];
+
+// Window shift register: the current KH x KW receptive field, one byte per
+// (kh, kw, ic) tap. The MAC loop reads this combinationally.
+reg signed [7:0] window [0:KH-1][0:KW-1][0:IC-1];
+
+// Accumulators / output staging
+reg signed [ACC_W-1:0]    acc    [0:OC-1];
+reg signed [BIASED_W-1:0] biased [0:OC-1];
+reg signed [SCALED_W-1:0] scaled [0:OC-1];
+reg signed [SCALED_W-1:0] v_tmp;
+```
+
+### Counters
+
+```verilog
+reg [$clog2(IW)-1:0] in_col;    // 0..IW-1,  current INPUT column
+reg [$clog2(IH)-1:0] in_row;    // 0..IH-1,  current INPUT row
+reg [$clog2(OW)-1:0] out_col;   // 0..OW-1,  current OUTPUT column
+reg [$clog2(OH)-1:0] out_row;   // 0..OH-1,  current OUTPUT row
+reg [$clog2(K_TOTAL+1)-1:0] k_counter;
+```
+
+### Data flow per input pixel
+
+1. **Shift the line buffer up one row** only when `in_col == IW-1`:
+   `line_buf[0] <= line_buf[1]; … line_buf[KH-3] <= line_buf[KH-2]; line_buf[KH-2] <= current_row`.
+2. **Write the new pixel** into `line_buf[KH-2][in_col]` (i.e. the bottom row
+   of the buffer as seen from the receiver).
+3. **Update the window shift register**: horizontally slide `window[*][kw]`
+   left into `window[*][kw-1]`, then pull column `(in_col - KW + 1)` from
+   all `KH` rows (the new row from `data_in`, the older rows from `line_buf`)
+   into `window[*][KW-1]`. Treat out-of-bound row/column reads as zero
+   (padding).
+4. **Decide whether an output fires** at this input pixel. Output `(oh, ow)`
+   needs its last input pixel — `(oh*SH + KH - 1 - PH, ow*SW + KW - 1 - PW)`.
+   So `(in_row, in_col)` triggers output `(oh, ow)` when:
+   ```
+   oh = (in_row + PH - KH + 1) / SH    (must be non-negative and evenly divisible)
+   ow = (in_col + PW - KW + 1) / SW    (same)
+   ```
+   Otherwise no output this cycle.
+
+### FSM
+
+```
+ST_IDLE
+  ready_in = 1; valid_out = 0.
+  On reset, also clear line_buf, window, acc, counters.
+
+ST_STREAM            (ready_in = 1, valid_out = 0 until trigger)
+  On each valid_in:
+    update line_buf and window as above
+    if (output trigger this cycle) → ST_RUNNING  (latch window into acc start)
+
+ST_RUNNING           (ready_in = 0)
+  for k_counter = 0..K_TOTAL-1:
+    acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] *
+               window[k_counter / (KH*KW)][ (k_counter / KW) % KH ][ k_counter % KW ]
+  // NOTE: ordering must match PyTorch weight layout [OC, IC, KH, KW].
+  // ic = k / (KH*KW); kh = (k % (KH*KW)) / KW; kw = k % KW.
+
+ST_BIAS → ST_SCALE → ST_OUTPUT  (same as pointwise path)
+
+On valid_out:
+  advance out_col / out_row;
+  reassert ready_in; return to ST_STREAM.
+```
+
+### Padding
+
+Zero-padding is implemented at the **window read** step, not by inserting
+phantom inputs into the stream. When a `window[kh][kw][ic]` tap maps to an
+out-of-range input position (row < 0, row >= IH, col < 0, col >= IW), drive
+that tap to `8'sd0`. Use registered mask signals derived from `in_row` and
+`in_col` so the MAC loop never branches on boundary conditions.
+
+### Pipeline latency
+
+The first valid_out for a spatial conv fires after the first input-window
+is fully received plus the usual MAC + three staging cycles:
+
+```
+pipeline_latency_cycles
+    = max(KH - 1 - PH, 0) * IW       // fill rows above the first output
+    + max(KW - PW, 1)                 // columns needed for the first window
+    + K_TOTAL                         // MAC loop
+    + 3                               // BIAS, SCALE, OUTPUT
+```
+
+This is exactly the value your LayerIR's `pipeline_latency_cycles` field
+carries — use it; don't recompute.
+
+### Output rate vs input rate
+
+For stride `SH, SW > 1`, outputs fire less often than inputs. Deassert
+`ready_in` only during `ST_RUNNING / ST_BIAS / ST_SCALE / ST_OUTPUT`. Between
+output events, `ready_in` stays HIGH and the module simply shifts new pixels
+into `line_buf` / `window`. The Verilator testbench already supports
+`samples_per_vector` differing between `goldin` and `goldout` (same
+mechanism MaxPool uses).
+
+### Forbidden simplifications (all will fail verification)
+
+- ❌ `acc[oc] += weight[oc*K_TOTAL + k] * in_latch[k / (KH*KW)]` — this is
+  the old spatially-summed 1×1 approximation. Gives the wrong answer for
+  any KH×KW > 1 kernel.
+- ❌ Computing `w_sum[oc][ic] = sum over (kh, kw) of weight[oc, ic, kh, kw]`
+  and running a pointwise MAC with `w_sum`. Same bug in a different costume.
+- ❌ Collapsing the line buffer to a single pixel (no spatial memory). The
+  receptive field is lost.
+- ❌ Using `in_latch[ic]` inside the MAC loop. The correct tap depends on
+  both spatial position `(kh, kw)` and channel `ic`.
 
 ---
 
@@ -139,15 +329,23 @@ always @(posedge clk) begin
 end
 ```
 
-**Forbidden pattern 3 — wrong input channel index in MAC loop:**
+**Forbidden pattern 3 — single-pixel MAC for a spatial (KH×KW > 1) conv:**
 ```verilog
-// WRONG — cycles channels 0,1,2,0,1,2,... but weight order is ic-major (all KH*KW for ic=0, then ic=1...):
+// WRONG — uses only the current pixel (or a 1-D latch over IC) and ignores the
+//         KH x KW receptive field entirely. Mathematically this computes
+//         output[oc,h,w] = sum_ic in[ic,h,w] * sum_{kh,kw} w[oc,ic,kh,kw]
+//         which is NOT the same as a real 2D conv.
 acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter % IC];
+acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter / (KH*KW)];
 
-// CORRECT — k_counter / KH_KW gives ic=0 for k=0..KH*KW-1, ic=1 for k=KH*KW..2*KH*KW-1, etc.:
-localparam KH_KW = KH * KW;
-acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter / KH_KW];
-// For 1x1 convs KH_KW=1, so this simplifies to in_latch[k_counter] — identical to the old form.
+// CORRECT (pointwise, KH=KW=1): in_latch has IC pixels and the MAC steps once per channel:
+acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter];
+
+// CORRECT (spatial, KH*KW > 1): MAC reads the full KH x KW x IC window assembled
+// from the line buffer. ic = k / (KH*KW), kh = (k % (KH*KW)) / KW, kw = k % KW.
+// Weight layout is [OC, IC, KH, KW] row-major (PyTorch default).
+acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] *
+           window[k_counter / (KH*KW)][ (k_counter / KW) % KH ][ k_counter % KW ];
 ```
 
 **Forbidden pattern 2 — SystemVerilog cast syntax:**
@@ -234,19 +432,22 @@ module <module_id> (
     reg signed [SCALED_W-1:0] v_tmp;   // module-scope temp for ST_OUTPUT clamping (not inside for loop)
     reg [$clog2(K_TOTAL+1)-1:0] k_counter;
 
-    localparam KH_KW = KH * KW;   // used in MAC index below
+    localparam KH_KW = KH * KW;
 
-    // ... state machine: ST_IDLE -> ST_RUNNING -> ST_BIAS -> ST_SCALE -> ST_OUTPUT
-    // ready_in deasserts in ST_RUNNING/BIAS/SCALE, reasserts in ST_OUTPUT.
-    // valid_out asserts for exactly one cycle in ST_OUTPUT.
+    // Pointwise path (KH = KW = 1):
+    //   - single in_latch[0:IC-1] captured from data_in each ST_IDLE → ST_RUNNING
+    //   - MAC: acc[oc] += weights[oc*K_TOTAL + k] * in_latch[k]
     //
-    // MAC loop — CRITICAL indexing rule:
-    //   acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter / KH_KW];
-    //   NOT in_latch[k_counter % IC] — that gives wrong channel for KH*KW > 1.
-    //   k_counter / KH_KW maps k=0..(IC*KH*KW-1) to ic=0..(IC-1) correctly:
-    //     k=0..(KH*KW-1)           → ic=0
-    //     k=(KH*KW)..(2*KH*KW-1)  → ic=1  etc.
-    //   For 1x1 convs KH_KW=1 so division equals k, same as k_counter.
+    // Spatial path (KH*KW > 1):
+    //   - line_buf[0..KH-2][0..IW-1] holds prior complete rows
+    //   - window[KH][KW][IC] is a registered shift register; refilled each valid_in
+    //   - MAC: acc[oc] += weights[oc*K_TOTAL + k] *
+    //          window[k / KH_KW][(k % KH_KW) / KW][k % KW]
+    //   - Out-of-range window taps drive zero (zero-padding).
+    //   - ST_STREAM ingests pixels; ST_RUNNING fires only on output-trigger
+    //     cycles determined by (in_row, in_col) vs (oh, ow) mapping.
+    //
+    // Which path you generate is determined by KH*KW, NOT by layer name.
 endmodule
 ```
 

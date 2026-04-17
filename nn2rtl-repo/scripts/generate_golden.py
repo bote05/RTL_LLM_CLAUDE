@@ -65,15 +65,16 @@ def parse_args() -> argparse.Namespace:
         help="Number of synthetic calibration samples (ONNX path only; default 8).",
     )
     parser.add_argument(
-        "--faithful-conv",
-        dest="faithful_conv",
+        "--legacy-rtl-compat-conv",
+        dest="legacy_rtl_compat_conv",
         action="store_true",
         help=(
-            "Generate goldens that match a real 2D convolution instead of the "
-            "current RTL's spatially-summed 1x1 approximation (ONNX path only). "
-            "Only works against an RTL datapath that implements full KH x KW "
-            "receptive fields — the default single-MAC RTL will fail verification "
-            "on non-1x1 kernels."
+            "Opt into the LEGACY spatially-summed 1x1 conv approximation "
+            "(ONNX path only). The default now generates goldens that match a "
+            "faithful 2D convolution, which requires the line-buffer RTL "
+            "datapath documented in nn2rtl-plugin/agents/foundry.md. Only use "
+            "this flag if you are still running the pre-real-2D-conv single-pixel "
+            "MAC RTL."
         ),
     )
     return parser.parse_args()
@@ -118,7 +119,7 @@ def main() -> None:
             repo_root=repo_root,
             model_name=args.name,
             num_calibration_samples=args.samples,
-            rtl_compat_conv=not args.faithful_conv,
+            rtl_compat_conv=args.legacy_rtl_compat_conv,
         )
         output_path = _write_layer_ir_json(repo_root, payload)
         summary = {
