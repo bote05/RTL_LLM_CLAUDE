@@ -248,10 +248,19 @@ ST_STREAM            (ready_in = 1, valid_out = 0 until trigger)
 
 ST_RUNNING           (ready_in = 0)
   for k_counter = 0..K_TOTAL-1:
+    // window is declared `[0:KH-1][0:KW-1][0:IC-1]` so the FIRST index is
+    // kh, the SECOND is kw, the THIRD is ic.  The weight stride
+    // decomposition from the PyTorch [OC,IC,KH,KW] layout is
+    //   ic = k / (KH*KW);  kh = (k % (KH*KW)) / KW;  kw = k % KW
+    // so the MAC must index window AS `[kh][kw][ic]`, NOT `[ic][kh][kw]`.
+    // Getting this backwards gives a silently-compiling module whose MACs
+    // multiply weights by the wrong pixel (wrong channel + wrong spatial
+    // offset).  The bug only shows up for KH*KW > 1 — 1×1 convs happen to
+    // index the same cell either way and pass verification, masking it.
     acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] *
-               window[k_counter / (KH*KW)][ (k_counter / KW) % KH ][ k_counter % KW ]
-  // NOTE: ordering must match PyTorch weight layout [OC, IC, KH, KW].
-  // ic = k / (KH*KW); kh = (k % (KH*KW)) / KW; kw = k % KW.
+               window[ (k_counter % (KH*KW)) / KW ]   // kh
+                     [ k_counter % KW ]                // kw
+                     [ k_counter / (KH*KW) ];          // ic
 
 ST_BIAS → ST_SCALE → ST_OUTPUT  (same as pointwise path)
 
@@ -526,14 +535,27 @@ module <module_id> (
             // ------------------------------------------------------------
             ST_RUNNING: begin
                 // K_TOTAL sequential MAC cycles, OC parallel lanes per cycle.
-                // Weight memory layout is [OC, IC, KH, KW] row-major, so:
-                //   ic = k / (KH*KW);  kh = (k / KW) % KH;  kw = k % KW
+                //
+                // Weight memory layout is [OC, IC, KH, KW] row-major, so the
+                // k_counter decomposition is:
+                //   ic = k / (KH*KW)
+                //   kh = (k % (KH*KW)) / KW
+                //   kw = k % KW
+                //
+                // The `window` array was declared `[0:KH-1][0:KW-1][0:IC-1]`
+                // above, so the FIRST index is kh, the SECOND is kw, the
+                // THIRD is ic.  The MAC must therefore read it as
+                // `window[kh][kw][ic]`, NOT `window[ic][kh][kw]`.  Getting
+                // the dimension order backwards compiles cleanly but
+                // multiplies each weight by the wrong pixel — a silent
+                // correctness bug that only breaks for KH*KW > 1 (1×1 convs
+                // mask it because every permutation hits the same cell).
                 for (oc = 0; oc < OC; oc = oc + 1) begin
                     acc[oc] <= acc[oc] +
                         $signed(weights[oc*K_TOTAL + k_counter]) *
-                        $signed(window[ k_counter / (KH*KW) ]
-                                      [ (k_counter / KW) % KH ]
-                                      [ k_counter % KW ]);
+                        $signed(window[ (k_counter % (KH*KW)) / KW ]   // kh
+                                      [ k_counter % KW ]                // kw
+                                      [ k_counter / (KH*KW) ]);         // ic
                 end
                 if (k_counter == K_TOTAL - 1) state <= ST_BIAS;
                 else k_counter <= k_counter + 1;
@@ -634,10 +656,15 @@ acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter / (KH*
 acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] * in_latch[k_counter];
 
 // CORRECT (spatial, KH*KW > 1): MAC reads the full KH x KW x IC window assembled
-// from the line buffer. ic = k / (KH*KW), kh = (k % (KH*KW)) / KW, kw = k % KW.
+// from the line buffer.
+//   ic = k / (KH*KW); kh = (k % (KH*KW)) / KW; kw = k % KW
+//   window was declared `[0:KH-1][0:KW-1][0:IC-1]`, so index order is
+//   window[kh][kw][ic] — matching the declaration, NOT [ic][kh][kw].
 // Weight layout is [OC, IC, KH, KW] row-major (PyTorch default).
 acc[oc] <= acc[oc] + weights[oc*K_TOTAL + k_counter] *
-           window[k_counter / (KH*KW)][ (k_counter / KW) % KH ][ k_counter % KW ];
+           window[ (k_counter % (KH*KW)) / KW ]   // kh
+                 [ k_counter % KW ]                // kw
+                 [ k_counter / (KH*KW) ];          // ic
 ```
 
 **Forbidden pattern 2 — SystemVerilog cast syntax:**
