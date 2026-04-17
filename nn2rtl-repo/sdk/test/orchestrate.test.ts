@@ -230,6 +230,61 @@ describe("orchestrate helpers", () => {
     );
   });
 
+  it("ignores commas inside inline // comments when parsing the port list", () => {
+    // Regression: Surgeon-emitted RTL sometimes annotates data_in with an
+    // inline comment that contains commas (e.g. "// [7:0]=ch0, [15:8]=ch1").
+    // Previously splitTopLevelCommaList split on those commas before comments
+    // were stripped, fragmenting the port block and making later ports
+    // inherit the direction/width of their predecessor. Strip comments first.
+    const issues = preflightVerilogModule(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Surgeon",
+        attempt: 2,
+        verilog_source: [
+          "module m1(",
+          "  input  wire         clk,",
+          "  input  wire         rst_n,",
+          "  input  wire         valid_in,",
+          "  output wire         ready_in,",
+          "  input  wire [23:0]  data_in,    // 3 channels x 8b: [23:16]=ch2, [15:8]=ch1, [7:0]=ch0",
+          "  output reg          valid_out,",
+          "  output reg  [511:0] data_out",
+          ");",
+          "endmodule",
+        ].join("\n"),
+      },
+      {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 3, 224, 224],
+        output_shape: [1, 64, 112, 112],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [64, 3, 7, 7],
+        num_weights: 9408,
+        scale_factor: 0.003,
+        zero_point: 0,
+        pipeline_latency_cycles: 826,
+        clock_period_ns: 20,
+        input_width_bits: 24,
+        output_width_bits: 512,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+    );
+
+    expect(issues).toEqual([]);
+  });
+
   it("fails fast when LayerIR bus widths do not match the channel contract", async () => {
     const runtime = createOrchestratorRuntime();
 

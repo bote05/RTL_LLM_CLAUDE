@@ -768,8 +768,14 @@ function parseAnsiTopPorts(portBlock: string): Map<string, ParsedTopPort> {
   let currentDirection: PortDirection | null = null;
   let currentWidthBits: number | null = null;
 
-  for (const rawEntry of splitTopLevelCommaList(portBlock)) {
-    const declaration = stripVerilogComments(rawEntry).replace(/\s+/g, " ").trim();
+  // Strip comments BEFORE splitting on commas — inline `//` comments may
+  // contain commas (e.g. "// bits [7:0]=ch0, [15:8]=ch1") that would otherwise
+  // fragment the port list and cause downstream ports to inherit the wrong
+  // direction / width from their predecessor.
+  const cleanBlock = stripVerilogComments(portBlock);
+
+  for (const rawEntry of splitTopLevelCommaList(cleanBlock)) {
+    const declaration = rawEntry.replace(/\s+/g, " ").trim();
     if (!declaration) {
       continue;
     }
