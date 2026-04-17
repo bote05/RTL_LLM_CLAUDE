@@ -1782,6 +1782,41 @@ export async function runPipeline(
 
       const surgeonResult = await invokeSurgeon(brokenModule, verifResult, layer, runtime);
       recordUsageFromResult(manager, surgeonResult.result);
+
+      // Surgeon regression guard. Without this guard, a Surgeon turn that
+      // rewrites the module and breaks the preflight contract (missing
+      // canonical ports, wrong port widths, malformed module header) gets
+      // persisted to disk, and the NEXT fail_retry loads THAT broken module
+      // as the new "broken_module" input to Surgeon. The damage compounds
+      // across retries instead of being bounded to one attempt.
+      //
+      // When the incoming brokenModule already passed preflight (so the bug
+      // was in the datapath, not the interface) and Surgeon's output fails
+      // preflight, we treat that as a pure regression: revert to the prior
+      // module on disk and hand it back as the verification input too. We
+      // still burn one attempt slot — the retry budget caps how many times
+      // Surgeon can churn — but the on-disk RTL stays at the best-known
+      // version instead of decaying further.
+      const surgeonPreflightIssues = preflightVerilogModule(surgeonResult.payload, layer);
+      const brokenPreflightIssues = preflightVerilogModule(brokenModule, layer);
+      if (
+        surgeonPreflightIssues.length > 0 &&
+        brokenPreflightIssues.length === 0
+      ) {
+        await appendRunLog(
+          {
+            event: "surgeon_regression_reverted",
+            module_id: nextAction.module_id,
+            surgeon_preflight_issues: surgeonPreflightIssues,
+            reason:
+              "Surgeon output regressed on the preflight contract while the prior module satisfied it. Reverted to the prior module.",
+          },
+          runtime,
+        );
+        await persistVerilogModule(brokenModule);
+        surgeonResult.payload = brokenModule;
+      }
+
       await manager.saveState(statePath);
 
       const statusBeforeVerify = manager.getState().modules[nextAction.module_id];

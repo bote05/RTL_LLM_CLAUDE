@@ -482,10 +482,22 @@ int main(int argc, char** argv) {
 
     const int64_t hang_budget = sidecar.pipeline_latency_cycles * 4 + 16;
 
+    // If the DUT stops producing valid_out before emitting every expected
+    // output, we stop the current vector, record a structured "stalled"
+    // signal, and fall through to the normal results path. Surgeon then
+    // gets: the real sample_count (how many outputs DID match), the correct
+    // max_error / mean_error across those samples, the usual head+tail
+    // snippet of expected/got, AND a clear fix_hint identifying the exact
+    // output index where the stall began. That is strictly more useful than
+    // the old "static testbench failed before simulation" fallback, which
+    // discarded every captured sample and mis-described a mid-sim stall.
+    bool stalled = false;
+    std::string stall_message;
+
     // Unified interleaved drive/sample loop. For each test vector we drive
     // packed input samples whenever the DUT is ready and we sample packed
     // outputs whenever valid_out is high, both in the same tick.
-    for (size_t v = 0; v < golden_inputs.vectors.size(); ++v) {
+    for (size_t v = 0; v < golden_inputs.vectors.size() && !stalled; ++v) {
       const auto& inputs = golden_inputs.vectors[v];
       const auto& outputs = golden_outputs.vectors[v];
 
@@ -497,11 +509,22 @@ int main(int argc, char** argv) {
 
       while (output_idx < outputs.size()) {
         if (idle_cycles > hang_budget) {
-          throw std::runtime_error(
-              "Stalled on vector " + std::to_string(v) +
-              " (output " + std::to_string(output_idx) + " of " +
+          stalled = true;
+          stall_message =
+              "Simulation stalled mid-run on vector " + std::to_string(v) +
+              " after emitting " + std::to_string(output_idx) + " of " +
               std::to_string(outputs.size()) +
-              ") for " + std::to_string(idle_cycles) + " cycles without valid_out.");
+              " expected outputs (" + std::to_string(idle_cycles) +
+              " idle cycles without valid_out, hang_budget=" +
+              std::to_string(hang_budget) + "). " +
+              std::to_string(outputs.size() - output_idx) +
+              " outputs were never produced — DUT likely missing a drain " +
+              "phase for padding/edge pixels, a stuck state, or a bad " +
+              "output-trigger predicate. Outputs 0.." +
+              std::to_string(output_idx) +
+              " are captured in `expected` / `got` so you can see whether " +
+              "the early values matched before the stall.";
+          break;
         }
 
         if (dut->valid_out) {
@@ -629,20 +652,27 @@ int main(int argc, char** argv) {
       }
     }
 
+    // A stall always forces a fail, even if the partial outputs that DID
+    // arrive matched exactly (that still leaves the missing ones).
+    const std::string final_status = stalled ? std::string("fail") : status;
+
     json results = {
         {"module_id", sidecar.module_id},
-        {"status", status},
+        {"status", final_status},
         {"expected", expected_json},
         {"got", got_json},
         {"sample_count", sample_count},
         {"max_error", max_abs_error},
         {"mean_error", mean_error},
-        {"timing_pass", timing_pass},
+        {"timing_pass", stalled ? false : timing_pass},
         {"timing_actual_cycles", timing_actual_cycles_reported},
         {"timing_expected_cycles", timing_expected_cycles},
         {"failure_class", nullptr},
-        {"verilator_stderr", std::string("")},
+        {"verilator_stderr", stalled ? stall_message : std::string("")},
     };
+    if (stalled) {
+      results["fix_hint"] = stall_message;
+    }
 
     writeResults(sidecar.results_path, results);
     return 0;
