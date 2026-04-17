@@ -1,21 +1,35 @@
 // Docs: https://platform.claude.com/docs/en/agent-sdk/typescript
-// AgentDefinition model field accepts: "sonnet" | "opus" | "haiku" | "inherit"
-// effort is only supported in .claude/agents/ file-based agents, not in AgentDefinition
-// For SDK programmatic agents, model tier is the only override available
-
-// The deterministic TypeScript orchestrator plays both the Conductor and
-// Assayer roles itself. Assayer used to be a Haiku "simulation runner" LLM
-// but had zero real reasoning to do (run iverilog, run Verilator, parse
-// JSON, return) and repeatedly hallucinated VerifResults instead of calling
-// the tools. Verification now goes through runtime.assayerFn — same pattern
-// as runtime.yosysFn for synthesis. The three remaining LLM agents below
-// are the only ones dispatched via the SDK's query() path.
+//
+// Model selection is INTENTIONAL, not tier-based. We pass full model IDs so
+// the pick is reproducible regardless of the user's global ~/.claude/settings
+// default model. Tier strings ("sonnet" / "opus") resolve in ways that
+// depend on both the installed SDK version and the user's global default —
+// when we used to say `model: "sonnet"` we were actually getting whatever
+// the global settings pinned (most recently Opus 4.6[1m]), which was
+// undetected for weeks of runs.
+//
+// Why each pick:
+//   - Cartographer: runs once per pipeline to produce layer_ir.json from a
+//     PyTorch checkpoint (it is bypassed entirely on the ONNX path). Pure
+//     extraction + formatting, no complex reasoning. Sonnet 4.6 is cheaper
+//     and plenty. Running Opus here is waste.
+//   - Foundry: one-shot Verilog codegen from a 25 KB spec with correctness
+//     requirements (line buffers, padding drain, sign extension, scale-
+//     factor derivation). Opus 4.7 is the current coding-best model
+//     (released 2026-04-16) and first-shot quality is what matters here —
+//     a failed Foundry output costs a Surgeon pass which is strictly more
+//     expensive than the Opus differential vs Sonnet.
+//   - Surgeon: targeted repair with rich diagnostic signal, doing minimal
+//     rewrites. Opus 4.7 also — repair is the highest-stakes call in the
+//     pipeline (a regression here corrupts the on-disk module for the next
+//     iteration).
+//
 // `maxTurns` caps the agentic turn count per subagent call; the outer
 // query() also sets a parent cap that applies on top of these.
 export const AGENT_CONFIG = {
-  Cartographer: { model: "sonnet" as const, maxTurns: 30, description: "Model extractor. Runs once at pipeline start. Emits output/layer_ir.json." },
-  Foundry:      { model: "sonnet" as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
-  Surgeon:      { model: "sonnet" as const, maxTurns: 8, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
+  Cartographer: { model: "claude-sonnet-4-6" as const, maxTurns: 30, description: "Model extractor. Runs once at pipeline start. Emits output/layer_ir.json." },
+  Foundry:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
+  Surgeon:      { model: "claude-opus-4-7"  as const, maxTurns: 8,  description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
 } as const;
 
 export type AgentName = keyof typeof AGENT_CONFIG;

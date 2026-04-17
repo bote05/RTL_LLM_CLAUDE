@@ -404,6 +404,13 @@ void writeFallbackError(const std::string& sidecar_path, const std::exception& e
     json error_result = {
         {"module_id", module_id},
         {"status", "fail"},
+        // status_class = "tb_setup_error" is distinct from "sim_stalled" /
+        // "sim_completed_mismatch" — it means the testbench could not start
+        // simulation at all (bad sidecar, could not open goldens, etc.).
+        // Surgeon should treat this as "the RTL never ran; preflight or
+        // compile probably caught the real issue" rather than reasoning
+        // about output values.
+        {"status_class", "tb_setup_error"},
         {"timing_pass", false},
         {"timing_actual_cycles", -1},
         {"timing_expected_cycles", -1},
@@ -412,8 +419,18 @@ void writeFallbackError(const std::string& sidecar_path, const std::exception& e
         {"max_error", -1},
         {"mean_error", -1.0},
         {"failure_class", nullptr},
-        {"fix_hint", std::string("static testbench failed before simulation: ") + e.what()},
+        {"fix_hint", std::string("Testbench setup error before simulation: ") + e.what()},
         {"verilator_stderr", std::string(e.what())},
+        {"outputs_expected", 0},
+        {"outputs_received", 0},
+        {"missing_index_start", -1},
+        {"missing_index_end", -1},
+        {"last_valid_out_cycle", -1},
+        {"simulation_end_cycle", -1},
+        {"output_gap_histogram", std::vector<int64_t>{0, 0, 0, 0}},
+        {"first_mismatch_index", -1},
+        {"first_mismatch_expected", 0},
+        {"first_mismatch_got", 0},
     };
     writeResults(results_path, error_result);
   } catch (...) {
@@ -482,17 +499,38 @@ int main(int argc, char** argv) {
 
     const int64_t hang_budget = sidecar.pipeline_latency_cycles * 4 + 16;
 
-    // If the DUT stops producing valid_out before emitting every expected
-    // output, we stop the current vector, record a structured "stalled"
-    // signal, and fall through to the normal results path. Surgeon then
-    // gets: the real sample_count (how many outputs DID match), the correct
-    // max_error / mean_error across those samples, the usual head+tail
-    // snippet of expected/got, AND a clear fix_hint identifying the exact
-    // output index where the stall began. That is strictly more useful than
-    // the old "static testbench failed before simulation" fallback, which
-    // discarded every captured sample and mis-described a mid-sim stall.
+    // The testbench emits **facts** about simulation behaviour — never
+    // interpretation or guesses at root cause. The Surgeon agent reasons
+    // from these facts with a reasoning-capable model; it does not need
+    // (and should not be misled by) pre-written hypotheses like "DUT
+    // likely missing a drain phase". That style of hint is architecture-
+    // specific, grows without bound, and is frequently wrong.
+    //
+    // Facts we capture below:
+    //   status_class          "sim_stalled" | "sim_completed_mismatch"
+    //   outputs_expected      total expected outputs across all vectors
+    //   outputs_received      how many the DUT actually emitted
+    //   missing_index_start   first index the DUT never emitted (or -1)
+    //   missing_index_end     exclusive end of the contiguous missing range
+    //   last_valid_out_cycle  absolute cycle of the most recent valid_out
+    //   simulation_end_cycle  absolute cycle when simulation stopped
+    //   output_gap_histogram  4-quarter bucket counts of missing outputs
+    //                         (start-heavy ≈ reset/init bug; middle-heavy
+    //                         ≈ counter overflow; end-heavy ≈ drain exits
+    //                         early; uniform ≈ per-cycle arithmetic —
+    //                         but THIS IS FOR SURGEON TO INFER, not for
+    //                         the testbench to assert.)
+    //   first_mismatch_*      first index where expected != got, plus the
+    //                         (expected, got) values at that index
     bool stalled = false;
-    std::string stall_message;
+    int64_t total_outputs_expected = 0;
+    int64_t total_outputs_received = 0;
+    int64_t last_valid_out_cycle_tracked = -1;
+    int64_t simulation_end_cycle_tracked = 0;
+    int64_t stall_vector_index = -1;
+    int64_t first_mismatch_flat_index = -1;
+    int64_t first_mismatch_expected_v = 0;
+    int64_t first_mismatch_got_v = 0;
 
     // Unified interleaved drive/sample loop. For each test vector we drive
     // packed input samples whenever the DUT is ready and we sample packed
@@ -500,6 +538,7 @@ int main(int argc, char** argv) {
     for (size_t v = 0; v < golden_inputs.vectors.size() && !stalled; ++v) {
       const auto& inputs = golden_inputs.vectors[v];
       const auto& outputs = golden_outputs.vectors[v];
+      total_outputs_expected += static_cast<int64_t>(outputs.size());
 
       size_t input_idx = 0;
       size_t output_idx = 0;
@@ -510,20 +549,7 @@ int main(int argc, char** argv) {
       while (output_idx < outputs.size()) {
         if (idle_cycles > hang_budget) {
           stalled = true;
-          stall_message =
-              "Simulation stalled mid-run on vector " + std::to_string(v) +
-              " after emitting " + std::to_string(output_idx) + " of " +
-              std::to_string(outputs.size()) +
-              " expected outputs (" + std::to_string(idle_cycles) +
-              " idle cycles without valid_out, hang_budget=" +
-              std::to_string(hang_budget) + "). " +
-              std::to_string(outputs.size() - output_idx) +
-              " outputs were never produced — DUT likely missing a drain " +
-              "phase for padding/edge pixels, a stuck state, or a bad " +
-              "output-trigger predicate. Outputs 0.." +
-              std::to_string(output_idx) +
-              " are captured in `expected` / `got` so you can see whether " +
-              "the early values matched before the stall.";
+          stall_vector_index = static_cast<int64_t>(v);
           break;
         }
 
@@ -535,6 +561,7 @@ int main(int argc, char** argv) {
           if (vector_first_valid_out < 0) {
             vector_first_valid_out = cycle_counter;
           }
+          last_valid_out_cycle_tracked = cycle_counter;
 
           const auto got_words = readPackedWords(dut->data_out, golden_outputs.words_per_sample);
           const auto got_channels = unpackInt8Channels(got_words, golden_outputs.bytes_per_sample);
@@ -553,6 +580,13 @@ int main(int argc, char** argv) {
             expected_flat.push_back(expected);
             actual_flat.push_back(got);
 
+            if (first_mismatch_flat_index < 0 && got != expected) {
+              first_mismatch_flat_index =
+                  static_cast<int64_t>(expected_flat.size()) - 1;
+              first_mismatch_expected_v = expected;
+              first_mismatch_got_v = got;
+            }
+
             const int64_t diff = got >= expected ? got - expected : expected - got;
             if (diff > max_abs_error) {
               max_abs_error = diff;
@@ -562,6 +596,7 @@ int main(int argc, char** argv) {
           }
 
           ++output_idx;
+          ++total_outputs_received;
           idle_cycles = 0;
         } else {
           ++idle_cycles;
@@ -606,6 +641,7 @@ int main(int argc, char** argv) {
     }
 
     dut->final();
+    simulation_end_cycle_tracked = cycle_counter;
 
     const double mean_error =
         sample_count ? sum_abs_error / static_cast<double>(sample_count) : 0.0;
@@ -656,9 +692,74 @@ int main(int argc, char** argv) {
     // arrive matched exactly (that still leaves the missing ones).
     const std::string final_status = stalled ? std::string("fail") : status;
 
+    // status_class is a FACT about simulation shape, not a root-cause guess:
+    //   sim_stalled              simulation began, partial outputs, stopped emitting
+    //   sim_completed_mismatch   simulation finished normally but values disagreed
+    //   sim_passed               functional + timing pass (returned as status "pass")
+    std::string status_class;
+    if (stalled) {
+      status_class = "sim_stalled";
+    } else if (final_status == "pass") {
+      status_class = "sim_passed";
+    } else {
+      status_class = "sim_completed_mismatch";
+    }
+
+    // Missing output range — contiguous from first not-emitted index to the
+    // total expected count. For multi-vector runs with a stall on vector v,
+    // this covers everything from the stall point onward across all later
+    // vectors. When no outputs are missing, both fields are -1.
+    int64_t missing_index_start = -1;
+    int64_t missing_index_end = -1;
+    if (total_outputs_received < total_outputs_expected) {
+      missing_index_start = total_outputs_received;
+      missing_index_end = total_outputs_expected;
+    }
+
+    // 4-quarter histogram of MISSING output indices (not of received ones).
+    // Interpreting this is Surgeon's job — the testbench just buckets:
+    //   start-heavy = missing near index 0
+    //   middle-heavy = missing around the middle of the expected stream
+    //   end-heavy = missing at the tail
+    //   uniform = scattered across all quarters
+    std::vector<int64_t> output_gap_histogram = {0, 0, 0, 0};
+    if (missing_index_start >= 0 && total_outputs_expected > 0) {
+      for (int64_t i = missing_index_start; i < missing_index_end; ++i) {
+        const int64_t q_raw = (i * 4) / total_outputs_expected;
+        const int64_t q = (q_raw < 0) ? 0 : (q_raw > 3 ? 3 : q_raw);
+        output_gap_histogram[static_cast<size_t>(q)] += 1;
+      }
+    }
+
+    // Factual fix_hint. Restates the numbers so downstream tooling that
+    // only looks at fix_hint still sees the headline. No interpretation.
+    std::string fix_hint_text;
+    if (stalled) {
+      fix_hint_text =
+          "Simulation stalled at cycle " +
+          std::to_string(simulation_end_cycle_tracked) + " on vector " +
+          std::to_string(stall_vector_index) + " after emitting " +
+          std::to_string(total_outputs_received) + " of " +
+          std::to_string(total_outputs_expected) +
+          " expected outputs. Last valid_out fired at cycle " +
+          std::to_string(last_valid_out_cycle_tracked) +
+          ". Missing output indices: [" +
+          std::to_string(missing_index_start) + ", " +
+          std::to_string(missing_index_end) +
+          "). See output_gap_histogram and the head/tail samples of "
+          "expected/got for raw evidence.";
+    } else if (final_status != "pass") {
+      fix_hint_text =
+          "Simulation completed but values disagreed. max_error=" +
+          std::to_string(max_abs_error) + " across " +
+          std::to_string(sample_count) +
+          " samples. See first_mismatch_* and expected/got for raw evidence.";
+    }
+
     json results = {
         {"module_id", sidecar.module_id},
         {"status", final_status},
+        {"status_class", status_class},
         {"expected", expected_json},
         {"got", got_json},
         {"sample_count", sample_count},
@@ -668,10 +769,21 @@ int main(int argc, char** argv) {
         {"timing_actual_cycles", timing_actual_cycles_reported},
         {"timing_expected_cycles", timing_expected_cycles},
         {"failure_class", nullptr},
-        {"verilator_stderr", stalled ? stall_message : std::string("")},
+        {"verilator_stderr", fix_hint_text},
+        // Factual simulation evidence — Surgeon reasons from these directly.
+        {"outputs_expected", total_outputs_expected},
+        {"outputs_received", total_outputs_received},
+        {"missing_index_start", missing_index_start},
+        {"missing_index_end", missing_index_end},
+        {"last_valid_out_cycle", last_valid_out_cycle_tracked},
+        {"simulation_end_cycle", simulation_end_cycle_tracked},
+        {"output_gap_histogram", output_gap_histogram},
+        {"first_mismatch_index", first_mismatch_flat_index},
+        {"first_mismatch_expected", first_mismatch_expected_v},
+        {"first_mismatch_got", first_mismatch_got_v},
     };
-    if (stalled) {
-      results["fix_hint"] = stall_message;
+    if (!fix_hint_text.empty()) {
+      results["fix_hint"] = fix_hint_text;
     }
 
     writeResults(sidecar.results_path, results);

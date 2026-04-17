@@ -50,6 +50,12 @@ const AGENT_MCP_TOOLS = {
   surgeon: ["mcp__nn2rtl-tools__write_verilog"],
 } as const;
 
+const APPEND_SKILL_TO_PROMPT = {
+  cartographer: true,
+  foundry: false,
+  surgeon: false,
+} as const;
+
 const GLOBAL_ALLOWED_TOOLS = [
   "Agent",
   ...new Set(Object.values(AGENT_MCP_TOOLS).flat()),
@@ -408,7 +414,7 @@ export async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentD
   const mcpTools = [...AGENT_MCP_TOOLS[slug]];
   const combinedTools = [...new Set([...builtInTools, ...mcpTools])];
   const skills = toStringList(frontmatter.skills);
-  const prompt = parsedSkill
+  const prompt = parsedSkill && APPEND_SKILL_TO_PROMPT[slug]
     ? `${body}\n\nSupplemental skill reference:\n\n${parsedSkill.body}`
     : body;
 
@@ -433,6 +439,113 @@ export async function loadAllAgentDefinitions(): Promise<Record<string, AgentDef
   return Object.fromEntries(entries);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatIntVector(values: readonly number[] | undefined): string {
+  return values && values.length > 0 ? `[${values.join(", ")}]` : "unknown";
+}
+
+function buildFoundryGenerationBrief(payload: unknown): string | null {
+  if (!isRecord(payload) || !isRecord(payload.layer_ir)) {
+    return null;
+  }
+  const layer = payload.layer_ir as unknown as LayerIR;
+  const expectedSpecHash =
+    typeof payload.expected_spec_hash === "string"
+      ? payload.expected_spec_hash
+      : computeExpectedSpecHash(layer);
+  const lines = [
+    "Compact generation brief:",
+    `- op_type=${layer.op_type}; module_id=${layer.module_id}; return spec_hash=${expectedSpecHash} exactly.`,
+    `- bus contract: data_in=${layer.input_width_bits} bits, data_out=${layer.output_width_bits} bits.`,
+    `- pipeline_latency_cycles=${layer.pipeline_latency_cycles} from LayerIR is authoritative; do not override it with a hand-derived formula.`,
+  ];
+
+  if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
+    const kh = layer.weight_shape[2];
+    const kw = layer.weight_shape[3];
+    const pointwise = kh === 1 && kw === 1;
+    const padding = layer.padding;
+    lines.push(
+      `- conv geometry: kernel=${kh}x${kw}; pointwise=${pointwise ? "yes" : "no"}; stride=${formatIntVector(layer.stride)}; padding=${formatIntVector(padding)}.`,
+    );
+    if (!pointwise) {
+      const needsDrain =
+        padding !== undefined &&
+        ((padding[0] ?? 0) > 0 || (padding[1] ?? 0) > 0);
+      lines.push(
+        `- spatial conv rule: use a real line buffer + sliding window; ${needsDrain ? "include a padding drain path." : "no padding drain is required unless the LayerIR says otherwise."}`,
+      );
+    }
+    if (layer.module_id === "layer0_0_conv1") {
+      lines.push(
+        "- stem rule: do not fuse extra stages from stale docs. Follow the current LayerIR/golden contract; on the legacy .pth path this is not a fused MaxPool stage.",
+      );
+    }
+  } else if (layer.op_type === "add") {
+    lines.push(
+      `- add rule: data_in is packed lhs|rhs where W=${layer.input_width_bits / 2}; use lhs_scale_factor, rhs_scale_factor, and scale_factor exactly.`,
+    );
+  } else if (layer.op_type === "maxpool") {
+    lines.push(
+      `- maxpool geometry: kernel=${formatIntVector(layer.kernel_size)}; stride=${formatIntVector(layer.pool_stride)}; padding=${formatIntVector(layer.pool_padding)}.`,
+    );
+  }
+
+  lines.push(
+    "- invariant markers: when the mechanism exists, annotate ROUNDING, DRAIN_EXIT, INTER_VECTOR_RESET, READY_IN_GATING, and VALID_OUT_LATENCY with [INVARIANT:*] comments.",
+  );
+  return lines.join("\n");
+}
+
+function buildSurgeonRepairBrief(payload: unknown): string | null {
+  if (!isRecord(payload) || !isRecord(payload.layer_ir) || !isRecord(payload.verif_result)) {
+    return null;
+  }
+  const layer = payload.layer_ir as unknown as LayerIR;
+  const verif = payload.verif_result as unknown as VerifResult;
+  const lines = [
+    "Compact repair brief:",
+    `- op_type=${layer.op_type}; bus contract=data_in ${layer.input_width_bits} bits, data_out ${layer.output_width_bits} bits; preserve the public interface exactly.`,
+    `- authoritative latency contract: pipeline_latency_cycles=${layer.pipeline_latency_cycles}.`,
+    `- current failure: status=${verif.status}; status_class=${verif.status_class ?? "n/a"}; failure_class=${verif.failure_class ?? "n/a"}.`,
+    "- compiler-first rule: if status=syntax_error or compiler stderr is populated, read iverilog/verilator stderr before touching datapath logic.",
+    "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
+    "- invariant rule: find all [INVARIANT:*] comments first and treat those lines as protected unless raw evidence directly implicates them.",
+  ];
+
+  if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
+    const kh = layer.weight_shape[2];
+    const kw = layer.weight_shape[3];
+    const pointwise = kh === 1 && kw === 1;
+    const padding = layer.padding;
+    lines.push(
+      `- conv geometry: kernel=${kh}x${kw}; pointwise=${pointwise ? "yes" : "no"}; stride=${formatIntVector(layer.stride)}; padding=${formatIntVector(padding)}.`,
+    );
+    if (!pointwise) {
+      const needsDrain =
+        padding !== undefined &&
+        ((padding[0] ?? 0) > 0 || (padding[1] ?? 0) > 0);
+      lines.push(
+        `- spatial conv repair rule: ${needsDrain ? "expect a drain path near the tail; fix the existing one before inventing a new one." : "no padding drain should be needed unless the RTL explicitly contains one."}`,
+      );
+    }
+    lines.push("- conv architecture rule: single-MAC rewrites are forbidden; preserve the output-stationary OC-lane design.");
+  } else if (layer.op_type === "add") {
+    lines.push(
+      `- add rule: lhs/rhs are packed into one input bus; preserve the packed interface and the scale-aware requantisation path.`,
+    );
+  } else if (layer.op_type === "maxpool") {
+    lines.push(
+      `- maxpool geometry: kernel=${formatIntVector(layer.kernel_size)}; stride=${formatIntVector(layer.pool_stride)}; padding=${formatIntVector(layer.pool_padding)}.`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
 export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
   const lines = [
     `Invoke the \`${slug}\` subagent immediately.`,
@@ -453,6 +566,16 @@ export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string
       "4. Do NOT invent other keys (no `source_path`, no `port_list`, no `module_name`). Do NOT wrap the JSON in markdown fences.",
       "5. If the subagent cannot comply, it must still return the five-field JSON with a best-effort `verilog_source`.",
     );
+  }
+
+  const brief =
+    slug === "foundry"
+      ? buildFoundryGenerationBrief(payload)
+      : slug === "surgeon"
+        ? buildSurgeonRepairBrief(payload)
+        : null;
+  if (brief) {
+    lines.push("", brief);
   }
 
   lines.push("", "Payload JSON:", JSON.stringify(payload, null, 2));
@@ -1053,6 +1176,100 @@ async function processYosysOutcome(
   }
 }
 
+/**
+ * Detect a Surgeon functional regression by comparing its VerifResult to
+ * the prior one. "Regression" means: the prior result was better on at
+ * least one dimension and the new result is not measurably better on any
+ * dimension that matters. Specifically:
+ *   - Timing: if prior had exact timing (actual == expected) and Surgeon's
+ *     timing is now off, that's a clear regression. Surgeon is told
+ *     explicitly never to change pipeline latency.
+ *   - Error magnitude: a meaningful increase in max_error or mean_error
+ *     (more than 10% or more than 8 INT8 LSBs) with no compensating
+ *     improvement anywhere else.
+ *   - Sample count drop: fewer outputs emitted than before means Surgeon
+ *     broke an output path that was already producing.
+ *   - First-mismatch index moved backward: prior had a correct prefix of
+ *     length N before diverging; new result diverges earlier. Surgeon
+ *     broke outputs that were already numerically correct (e.g. by
+ *     reverting Foundry's rounding so pixels that were exact now drift).
+ * Any single one of these is sufficient to treat as regression — the
+ * prior module is at least as good on every dimension we care about.
+ */
+function isSurgeonRegression(prior: VerifResult, next: VerifResult): boolean {
+  const priorTimingActual = prior.timing_actual_cycles ?? -1;
+  const priorTimingExpected = prior.timing_expected_cycles ?? -1;
+  const nextTimingActual = next.timing_actual_cycles ?? -1;
+  const nextTimingExpected = next.timing_expected_cycles ?? priorTimingExpected;
+
+  // Timing regression: prior was exact, new isn't.
+  if (
+    priorTimingActual >= 0 &&
+    priorTimingExpected >= 0 &&
+    priorTimingActual === priorTimingExpected &&
+    nextTimingActual >= 0 &&
+    nextTimingActual !== nextTimingExpected
+  ) {
+    return true;
+  }
+
+  // Error-magnitude regression. Compare only when both sides report a real
+  // number (the testbench uses -1 as a sentinel for "no measurement").
+  const priorMax = prior.max_error ?? -1;
+  const nextMax = next.max_error ?? -1;
+  const priorMean = prior.mean_error ?? -1;
+  const nextMean = next.mean_error ?? -1;
+  const meaningfulMaxIncrease =
+    priorMax >= 0 && nextMax > priorMax && nextMax - priorMax >= 8;
+  const meaningfulMeanIncrease =
+    priorMean >= 0 && nextMean > priorMean * 1.1 && nextMean - priorMean >= 1.0;
+  if (meaningfulMaxIncrease || meaningfulMeanIncrease) {
+    return true;
+  }
+
+  // Sample-count drop (fewer outputs emitted). A non-stall run has a
+  // fixed full sample_count; a smaller value means the run stalled earlier
+  // than before.
+  const priorSamples = prior.sample_count ?? -1;
+  const nextSamples = next.sample_count ?? -1;
+  if (priorSamples >= 0 && nextSamples >= 0 && nextSamples < priorSamples) {
+    return true;
+  }
+
+  // First-mismatch index regression. If the prior had a meaningful correct
+  // prefix (>=16 outputs exact before diverging) and Surgeon's new output
+  // diverges meaningfully earlier (>=16 indices), Surgeon broke outputs
+  // that were already correct. Observed in the wild: Foundry emits correct
+  // scale-rounding so pixels 0..360 match exactly (first_mismatch=361);
+  // Surgeon "fixes" the tail gap but reverts the rounding, so the same
+  // first 361 pixels now drift by ±1 (first_mismatch=0). Mean_error barely
+  // changes, so the error-magnitude check alone cannot catch this.
+  const priorFirstMis = prior.first_mismatch_index ?? -1;
+  const nextFirstMis = next.first_mismatch_index ?? -1;
+  if (
+    priorFirstMis >= 16 &&
+    nextFirstMis >= 0 &&
+    priorFirstMis - nextFirstMis >= 16
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function summarizeVerifForLog(r: VerifResult): Record<string, unknown> {
+  return {
+    status: r.status,
+    timing_pass: r.timing_pass,
+    timing_actual_cycles: r.timing_actual_cycles,
+    timing_expected_cycles: r.timing_expected_cycles,
+    max_error: r.max_error,
+    mean_error: r.mean_error,
+    sample_count: r.sample_count,
+    failure_class: r.failure_class,
+  };
+}
+
 async function tryRecoverVerilogModuleFromDisk(
   layerIr: LayerIR,
   generatedBy: "Foundry" | "Surgeon",
@@ -1115,6 +1332,7 @@ async function invokeFoundry(
       "foundry",
       {
         layer_ir: layerIr,
+        expected_spec_hash: computeExpectedSpecHash(layerIr),
         write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
       },
       verilogModuleOutputFormat,
@@ -1326,6 +1544,98 @@ async function invokeAssayer(
   return payload;
 }
 
+/**
+ * Compact record of one completed repair cycle. The orchestrator keeps a
+ * ring buffer of these per module and hands the last N to each fresh
+ * Surgeon invocation so it can see which approaches have already been
+ * tried and why they didn't work. This is the mechanism that breaks the
+ * "oscillate between the same failed edits" cycle — Surgeon now has
+ * memory of prior attempts.
+ *
+ * Architecture-neutral: every field is a fact about simulation behaviour
+ * or a syntactic diff of Verilog text. Works for any layer, any bug class.
+ */
+type SurgeonAttemptRecord = {
+  attempt_index: number;
+  outcome:
+    | "accepted_still_failing"   // attempt compiled and ran, verif still fail
+    | "reverted_preflight"       // Surgeon broke the port contract
+    | "reverted_functional"      // Surgeon broke the simulation (regression guard)
+    | "reverted_recovered";      // Surgeon's LLM dispatch crashed; disk recovery
+  verif_summary: Record<string, unknown>;
+  // Unified diff of the Surgeon-produced RTL against the module that was
+  // handed to Surgeon at the start of the attempt. Truncated to at most
+  // ~6k chars so a run of 2-3 prior attempts stays under ~20k tokens.
+  rtl_diff_unified: string;
+};
+
+/** Per-module ring buffer of prior Surgeon attempts. Kept in-memory only;
+ *  lost on resume-from-disk, which is acceptable for the first iteration. */
+const SURGEON_HISTORY = new Map<string, SurgeonAttemptRecord[]>();
+const SURGEON_HISTORY_DEPTH = 3;  // last 3 attempts surfaced in the next prompt
+
+function recordSurgeonAttempt(moduleId: string, record: SurgeonAttemptRecord): void {
+  const history = SURGEON_HISTORY.get(moduleId) ?? [];
+  history.push(record);
+  if (history.length > SURGEON_HISTORY_DEPTH) {
+    history.splice(0, history.length - SURGEON_HISTORY_DEPTH);
+  }
+  SURGEON_HISTORY.set(moduleId, history);
+}
+
+function priorSurgeonAttempts(moduleId: string): SurgeonAttemptRecord[] {
+  return SURGEON_HISTORY.get(moduleId) ?? [];
+}
+
+/** Unified-diff-ish line-by-line comparison. Not a full Myers diff — just
+ *  marks lines unique to the prior source with "-" and lines unique to the
+ *  new source with "+". Context is the shortest run of equal lines. This
+ *  is cheap, architecture-neutral, and good enough for Surgeon to see
+ *  "you edited these lines last time." */
+function unifiedishDiff(priorSource: string, nextSource: string, maxChars = 6000): string {
+  const priorLines = priorSource.split(/\r?\n/);
+  const nextLines = nextSource.split(/\r?\n/);
+  const priorSet = new Set(priorLines);
+  const nextSet = new Set(nextLines);
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  let contextCarry = 0;
+  while (i < priorLines.length || j < nextLines.length) {
+    const a = priorLines[i];
+    const b = nextLines[j];
+    if (a !== undefined && b !== undefined && a === b) {
+      // Equal line — include a few as context, then skip consecutive runs.
+      if (contextCarry < 2) {
+        out.push(`  ${a}`);
+        contextCarry += 1;
+      } else if (contextCarry === 2) {
+        out.push("  ...");
+        contextCarry += 1;
+      }
+      i += 1; j += 1;
+      continue;
+    }
+    contextCarry = 0;
+    if (a !== undefined && !nextSet.has(a)) {
+      out.push(`- ${a}`);
+      i += 1;
+      continue;
+    }
+    if (b !== undefined && !priorSet.has(b)) {
+      out.push(`+ ${b}`);
+      j += 1;
+      continue;
+    }
+    // Lines present in both but out of order — treat as equal, advance.
+    if (a !== undefined) i += 1;
+    if (b !== undefined) j += 1;
+  }
+  const joined = out.join("\n");
+  if (joined.length <= maxChars) return joined;
+  return `${joined.slice(0, maxChars)}\n[... diff truncated at ${maxChars} chars ...]`;
+}
+
 async function invokeSurgeon(
   brokenModule: VerilogModule,
   verifResult: VerifResult,
@@ -1341,6 +1651,8 @@ async function invokeSurgeon(
     runtime,
   );
 
+  const prior_attempts = priorSurgeonAttempts(brokenModule.module_id);
+
   let result: AgentRunResult<VerilogModule>;
   try {
     result = await runDelegatedAgent<VerilogModule>(
@@ -1349,6 +1661,7 @@ async function invokeSurgeon(
         broken_module: brokenModule,
         verif_result: verifResult,
         layer_ir: layerIr,
+        prior_attempts,
         write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
       },
       verilogModuleOutputFormat,
@@ -1432,7 +1745,10 @@ function computeExpectedSpecHash(layer: LayerIR): string {
   if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
     const kh = layer.weight_shape[2];
     const kw = layer.weight_shape[3];
-    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+    const stride = layer.stride && layer.stride.length >= 2 ? `_st${layer.stride[0]}x${layer.stride[1]}` : "";
+    const padding =
+      layer.padding && layer.padding.length >= 2 ? `_p${layer.padding[0]}x${layer.padding[1]}` : "";
+    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
   }
   if (layer.op_type === "maxpool") {
     // The schema's superRefine guarantees these three arrays exist and are
@@ -1801,10 +2117,22 @@ export async function runPipeline(
       // When the incoming brokenModule already passed preflight (so the bug
       // was in the datapath, not the interface) and Surgeon's output fails
       // preflight, we treat that as a pure regression: revert to the prior
-      // module on disk and hand it back as the verification input too. We
-      // still burn one attempt slot — the retry budget caps how many times
-      // Surgeon can churn — but the on-disk RTL stays at the best-known
-      // version instead of decaying further.
+      // module on disk and hand it back as the verification input too. The
+      // attempt still counts against max_retries — the budget's job is to
+      // cap churn, not to measure whether each attempt was productive.
+      // Convergence is addressed by giving Surgeon better context (history
+      // of prior attempts), not by inflating the retry budget.
+      // Preserve Surgeon's original attempted source *before* any revert
+      // so we can record a faithful diff in attempt history. Also detect
+      // the "recovery" case where the LLM dispatch crashed and the payload
+      // came from disk-read — in that case the attempted source equals
+      // the broken module verbatim.
+      const attemptedSource = surgeonResult.payload.verilog_source;
+      const attemptedEqualsBroken = attemptedSource === brokenModule.verilog_source;
+
+      let attemptOutcome: SurgeonAttemptRecord["outcome"] =
+        attemptedEqualsBroken ? "reverted_recovered" : "accepted_still_failing";
+
       const surgeonPreflightIssues = preflightVerilogModule(surgeonResult.payload, layer);
       const brokenPreflightIssues = preflightVerilogModule(brokenModule, layer);
       if (
@@ -1823,6 +2151,7 @@ export async function runPipeline(
         );
         await persistVerilogModule(brokenModule);
         surgeonResult.payload = brokenModule;
+        attemptOutcome = "reverted_preflight";
       }
 
       await manager.saveState(statePath);
@@ -1839,7 +2168,45 @@ export async function runPipeline(
       );
       await manager.saveState(statePath);
 
-      const assayerVerif = await invokeAssayer(surgeonResult.payload, layer, runtime);
+      let assayerVerif = await invokeAssayer(surgeonResult.payload, layer, runtime);
+
+      // Functional regression guard. If Surgeon's output verifies *worse*
+      // than what it started with — e.g. broke previously-exact timing,
+      // or significantly raised mean/max error — revert to the prior
+      // module on disk and re-attribute the failing state to the prior
+      // VerifResult. Without this, a Surgeon pass that "partially
+      // addresses" the reported bug while destroying working logic ends
+      // up as the next iteration's starting point and compounds damage.
+      if (isSurgeonRegression(verifResult, assayerVerif)) {
+        await appendRunLog(
+          {
+            event: "surgeon_regression_reverted",
+            module_id: nextAction.module_id,
+            reason: "Surgeon output is functionally worse than the prior module. Reverted to prior module and prior VerifResult.",
+            prior_summary: summarizeVerifForLog(verifResult),
+            surgeon_summary: summarizeVerifForLog(assayerVerif),
+          },
+          runtime,
+        );
+        await persistVerilogModule(brokenModule);
+        surgeonResult.payload = brokenModule;
+        assayerVerif = verifResult; // carry forward the prior result
+        attemptOutcome = "reverted_functional";
+      }
+
+      // Record this Surgeon attempt in the per-module history ring buffer
+      // BEFORE applyVerifResult so the next invocation of Surgeon (if
+      // another fail_retry is queued) sees the full trajectory.
+      recordSurgeonAttempt(nextAction.module_id, {
+        attempt_index: manager.getState().attempts[nextAction.module_id] ?? 0,
+        outcome: attemptOutcome,
+        verif_summary: summarizeVerifForLog(assayerVerif),
+        rtl_diff_unified:
+          attemptOutcome === "reverted_recovered"
+            ? "(LLM dispatch crashed; no new RTL was produced on this attempt.)"
+            : unifiedishDiff(brokenModule.verilog_source, attemptedSource),
+      });
+
       const statusBeforeApply = manager.getState().modules[nextAction.module_id];
       manager.applyVerifResult(nextAction.module_id, assayerVerif);
       const statusAfterApply = manager.getState().modules[nextAction.module_id];

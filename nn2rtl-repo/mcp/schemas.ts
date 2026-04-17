@@ -49,6 +49,9 @@ export const layerIrBaseSchema = z
     data_out_signal: z.literal("data_out"),
     golden_inputs_path: z.string(),
     golden_outputs_path: z.string(),
+    // Conv2d geometry — emitted by the frontends for op-aware generation/repair.
+    stride: z.array(z.number().int().positive()).optional(),
+    padding: z.array(z.number().int().nonnegative()).optional(),
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
     pool_padding: z.array(z.number().int().nonnegative()).optional(),
@@ -125,6 +128,28 @@ export const verifResultSchema = z
     fix_hint: nullToUndef(z.string()),
     iverilog_stderr: nullToUndef(z.string()),
     verilator_stderr: nullToUndef(z.string()),
+    // Raw simulation evidence emitted by the testbench — Surgeon reasons
+    // from these facts rather than from a pre-written "likely X" hint.
+    // See tb/static_verilator_tb.cpp for the emission logic and
+    // nn2rtl-plugin/agents/surgeon.md for how to interpret them.
+    status_class: nullToUndef(
+      z.enum([
+        "sim_passed",
+        "sim_stalled",
+        "sim_completed_mismatch",
+        "tb_setup_error",
+      ]),
+    ),
+    outputs_expected: nullToUndef(z.number()),
+    outputs_received: nullToUndef(z.number()),
+    missing_index_start: nullToUndef(z.number()),
+    missing_index_end: nullToUndef(z.number()),
+    last_valid_out_cycle: nullToUndef(z.number()),
+    simulation_end_cycle: nullToUndef(z.number()),
+    output_gap_histogram: nullToUndef(z.array(z.number())),
+    first_mismatch_index: nullToUndef(z.number()),
+    first_mismatch_expected: nullToUndef(z.number()),
+    first_mismatch_got: nullToUndef(z.number()),
   })
   .strict();
 

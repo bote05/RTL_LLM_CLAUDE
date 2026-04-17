@@ -150,8 +150,12 @@ def test_generate_golden_cli_writes_pipeline_ir_for_real_ptq_checkpoint(tmp_path
     # the stem conv+BN+ReLU produces 112x112 and all layer1 ops run at that size.
     assert payload["layers"][0]["output_shape"] == [1, 4, 112, 112]
     assert payload["layers"][0]["op_type"] == "conv2d"
+    assert payload["layers"][0]["stride"] == [2, 2]
+    assert payload["layers"][0]["padding"] == [1, 1]
     assert "layer1_0_downsample" in module_ids
     assert payload["layers"][module_ids.index("layer1_0_downsample")]["op_type"] == "conv2d"
+    assert payload["layers"][module_ids.index("layer1_0_downsample")]["stride"] == [1, 1]
+    assert payload["layers"][module_ids.index("layer1_0_downsample")]["padding"] == [0, 0]
     assert module_ids.count("layer1_0_post_add_relu") == 1
     assert module_ids.count("layer1_1_post_add_relu") == 1
     assert module_ids.count("layer1_2_post_add_relu") == 1

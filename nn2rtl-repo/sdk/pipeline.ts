@@ -104,6 +104,15 @@ export class PipelineStateManager {
       return;
     }
 
+    // Pure testbench/setup failures mean the RTL never actually ran, so
+    // routing them to Surgeon just burns retries on a module-local repair
+    // task that cannot succeed. Keep the failure visible on the module and
+    // stop the retry loop instead.
+    if (result.status_class === "tb_setup_error") {
+      this.state.modules[module_id] = "fail_abort";
+      return;
+    }
+
     const attempts = this.state.attempts[module_id] ?? 0;
     this.state.modules[module_id] =
       attempts < this.state.max_retries ? "fail_retry" : "fail_abort";

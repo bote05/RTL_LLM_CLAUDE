@@ -183,6 +183,8 @@ def test_build_pipeline_ir_payload_keeps_legacy_toy_flow_working(tmp_path: Path)
     assert layer["ready_in_signal"] == "ready_in"
     assert layer["data_in_signal"] == "data_in"
     assert layer["data_out_signal"] == "data_out"
+    assert layer["stride"] == [1, 1]
+    assert layer["padding"] == [0, 0]
     assert read_golden_vector_file(
         Path(layer["golden_inputs_path"]),
         bus_bits=layer["input_width_bits"],

@@ -342,8 +342,9 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       data_in_signal: "data_in",
       data_out_signal: "data_out",
     });
-    // Output is post-MaxPool (fusion is invisible to downstream): 1 x 64 x 56 x 56.
-    expect(pipelineIr.layers[0].output_shape).toEqual([1, 64, 56, 56]);
+    // Output is post-ReLU, pre-MaxPool: on the legacy .pth path MaxPool is NOT
+    // folded into layer0_0_conv1, so output is stride-2 from 224x224 → 112x112.
+    expect(pipelineIr.layers[0].output_shape).toEqual([1, 64, 112, 112]);
 
     // Weight + bias hex files are materialized on disk (one uppercase hex
     // value per line; widths vary by op, so just assert the format).

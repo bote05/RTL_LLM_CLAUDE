@@ -50,7 +50,7 @@ The system consumes a quantized PyTorch ResNet-50 residual block stack and is de
 
 ### Target Network
 
-The target is the fused ResNet-50 stem plus the residual block stack (the 16 residual blocks that dominate compute). The fused stem (7x7 conv + BN + ReLU + 3x3 maxpool, collapsed into a single `layer0_0_conv1` module) is now in scope. Still out of scope:
+The target is the ResNet-50 stem plus the residual block stack (the 16 residual blocks that dominate compute). The current runtime source of truth is the generated `LayerIR` plus golden vectors, not stale prose in this README. On the default legacy `.pth` path, `layer0_0_conv1` is not a fused MaxPool stage; the ONNX frontend carries explicit conv / maxpool geometry instead of asking Foundry to infer it. Still out of scope:
 
 - global average pooling,
 - the fully connected classifier layer,

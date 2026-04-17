@@ -231,6 +231,112 @@ describe("runPipeline", () => {
     expect(state.attempts.unit_module).toBe(1);
   });
 
+  it("reverts Surgeon output and logs surgeon_regression_reverted when first_mismatch_index goes backward", async () => {
+    await writePipelineIrFixture();
+    const originalModule = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const repairedModule = { ...originalModule, generated_by: "Surgeon", attempt: 2 };
+
+    // Foundry verif: correct timing, first 361 outputs are exact.
+    const foundryVerif = {
+      module_id: "unit_module",
+      status: "fail",
+      status_class: "sim_completed_mismatch",
+      timing_pass: true,
+      timing_actual_cycles: 1,
+      timing_expected_cycles: 1,
+      max_error: 50,
+      mean_error: 33.0,
+      sample_count: 12433,
+      first_mismatch_index: 361,
+      failure_class: "loop_bounds_incorrect",
+    };
+    // Surgeon verif: first_mismatch regressed to 0 — Surgeon broke what Foundry got right.
+    const surgeonVerif = {
+      module_id: "unit_module",
+      status: "fail",
+      status_class: "sim_completed_mismatch",
+      timing_pass: true,
+      timing_actual_cycles: 1,
+      timing_expected_cycles: 1,
+      max_error: 50,
+      mean_error: 33.5,
+      sample_count: 12433,
+      first_mismatch_index: 0,
+      failure_class: "loop_bounds_incorrect",
+    };
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        return successResult(originalModule);
+      }],
+      surgeon: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        return successResult(repairedModule);
+      }],
+    });
+    const assayerFn = createAssayerMock([foundryVerif, surgeonVerif]);
+    const yosysFn = createYosysMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      maxRetries: 1,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+    });
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"event":"surgeon_regression_reverted"');
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("fail_abort");
+
+    // Reverted module on disk must match the original (Foundry) source, not Surgeon's.
+    const diskMeta = JSON.parse(await readFile(path.join(rtlDir, "unit_module.meta.json"), "utf8"));
+    expect(diskMeta.generated_by).toBe("Foundry");
+  });
+
+  it("aborts on tb_setup_error without invoking Surgeon", async () => {
+    await writePipelineIrFixture();
+    const originalModule = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const tbSetupFail = {
+      module_id: "unit_module",
+      status: "fail",
+      status_class: "tb_setup_error",
+      timing_pass: false,
+      timing_actual_cycles: -1,
+      timing_expected_cycles: 1,
+      expected: [],
+      got: [],
+      failure_class: null,
+      verilator_stderr: "static_verilator_tb.cpp:91: error: bad bus width",
+      fix_hint: "Static testbench did not produce results JSON.",
+    };
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        return successResult(originalModule);
+      }],
+    });
+    const assayerFn = createAssayerMock([tbSetupFail]);
+    const yosysFn = createYosysMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(false);
+    expect(yosysFn).not.toHaveBeenCalled();
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("fail_abort");
+    expect(state.results.unit_module.status_class).toBe("tb_setup_error");
+  });
+
   it("runs the Surgeon repair path after a failed yosys synthesis report", async () => {
     await writePipelineIrFixture();
     const originalModule = JSON.parse(

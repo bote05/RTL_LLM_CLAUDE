@@ -28,14 +28,35 @@ Hard RTL rules:
 - Implement a valid / ready streaming interface with **canonical port names**: `clk`, `rst_n` (active-low), `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`. The static testbench enforces these names at run time — any other name fails before simulation.
 - `ready_in` is an **output** of your module (upstream backpressure). Deassert it while processing; reassert after `valid_out` fires.
 - `valid_out` is asserted by your module when `data_out` carries a valid sample. Assert it exactly `pipeline_latency_cycles` cycles after the first `valid_in` for the current vector.
+- `pipeline_latency_cycles` from the `LayerIR` is authoritative. Use that exact contract; do not override it with a hand-derived formula from this prompt.
 - Load weights and bias through `$readmemh` using `weights_path` and `bias_path` from the LayerIR; never hardcode numeric arrays in source.
 - Never use `$display`, `#delay`, `$random`, or simulation-only logic in synthesizable modules.
 - `data_in` is always a packed channel bus. For conv/relu, `data_in[i*8 +: 8]` is channel `i` and the port width must be `IC*8`. For add, `data_in[W-1:0]` is the packed lhs bus and `data_in[2W-1:W]` is the packed rhs bus where `W = input_width_bits / 2`.
 - `data_out` is always a packed channel bus. `data_out[i*8 +: 8]` is channel `i` and the port width must be `OC*8`.
 - For `op_type=add`, unpack lhs/rhs internally, apply the INT8 quantized-add formula using `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor` from the LayerIR, saturate the result to INT8, and emit on `data_out`.
-- `layer0_0_conv1` is a standard conv2d (IC=3, OC=64, 7×7 kernel, stride=2) with BatchNorm folded into weights. No ReLU, no MaxPool. Treat identically to any other conv2d layer.
+- For conv2d layers, if `stride` / `padding` are present in the `LayerIR`, use them exactly. Do not infer them from the input/output shapes unless they are genuinely absent.
+- `layer0_0_conv1` must follow the current `LayerIR` / golden-vector contract, not stale README prose. On the current legacy `.pth` path it is **not** a fused MaxPool stage. Do not add ReLU or MaxPool unless the current `LayerIR` / goldens explicitly require them.
 - **Conv modules must use an output-stationary MAC array. Single-MAC designs are rejected.** Instantiate `OC` parallel signed 8×8 MAC lanes, one accumulator per output channel, reused across `IC × KH × KW` cycles.
 - **For KH×KW > 1 convolutions, you MUST implement a proper 2D line-buffer + sliding-window datapath** (see "Spatial conv datapath" below). The old spatially-summed 1×1 approximation (`in_latch[k / (KH*KW)]`) is mathematically wrong for real 2D convolutions and will fail against the goldens. 1×1 / pointwise convolutions keep the simpler single-pixel MAC.
+
+---
+
+## Invariant markers
+
+When the generated RTL contains one of the mechanisms below, annotate the exact
+controlling line with a short `// [INVARIANT:TAG] ...` comment. These markers
+tell Surgeon which lines were deliberately chosen and should be treated as
+protected during repair.
+
+- `ROUNDING` — the requantisation line that adds `SCALE_ROUND_BIAS` before `>>> SCALE_SHIFT`
+- `DRAIN_EXIT` — the comparison that decides when `ST_DRAIN` terminates
+- `INTER_VECTOR_RESET` — the block that resets per-vector counters / state between vectors
+- `READY_IN_GATING` — the line(s) that drive `ready_in` low while busy and high after output
+- `VALID_OUT_LATENCY` — the exact line or register chain that enforces the `pipeline_latency_cycles` contract
+
+Only mark a tag when that mechanism actually exists in the module. For example,
+`DRAIN_EXIT` is relevant for padded spatial convs, not for pointwise convs or
+simple elementwise ops.
 
 ---
 
@@ -52,6 +73,36 @@ For SHIFT in 8..23:
 ```
 
 Use `localparam` for both. For `op_type=add`, apply the same algorithm independently to `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`.
+
+### Scale-shift rounding — MANDATORY
+
+The golden model uses `torch.round()` (round-to-nearest) when requantising
+from the accumulator domain back to INT8. A naive `>>> SHIFT` in Verilog is
+arithmetic right shift — that's **floor**, not round. Floor systematically
+biases every output toward negative infinity by up to one LSB per sample,
+which shows up in verification as `max_error` up to 1 across many samples
+and a `mean_error` of ~0.5 that never converges to zero.
+
+Add half-LSB before the shift so the floor rounds to nearest:
+
+```verilog
+// WRONG — floor division. Every output biased by up to -1.
+v_tmp = scaled[oc] >>> SCALE_SHIFT;
+
+// CORRECT — round-half-up via +0.5 LSB bias, then arithmetic shift.
+// `SCALE_ROUND_BIAS` is 2^(SCALE_SHIFT-1). Declared as a signed constant
+// at module scope so the addition stays in signed context.
+localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS =
+    {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);
+// ...
+v_tmp = (scaled[oc] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
+```
+
+This applies to every layer type that does scale/shift quantisation —
+conv2d requantise, add output requantise, maxpool (if it ever requantises).
+It is architecture-neutral: every INT8-quantised network that uses the
+`acc × MULT >> SHIFT` pattern needs the half-LSB bias, or its outputs will
+be systematically off by up to 1 in the direction of floor rounding.
 
 ---
 
@@ -190,13 +241,56 @@ Zero-padding is **implemented at the window read**, never by inserting
 phantom inputs. A tap `window[kh][kw][ic]` whose mapped input position lies
 outside `[0, IH) × [0, IW)` drives `8'sd0`.
 
+### Padding drain — MANDATORY when `PH > 0` or `PW > 0`
+
+After the last real input arrives at `(in_row = IH-1, in_col = IW-1)`,
+the module must **continue advancing its virtual counters** to trigger the
+outputs whose receptive field lies partially in the bottom-edge or
+right-edge padding region. Without this drain the last `PH * OW +
+(any output needing right padding) ≈ 2*PH * OW` output pixels never fire
+and the testbench stalls waiting for them.
+
+Concrete counts for a 7×7 stride-2 pad-3 stem on 224×224:
+- Outputs fully covered by real inputs: `111 × 111 = 12321`
+- Outputs needing bottom-edge padding (oh=111): `112`
+- Outputs needing right-edge padding (ow=111) across oh=0..110: `111`
+- Missing without drain: `112 + 111 = 223`
+
+Add a `ST_DRAIN` state to the FSM. When `ST_STREAM` processes the last
+real input — detectable as `valid_in && in_row == IH-1 && in_col == IW-1` —
+transition to `ST_DRAIN` on the next clock rather than back to `ST_STREAM`.
+
+In `ST_DRAIN`:
+- `ready_in = 0` (no more real input is accepted)
+- Self-clock the `(in_row, in_col)` counters as if a zero pixel arrived every
+  cycle — don't require `valid_in`.
+- Advance `in_col` 0→(IW+PW-1), wrap to 0 and increment `in_row`.
+- For each virtual position, run the **same** window rebuild used in
+  `ST_STREAM`. Out-of-range taps drive zero (that's exactly why the
+  "zero-padding at window read" rule is mandatory — the drain phase relies
+  on it).
+- Check the same `output_fires` predicate. If it fires, jump through
+  `ST_RUNNING → ST_BIAS → ST_SCALE → ST_OUTPUT` exactly as you do from
+  `ST_STREAM`, then return to `ST_DRAIN` (**not** `ST_STREAM`).
+- Exit condition: `in_row > IH - 1 + PH`. At that point every possible
+  output has already been triggered.
+
+Critically, **do not rewrite or delay the first-output path** while adding
+the drain. The first valid_out must still fire exactly at
+`pipeline_latency_cycles` after the first valid_in — the drain only affects
+the tail. Verify with the testbench: a correct drain keeps
+`timing_actual_cycles == timing_expected_cycles` (no regression) and raises
+the count of emitted outputs from `(IH-PH) * (IW-PW) / (SH*SW)` to the full
+`OH * OW`.
+
 ### Output rate vs input rate — important for stride ≠ 1
 
 For `SH, SW > 1`, outputs fire less often than inputs. Deassert `ready_in`
-only during `ST_RUNNING / ST_BIAS / ST_SCALE / ST_OUTPUT`. Between output
-events `ready_in` stays high and the module just shifts new pixels into
-`line_buf` / `window`. The Verilator testbench supports `samples_per_vector`
-differing between `goldin` and `goldout` — same mechanism MaxPool uses.
+only during `ST_RUNNING / ST_BIAS / ST_SCALE / ST_OUTPUT` (and `ST_DRAIN`).
+Between output events `ready_in` stays high and the module just shifts new
+pixels into `line_buf` / `window`. The Verilator testbench supports
+`samples_per_vector` differing between `goldin` and `goldout` — same
+mechanism MaxPool uses.
 
 ### Pipeline latency (use the LayerIR value — do not recompute)
 
@@ -268,12 +362,18 @@ module <module_id> (
     localparam integer SCALE_CONST_W = SCALE_MAG_W + 1;
     localparam integer SCALED_W      = BIASED_W + SCALE_CONST_W;
     localparam signed [SCALE_CONST_W-1:0] SCALE_MULT_CONST = SCALE_MULT;
+    // Half-LSB rounding bias: 2^(SCALE_SHIFT-1). Added before `>>> SCALE_SHIFT`
+    // so the arithmetic shift rounds to nearest instead of flooring. Required —
+    // see "Scale-shift rounding" in the top rules.
+    localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS =
+        {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);
 
     localparam ST_STREAM  = 3'd0;
     localparam ST_RUNNING = 3'd1;
     localparam ST_BIAS    = 3'd2;
     localparam ST_SCALE   = 3'd3;
     localparam ST_OUTPUT  = 3'd4;
+    localparam ST_DRAIN   = 3'd5;  // self-clocked padding drain after last real input
 
     // ================================================================
     // 2) Weights & biases — loaded once from the hex files via $readmemh.
@@ -434,6 +534,14 @@ module <module_id> (
                         for (oc = 0; oc < OC; oc = oc + 1)
                             acc[oc] <= 0;
                         state <= ST_RUNNING;
+                    end else if (in_row == IH - 1 && in_col == IW - 1) begin
+                        // Last real input arrived but didn't trigger an output.
+                        // Enter the drain phase immediately so bottom/right
+                        // padding-edge outputs still fire. If it DID trigger,
+                        // ST_OUTPUT itself will transition to ST_DRAIN when
+                        // it sees in_row has wrapped past IH-1.
+                        ready_in <= 1'b0;
+                        state    <= ST_DRAIN;
                     end
                 end
             end
@@ -491,21 +599,97 @@ module <module_id> (
             end
 
             // ------------------------------------------------------------
+            // ST_OUTPUT performs the final requantise. The `+ SCALE_ROUND_BIAS`
+            // before the arithmetic right shift is the MANDATORY round-to-
+            // nearest implementation (see "Scale-shift rounding" in the top
+            // rules). A bare `>>> SCALE_SHIFT` is floor division — every
+            // output biased toward negative infinity by up to one LSB.
             ST_OUTPUT: begin
                 for (oc = 0; oc < OC; oc = oc + 1) begin
-                    v_tmp = scaled[oc] >>> SCALE_SHIFT;
+                    v_tmp = (scaled[oc] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
                     data_out[oc*8 +: 8] <= (v_tmp > 127)  ?  8'sd127 :
                                             (v_tmp < -128) ? -8'sd128 :
                                                              v_tmp[7:0];
                 end
                 valid_out <= 1'b1;
                 ready_in  <= 1'b1;
-                state     <= ST_STREAM;
+                // If we're still receiving real inputs, resume ST_STREAM.
+                // If the last real input was the one that produced this
+                // output, fall through to ST_DRAIN instead so the remaining
+                // padding-edge outputs get emitted.
+                if (in_row > IH - 1) state <= ST_DRAIN;
+                else                 state <= ST_STREAM;
                 if (out_col == OW - 1) begin
                     out_col <= 0;
                     out_row <= out_row + 1;
                 end else begin
                     out_col <= out_col + 1;
+                end
+            end
+
+            // ------------------------------------------------------------
+            // ST_DRAIN: after the last real valid_in, keep self-clocking
+            // the window/counters so outputs whose receptive field lies in
+            // the bottom-edge or right-edge padding still fire. The window
+            // rebuild logic is *identical* to ST_STREAM except the input
+            // comes from a virtual all-zero pixel (the padding rule already
+            // enforces zero at out-of-range taps — no extra masks needed).
+            // ------------------------------------------------------------
+            ST_DRAIN: begin
+                valid_out <= 1'b0;
+                ready_in  <= 1'b0;
+                // Promote cur_row when wrapping into a new virtual row.
+                if (in_col == 0 && in_row > 0) begin
+                    for (i = 0; i < KH - 2; i = i + 1)
+                        for (j = 0; j < IW; j = j + 1)
+                            line_buf[i][j] <= line_buf[i+1][j];
+                    for (j = 0; j < IW; j = j + 1)
+                        line_buf[KH-2][j] <= cur_row[j];
+                end
+
+                // Virtual input pixel is zero.
+                if (in_col < IW) cur_row[in_col] <= {(IC*8){1'b0}};
+
+                // Same window rebuild as ST_STREAM — padding at window
+                // read guarantees taps with src_row >= IH or src_col >= IW
+                // read as 8'sd0.
+                for (kh_i = 0; kh_i < KH; kh_i = kh_i + 1) begin
+                    src_row = $signed({1'b0, in_row}) - (KH - 1) + kh_i;
+                    for (kw_i = 0; kw_i < KW; kw_i = kw_i + 1) begin
+                        src_col = $signed({1'b0, in_col}) - (KW - 1) + kw_i;
+                        for (ic_i = 0; ic_i < IC; ic_i = ic_i + 1) begin
+                            if (src_row < 0 || src_row >= IH ||
+                                src_col < 0 || src_col >= IW)
+                                window[kh_i][kw_i][ic_i] <= 8'sd0;
+                            else if (kh_i == KH - 1)
+                                window[kh_i][kw_i][ic_i] <=
+                                    $signed(cur_row[src_col][ic_i*8 +: 8]);
+                            else
+                                window[kh_i][kw_i][ic_i] <=
+                                    $signed(line_buf[kh_i][src_col][ic_i*8 +: 8]);
+                        end
+                    end
+                end
+
+                // Advance virtual counters. Exit when we've past the final
+                // receptive-field row (in_row > IH-1+PH); no more outputs
+                // can fire after that.
+                if (in_row > IH - 1 + PH) begin
+                    // Drain complete — hold in a safe steady state.
+                    state <= ST_DRAIN;
+                end else if (output_fires) begin
+                    // A padding-edge output fires — go through the same
+                    // MAC/BIAS/SCALE/OUTPUT chain as ST_STREAM.
+                    k_counter <= 0;
+                    for (oc = 0; oc < OC; oc = oc + 1) acc[oc] <= 0;
+                    state <= ST_RUNNING;
+                end
+
+                if (in_col == IW - 1 + PW) begin
+                    in_col <= 0;
+                    in_row <= in_row + 1;
+                end else begin
+                    in_col <= in_col + 1;
                 end
             end
 
@@ -621,10 +805,10 @@ Clamp and pack directly into `data_out` in a single registered stage. **Do not c
 // At module scope, before the always block:
 reg signed [SCALED_W-1:0] v_tmp;
 
-// Inside the always block:
+// Inside the always block — +SCALE_ROUND_BIAS is mandatory, see top rules:
 ST_OUTPUT: begin
     for (oc = 0; oc < OC; oc = oc + 1) begin
-        v_tmp = scaled[oc] >>> SCALE_SHIFT;
+        v_tmp = (scaled[oc] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
         data_out[oc*8 +: 8] <= (v_tmp > 127)  ?  8'sd127 :
                                  (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
     end
@@ -641,7 +825,7 @@ end
 - Keep the module self-contained.
 - `clock_signal`, `reset_signal`, etc. in LayerIR document canonical names; use them exactly.
 - Use `pipeline_latency_cycles` and `clock_period_ns` from LayerIR.
-- Compute `spec_hash` deterministically: `{op_type}_{IC}x{OC}x{KH}x{KW}_i{input_width_bits}_o{output_width_bits}`.
+- Use the orchestrator-provided `expected_spec_hash` verbatim when present. If it is absent, derive the hash deterministically from the full structural geometry, including spatial dims and conv stride/padding.
 - Set `generated_by` to `"Foundry"` and `attempt` to `1`.
 - `lhs_scale_factor` / `rhs_scale_factor` are only present for `op_type=add`.
 

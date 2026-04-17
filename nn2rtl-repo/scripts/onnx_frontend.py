@@ -41,12 +41,35 @@ import onnxruntime as ort
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.onnx.symbolic_helper as torch_onnx_symbolic_helper
 
 try:
     import onnxsim
     _ONNXSIM_AVAILABLE = True
 except ImportError:
     _ONNXSIM_AVAILABLE = False
+
+PREFERRED_ONNX_OPSET = 17
+
+
+def resolve_supported_onnx_opset(requested: int = PREFERRED_ONNX_OPSET) -> int:
+    """Return the highest ONNX opset the local PyTorch can actually export.
+
+    We prefer opset 17 because it is stable and covers the operator set used by
+    this frontend (Conv, ReLU, Add, MaxPool, BatchNormalization). Some local
+    developer environments still carry older PyTorch builds, though, so we
+    clamp to the highest stable opset that build supports instead of failing
+    during export.
+    """
+    stable_opsets = list(getattr(torch_onnx_symbolic_helper, "_onnx_stable_opsets", []))
+    if not stable_opsets:
+        fallback = getattr(torch_onnx_symbolic_helper, "_default_onnx_opset_version", requested)
+        return int(fallback)
+    supported_max = max(int(opset) for opset in stable_opsets)
+    return int(min(requested, supported_max))
+
+
+DEFAULT_ONNX_OPSET = resolve_supported_onnx_opset()
 
 from scripts.golden_impl import (
     CONV_PIPELINE_STAGES,
@@ -1123,6 +1146,10 @@ def build_pipeline_ir_from_onnx(
             layer_payload["lhs_scale_factor"] = float(spec.lhs_scale)
             layer_payload["rhs_scale_factor"] = float(spec.rhs_scale)
 
+        if spec.op_type == "conv2d":
+            layer_payload["stride"] = list(spec.stride)
+            layer_payload["padding"] = list(spec.padding)
+
         if spec.op_type == "maxpool":
             layer_payload["kernel_size"] = spec.pool_kernel
             layer_payload["pool_stride"] = spec.pool_stride
@@ -1149,7 +1176,7 @@ def export_pytorch_to_onnx(
     model: torch.nn.Module,
     onnx_path: Path,
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
-    opset: int = 17,
+    opset: int = DEFAULT_ONNX_OPSET,
 ) -> Path:
     """Export a PyTorch model to ONNX and return the output path."""
     model = model.eval()

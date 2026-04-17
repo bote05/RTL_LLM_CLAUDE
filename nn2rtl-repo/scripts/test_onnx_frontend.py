@@ -20,6 +20,7 @@ import torch.nn.functional as F
 
 from scripts.golden_impl import GoldenGenerationError
 from scripts.onnx_frontend import (
+    DEFAULT_ONNX_OPSET,
     Int8MaxPool2d,
     OnnxLayerSpec,
     _real_graph_inputs,
@@ -41,7 +42,7 @@ def _export(model: nn.Module, path: Path, shape=(1, 3, 16, 16)) -> Path:
     """Export a PyTorch model to ONNX silently (suppresses the Windows cp1252
     emoji print that torch.onnx.export does)."""
     with contextlib.redirect_stdout(io.StringIO()):
-        export_pytorch_to_onnx(model, path, input_shape=shape, opset=18)
+        export_pytorch_to_onnx(model, path, input_shape=shape, opset=DEFAULT_ONNX_OPSET)
     return path
 
 
@@ -160,7 +161,7 @@ def test_multi_input_model_rejected(tmp_path):
     with contextlib.redirect_stdout(io.StringIO()):
         torch.onnx.export(
             model, (dummy_a, dummy_b), str(onnx_path),
-            opset_version=18,
+            opset_version=DEFAULT_ONNX_OPSET,
             input_names=["a", "b"], output_names=["out"],
         )
     with pytest.raises(GoldenGenerationError, match="real inputs"):
@@ -293,12 +294,36 @@ def test_faithful_conv_goldens_match_real_pytorch_conv(tmp_path):
     )
     conv_layer = payload["layers"][0]
     assert conv_layer["op_type"] == "conv2d"
+    assert conv_layer["stride"] == [1, 1]
+    assert conv_layer["padding"] == [1, 1]
     # Output is SAME-padded 8x8, so 64 output samples per vector
     assert conv_layer["output_shape"] == [1, 4, 8, 8]
     # Pipeline latency for spatial conv must be > K_TOTAL + 4 because of
     # the line-buffer fill time.
     k_total = 3 * 3 * 3  # IC=3, KH=KW=3
     assert conv_layer["pipeline_latency_cycles"] > k_total + 4
+
+
+def test_pipeline_ir_emits_strided_conv_geometry(tmp_path):
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.c1 = nn.Conv2d(3, 4, 3, stride=2, padding=1, bias=True)
+        def forward(self, x):
+            return self.c1(x)
+
+    onnx_path = _export(M().eval(), tmp_path / "stride2.onnx", shape=(1, 3, 8, 8))
+    payload = build_pipeline_ir_from_onnx(
+        onnx_path=onnx_path, repo_root=tmp_path,
+        num_calibration_samples=2,
+    )
+
+    conv_layer = payload["layers"][0]
+    assert conv_layer["op_type"] == "conv2d"
+    assert conv_layer["input_shape"] == [1, 3, 8, 8]
+    assert conv_layer["output_shape"] == [1, 4, 4, 4]
+    assert conv_layer["stride"] == [2, 2]
+    assert conv_layer["padding"] == [1, 1]
 
 
 # ---------------------------------------------------------------------------

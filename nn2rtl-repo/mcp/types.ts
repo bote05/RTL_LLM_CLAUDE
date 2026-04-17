@@ -26,6 +26,9 @@ export interface LayerIR {
   data_out_signal: "data_out";
   golden_inputs_path: string;
   golden_outputs_path: string;
+  // Conv2d geometry — populated by the modern frontends when op_type == "conv2d"
+  stride?: number[];
+  padding?: number[];
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
   pool_stride?: number[];
@@ -77,10 +80,24 @@ export interface VerifResult {
   got?: number[];
   max_error?: number;
   mean_error?: number;
+  sample_count?: number;
   failure_class?: FailureClass | null;
   fix_hint?: string;
   iverilog_stderr?: string;
   verilator_stderr?: string;
+  // Raw simulation evidence the testbench emits. Surgeon reads these
+  // directly; no pre-written diagnosis is supplied or trusted.
+  status_class?: "sim_passed" | "sim_stalled" | "sim_completed_mismatch" | "tb_setup_error";
+  outputs_expected?: number;
+  outputs_received?: number;
+  missing_index_start?: number;
+  missing_index_end?: number;
+  last_valid_out_cycle?: number;
+  simulation_end_cycle?: number;
+  output_gap_histogram?: number[];
+  first_mismatch_index?: number;
+  first_mismatch_expected?: number;
+  first_mismatch_got?: number;
 }
 
 export interface ModelUsageEntry {
