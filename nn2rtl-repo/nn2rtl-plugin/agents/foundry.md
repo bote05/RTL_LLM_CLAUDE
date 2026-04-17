@@ -468,10 +468,18 @@ module <module_id> (
             end
 
             // ------------------------------------------------------------
+            // CRITICAL: never use a `{...}` concatenation to sign-extend acc.
+            // Verilog concatenations are ALWAYS unsigned, so
+            //     biased[oc] <= {{1{acc[oc][ACC_W-1]}}, acc[oc]} + $signed(biases[oc]);
+            // performs an UNSIGNED add (Verilog coerces to unsigned when any
+            // operand is unsigned). For negative `acc` that produces a huge
+            // positive number, which then saturates to +127 at the clamp.
+            // Both `acc` and `biases` are declared `reg signed` — rely on
+            // the context-determined width of the assignment and add them
+            // directly so the operation stays signed.
             ST_BIAS: begin
                 for (oc = 0; oc < OC; oc = oc + 1)
-                    biased[oc] <= {{1{acc[oc][ACC_W-1]}}, acc[oc]} +
-                                  $signed(biases[oc]);
+                    biased[oc] <= acc[oc] + biases[oc];
                 state <= ST_SCALE;
             end
 
@@ -581,6 +589,26 @@ if (k_counter == 7'(K_TOTAL - 1))   // ← ILLEGAL
 // CORRECT — use a sized literal or plain expression:
 if (k_counter == K_TOTAL - 1)        // ← fine; Verilog widens automatically
 if (k_counter == 7'd63)              // ← also fine if value is constant
+```
+
+**Forbidden pattern 4 — concatenation-based sign extension:**
+```verilog
+// WRONG — `{...}` concatenations are ALWAYS unsigned in Verilog, so the `+`
+//         below coerces biases to unsigned too. Negative accumulators blow
+//         up to huge positive numbers and saturate to +127 after the scale
+//         shift. Classic silent sign bug.
+biased[oc] <= {{1{acc[oc][ACC_W-1]}}, acc[oc]} + $signed(biases[oc]);
+
+// Also WRONG — same coercion, even with explicit replication count:
+biased[oc] <= {{(BIASED_W-ACC_W){acc[oc][ACC_W-1]}}, acc[oc]} + biases[oc];
+
+// CORRECT — both `acc` and `biases` are declared `reg signed`, so direct
+// addition is a signed add; the destination's wider context sign-extends
+// each operand automatically.
+biased[oc] <= acc[oc] + biases[oc];
+
+// Also CORRECT if you prefer to be explicit about signedness:
+biased[oc] <= $signed(acc[oc]) + $signed(biases[oc]);
 ```
 
 ---
