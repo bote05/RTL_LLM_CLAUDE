@@ -288,6 +288,14 @@ def _serialize_conv_layer(
 ) -> dict[str, Any]:
     weight_int8, weight_scale = _quantize_weight_tensor(weight)
     input_scale = _safe_scale(stats.input_max_abs)
+    output_scale = _safe_scale(stats.output_max_abs)
+    # Composite requantisation multiplier used by both the golden model and
+    # the RTL's SCALE_MULT / SCALE_SHIFT:
+    #   output_int = round((acc_int + bias_int) * (input_scale * weight_scale / output_scale))
+    # bias_int sits in accumulator domain = bias_float / (input_scale * weight_scale).
+    # See scripts/onnx_frontend.py::_composite_conv_scale for the derivation.
+    acc_scale = input_scale * weight_scale
+    composite_scale = acc_scale if output_scale == 0.0 else acc_scale / output_scale
     input_width_bits = _channel_bus_width_bits_from_shape(
         list(stats.input_shape),
         context="conv2d.input_shape",
@@ -305,7 +313,7 @@ def _serialize_conv_layer(
         "bias_int32": _quantize_bias_tensor(bias, input_scale, weight_scale),
         "weight_shape": [int(dim) for dim in weight.shape],
         "num_weights": int(weight.numel()),
-        "scale_factor": float(weight_scale),
+        "scale_factor": float(composite_scale),
         "zero_point": 0,
         "input_width_bits": input_width_bits,
         "output_width_bits": output_width_bits,

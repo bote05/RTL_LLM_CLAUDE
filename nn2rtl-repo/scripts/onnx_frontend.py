@@ -585,6 +585,28 @@ def _quantize_weights_int8(weight: np.ndarray, scale: float) -> np.ndarray:
     return np.clip(np.round(weight / scale), -128, 127).astype(np.int8)
 
 
+def _composite_conv_scale(spec: OnnxLayerSpec) -> float:
+    """Return the composite INT8-requantisation multiplier for a conv layer.
+
+    ``scale_factor`` in the LayerIR (and therefore the RTL's SCALE_MULT /
+    SCALE_SHIFT) must encode the mapping from the integer accumulator domain
+    back to INT8 output:
+
+        output_int = clamp(round((acc_int + bias_int) * S), -128, 127)
+        S          = input_scale * weight_scale / output_scale
+
+    where bias_int = bias_float / (input_scale * weight_scale) sits in the
+    same accumulator domain as acc_int.  The old code used just
+    ``weight_scale``; that only works when input_scale ≈ output_scale ≈ 1,
+    which is the case for synthetic INT8 calibration but not for real
+    activation-range calibration.
+    """
+    acc_scale = spec.input_scale * spec.weight_scale
+    if spec.output_scale == 0.0:
+        return float(acc_scale)
+    return float(acc_scale / spec.output_scale)
+
+
 def _quantize_bias_int32(
     bias: np.ndarray,
     input_scale: float,
@@ -616,11 +638,25 @@ def _build_int8_module(spec: OnnxLayerSpec, rtl_compat_conv: bool = True) -> nn.
     """
     if spec.op_type == "conv2d":
         assert spec.weight is not None
-        # Weights stored as INT8 values in float32 tensor (same as current path)
         w_int8 = _quantize_weights_int8(spec.weight, spec.weight_scale)
         w_tensor = torch.tensor(w_int8.astype(np.float32))
         b_int32 = _quantize_bias_int32(spec.bias, spec.input_scale, spec.weight_scale)
         b_tensor = torch.tensor(b_int32.astype(np.float32))
+        # Composite requantisation multiplier.  Derivation:
+        #   input_float = input_int * input_scale
+        #   weight_float = weight_int * weight_scale
+        #   acc_float    = Σ(input_int * weight_int) * input_scale * weight_scale
+        #   output_float = acc_float + bias_float
+        #   output_int   = round(output_float / output_scale)
+        #                = round( (acc_int + bias_int) * (input_scale * weight_scale / output_scale) )
+        # where bias_int = bias_float / (input_scale * weight_scale), which is
+        # exactly what _quantize_bias_int32() produces. The RTL applies this
+        # composite multiplier as SCALE_MULT / 2^SCALE_SHIFT on (acc + bias).
+        acc_scale = spec.input_scale * spec.weight_scale
+        if spec.output_scale == 0.0:
+            composite_scale = acc_scale
+        else:
+            composite_scale = acc_scale / spec.output_scale
         return Int8Conv2d(
             weight=w_tensor,
             bias=b_tensor,
@@ -628,7 +664,7 @@ def _build_int8_module(spec: OnnxLayerSpec, rtl_compat_conv: bool = True) -> nn.
             padding=spec.padding,
             dilation=spec.dilation,
             groups=spec.groups,
-            scale_factor=float(spec.weight_scale),
+            scale_factor=float(composite_scale),
             rtl_compat=rtl_compat_conv,
         )
     if spec.op_type == "relu":
@@ -1022,7 +1058,16 @@ def build_pipeline_ir_from_onnx(
             "bias_path": bias_path_obj.resolve().as_posix() if spec.op_type == "conv2d" else None,
             "weight_shape": weight_shape,
             "num_weights": num_weights,
-            "scale_factor": float(spec.weight_scale) if spec.op_type == "conv2d" else float(spec.output_scale),
+            # For conv2d the RTL multiplies (acc + bias_int32) by this factor
+            # to requantise back to INT8; it is the composite (input_scale *
+            # weight_scale / output_scale) not weight_scale alone.  For
+            # activation ops (relu / maxpool / add) the LayerIR scale_factor
+            # is the output activation scale used by the quantised-add formula.
+            "scale_factor": (
+                _composite_conv_scale(spec)
+                if spec.op_type == "conv2d"
+                else float(spec.output_scale)
+            ),
             "zero_point": 0,
             "pipeline_latency_cycles": latency,
             "clock_period_ns": 20,

@@ -307,6 +307,298 @@ mechanism MaxPool uses).
 
 ---
 
+## Reference structural template — spatial conv (KH × KW > 1)
+
+Use this as the skeleton. Substitute the localparam values from the LayerIR,
+keep the module-scope declarations, the FSM, and the MAC indexing exactly
+as shown. The tricky parts (line-buffer shift, window rebuild with zero-pad
+mask, output-trigger predicate) are written out in full — do **not**
+simplify them.
+
+```verilog
+module <module_id> (
+    input  wire              clk,
+    input  wire              rst_n,
+    input  wire              valid_in,
+    output reg               ready_in,
+    input  wire [IC*8-1:0]   data_in,
+    output reg               valid_out,
+    output reg  [OC*8-1:0]   data_out
+);
+    // ================================================================
+    // 1) Layer geometry — every value comes from LayerIR.
+    // ================================================================
+    localparam IC      = <input_shape[1]>;
+    localparam OC      = <output_shape[1]>;
+    localparam IH      = <input_shape[2]>;
+    localparam IW      = <input_shape[3]>;
+    localparam OH      = <output_shape[2]>;
+    localparam OW      = <output_shape[3]>;
+    localparam KH      = <weight_shape[2]>;
+    localparam KW      = <weight_shape[3]>;
+    localparam SH      = <op stride[0]>;
+    localparam SW      = <op stride[1]>;
+    localparam PH      = <op padding[0]>;
+    localparam PW      = <op padding[1]>;
+    localparam K_TOTAL = IC * KH * KW;
+
+    localparam SCALE_MULT  = <computed from scale_factor>;
+    localparam SCALE_SHIFT = <computed from scale_factor>;
+
+    localparam integer PROD_W        = 16;
+    localparam integer ACC_W         = PROD_W + $clog2(K_TOTAL);
+    localparam integer BIAS_W        = 32;
+    localparam integer BIASED_W      = ((ACC_W > BIAS_W) ? ACC_W : BIAS_W) + 1;
+    localparam integer SCALE_MAG_W   = $clog2(SCALE_MULT + 1);
+    localparam integer SCALE_CONST_W = SCALE_MAG_W + 1;
+    localparam integer SCALED_W      = BIASED_W + SCALE_CONST_W;
+    localparam signed [SCALE_CONST_W-1:0] SCALE_MULT_CONST = SCALE_MULT;
+
+    localparam ST_STREAM  = 3'd0;
+    localparam ST_RUNNING = 3'd1;
+    localparam ST_BIAS    = 3'd2;
+    localparam ST_SCALE   = 3'd3;
+    localparam ST_OUTPUT  = 3'd4;
+
+    // ================================================================
+    // 2) Weights & biases — loaded once from the hex files via $readmemh.
+    // ================================================================
+    (* ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
+    (* ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
+    initial begin
+        $readmemh("<weights_path>", weights);
+        $readmemh("<bias_path>",    biases);
+    end
+
+    // ================================================================
+    // 3) Storage for the sliding window.
+    //
+    //    cur_row[0..IW-1]           = the row currently being received.
+    //    line_buf[0..KH-2][0..IW-1] = the last KH-1 completed rows.
+    //                                 line_buf[0] is oldest; line_buf[KH-2] is
+    //                                 the row immediately above cur_row.
+    //    window[kh][kw][ic]         = registered KH x KW x IC snapshot handed
+    //                                 to the MAC loop.
+    // ================================================================
+    reg signed [IC*8-1:0] cur_row [0:IW-1];
+    (* ram_style = "block" *) reg signed [IC*8-1:0] line_buf [0:KH-2][0:IW-1];
+    reg signed [7:0] window [0:KH-1][0:KW-1][0:IC-1];
+
+    // ================================================================
+    // 4) Pipeline state and counters.
+    // ================================================================
+    reg signed [ACC_W-1:0]    acc    [0:OC-1];
+    reg signed [BIASED_W-1:0] biased [0:OC-1];
+    reg signed [SCALED_W-1:0] scaled [0:OC-1];
+    reg signed [SCALED_W-1:0] v_tmp;
+    reg [$clog2(K_TOTAL+1)-1:0] k_counter;
+    reg [$clog2(IH+1)-1:0]      in_row;
+    reg [$clog2(IW+1)-1:0]      in_col;
+    reg [$clog2(OH+1)-1:0]      out_row;
+    reg [$clog2(OW+1)-1:0]      out_col;
+    reg [2:0]                   state;
+
+    // Loop indices at module scope — never declare inside an always block.
+    integer i, j;
+    integer kh_i, kw_i, ic_i, oc;
+    integer src_row, src_col;     // signed row/col indices into the input
+    integer lb_row;               // which line_buf row to read for a given kh
+
+    // ================================================================
+    // 5) Output-trigger predicate.
+    //
+    //    Output (oh, ow) completes when its last-needed input pixel arrives.
+    //    Last input for (oh, ow) is  (oh*SH + KH-1 - PH,  ow*SW + KW-1 - PW).
+    //    Solve for oh/ow:   oh = (in_row + PH - KH + 1) / SH
+    //                       ow = (in_col + PW - KW + 1) / SW
+    //    both must be non-negative and evenly divisible by SH / SW.
+    // ================================================================
+    wire signed [$clog2(IH+PH)+1:0] row_num = $signed({1'b0, in_row}) + PH - (KH - 1);
+    wire signed [$clog2(IW+PW)+1:0] col_num = $signed({1'b0, in_col}) + PW - (KW - 1);
+    wire row_trigger = (row_num >= 0) && (row_num % SH == 0);
+    wire col_trigger = (col_num >= 0) && (col_num % SW == 0);
+    wire output_fires = row_trigger && col_trigger;
+
+    // ================================================================
+    // 6) Sequential: ingest pixels, maintain buffers, run the MAC pipeline.
+    // ================================================================
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state     <= ST_STREAM;
+            ready_in  <= 1'b1;
+            valid_out <= 1'b0;
+            in_row    <= 0; in_col  <= 0;
+            out_row   <= 0; out_col <= 0;
+            k_counter <= 0;
+            data_out  <= {(OC*8){1'b0}};
+            for (i = 0; i < IW; i = i + 1)
+                cur_row[i] <= {(IC*8){1'b0}};
+            for (i = 0; i < KH-1; i = i + 1)
+                for (j = 0; j < IW; j = j + 1)
+                    line_buf[i][j] <= {(IC*8){1'b0}};
+            for (kh_i = 0; kh_i < KH; kh_i = kh_i + 1)
+                for (kw_i = 0; kw_i < KW; kw_i = kw_i + 1)
+                    for (ic_i = 0; ic_i < IC; ic_i = ic_i + 1)
+                        window[kh_i][kw_i][ic_i] <= 8'sd0;
+            for (oc = 0; oc < OC; oc = oc + 1) begin
+                acc   [oc] <= 0;
+                biased[oc] <= 0;
+                scaled[oc] <= 0;
+            end
+        end else begin
+            case (state)
+
+            // ------------------------------------------------------------
+            ST_STREAM: begin
+                valid_out <= 1'b0;
+                if (valid_in) begin
+                    // ---- 6a. Promote cur_row into line_buf when the row
+                    //         has JUST been completed (in_col == 0 starts a
+                    //         new row — the old row is now complete).
+                    if (in_col == 0 && in_row > 0) begin
+                        for (i = 0; i < KH - 2; i = i + 1)
+                            for (j = 0; j < IW; j = j + 1)
+                                line_buf[i][j] <= line_buf[i+1][j];
+                        for (j = 0; j < IW; j = j + 1)
+                            line_buf[KH-2][j] <= cur_row[j];
+                    end
+
+                    // ---- 6b. Write the current pixel into cur_row.
+                    cur_row[in_col] <= data_in;
+
+                    // ---- 6c. Rebuild the window for the current receptive
+                    //         field. Row KH-1 = current row (includes the
+                    //         pixel just written). Row kh < KH-1 comes from
+                    //         line_buf at index kh. Any (src_row, src_col)
+                    //         outside [0, IH) × [0, IW) drives zero.
+                    for (kh_i = 0; kh_i < KH; kh_i = kh_i + 1) begin
+                        src_row = $signed({1'b0, in_row}) - (KH - 1) + kh_i;
+                        for (kw_i = 0; kw_i < KW; kw_i = kw_i + 1) begin
+                            src_col = $signed({1'b0, in_col}) - (KW - 1) + kw_i;
+                            for (ic_i = 0; ic_i < IC; ic_i = ic_i + 1) begin
+                                if (src_row < 0 || src_row >= IH ||
+                                    src_col < 0 || src_col >= IW) begin
+                                    window[kh_i][kw_i][ic_i] <= 8'sd0;
+                                end else if (kh_i == KH - 1) begin
+                                    // Current row: read from cur_row (with
+                                    // just-written pixel visible because the
+                                    // write above is a non-blocking assign
+                                    // — but for kw_i corresponding to in_col
+                                    // itself, prefer data_in to avoid the
+                                    // one-cycle delay on cur_row).
+                                    if (src_col == in_col)
+                                        window[kh_i][kw_i][ic_i] <=
+                                            $signed(data_in[ic_i*8 +: 8]);
+                                    else
+                                        window[kh_i][kw_i][ic_i] <=
+                                            $signed(cur_row[src_col][ic_i*8 +: 8]);
+                                end else begin
+                                    // Past row: read from line_buf.
+                                    // line_buf[0] is the row (in_row - KH + 1);
+                                    // line_buf[kh_i] holds row (in_row - KH + 1 + kh_i).
+                                    window[kh_i][kw_i][ic_i] <=
+                                        $signed(line_buf[kh_i][src_col][ic_i*8 +: 8]);
+                                end
+                            end
+                        end
+                    end
+
+                    // ---- 6d. Advance the input counters.
+                    if (in_col == IW - 1) begin
+                        in_col <= 0;
+                        in_row <= in_row + 1;
+                    end else begin
+                        in_col <= in_col + 1;
+                    end
+
+                    // ---- 6e. If this pixel completes a full output window,
+                    //         kick off the MAC pipeline.
+                    if (output_fires) begin
+                        ready_in  <= 1'b0;
+                        k_counter <= 0;
+                        for (oc = 0; oc < OC; oc = oc + 1)
+                            acc[oc] <= 0;
+                        state <= ST_RUNNING;
+                    end
+                end
+            end
+
+            // ------------------------------------------------------------
+            ST_RUNNING: begin
+                // K_TOTAL sequential MAC cycles, OC parallel lanes per cycle.
+                // Weight memory layout is [OC, IC, KH, KW] row-major, so:
+                //   ic = k / (KH*KW);  kh = (k / KW) % KH;  kw = k % KW
+                for (oc = 0; oc < OC; oc = oc + 1) begin
+                    acc[oc] <= acc[oc] +
+                        $signed(weights[oc*K_TOTAL + k_counter]) *
+                        $signed(window[ k_counter / (KH*KW) ]
+                                      [ (k_counter / KW) % KH ]
+                                      [ k_counter % KW ]);
+                end
+                if (k_counter == K_TOTAL - 1) state <= ST_BIAS;
+                else k_counter <= k_counter + 1;
+            end
+
+            // ------------------------------------------------------------
+            ST_BIAS: begin
+                for (oc = 0; oc < OC; oc = oc + 1)
+                    biased[oc] <= {{1{acc[oc][ACC_W-1]}}, acc[oc]} +
+                                  $signed(biases[oc]);
+                state <= ST_SCALE;
+            end
+
+            // ------------------------------------------------------------
+            ST_SCALE: begin
+                for (oc = 0; oc < OC; oc = oc + 1)
+                    scaled[oc] <= $signed(biased[oc]) * $signed(SCALE_MULT_CONST);
+                state <= ST_OUTPUT;
+            end
+
+            // ------------------------------------------------------------
+            ST_OUTPUT: begin
+                for (oc = 0; oc < OC; oc = oc + 1) begin
+                    v_tmp = scaled[oc] >>> SCALE_SHIFT;
+                    data_out[oc*8 +: 8] <= (v_tmp > 127)  ?  8'sd127 :
+                                            (v_tmp < -128) ? -8'sd128 :
+                                                             v_tmp[7:0];
+                end
+                valid_out <= 1'b1;
+                ready_in  <= 1'b1;
+                state     <= ST_STREAM;
+                if (out_col == OW - 1) begin
+                    out_col <= 0;
+                    out_row <= out_row + 1;
+                end else begin
+                    out_col <= out_col + 1;
+                end
+            end
+
+            default: state <= ST_STREAM;
+            endcase
+        end
+    end
+endmodule
+```
+
+Notes when adapting this template:
+
+- The `cur_row` / `line_buf` / `window` decomposition is the only structure
+  proven to produce correct 2D-conv goldens with the current testbench.
+  Do not try to fold them into a single 3-D shift register unless you can
+  prove the result is bit-identical.
+- The non-blocking assigns in step 6c mean `window[kh][KW-1][ic]` reads the
+  **previous** cycle's `cur_row` content for `src_col == in_col`. The
+  special-case `if (src_col == in_col)` branch is there to forward the
+  just-arrived `data_in` into the current-cycle window and avoid a
+  one-cycle bubble.
+- Yosys will still preserve `(* ram_style = "block" *)` on `line_buf` even
+  though Sky130 has no BRAM; on other targets this keeps the area tight.
+- Every `reg`, `wire`, and `integer` above is declared at module scope.
+  Never move them inside an `always` block or a loop body — Yosys rejects
+  procedural declarations in Verilog-2001.
+
+---
+
 ## Variable declaration rule — CRITICAL
 
 **All `reg` and `wire` signals must be declared at module scope, before any `always` block.** Never declare variables inside a `for` loop, `begin...end` block, `case` branch, or `always` block body. Yosys will reject the module with an error if you do. This is Verilog-2001, not SystemVerilog.

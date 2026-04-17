@@ -1408,16 +1408,33 @@ async function invokeSurgeon(
 // run the assayer directly. This saves ~60 % of Foundry LLM calls on layer1.
 // ---------------------------------------------------------------------------
 
-/** Compute the structural spec_hash from LayerIR fields (no scale factor). */
+/** Compute the structural spec_hash from LayerIR fields (no scale factor).
+ *
+ * Two modules share a spec_hash when an identical Verilog template can be
+ * reused for both — the line-buffer / window-shift datapath of a spatial
+ * conv depends on `IH`/`IW`, so a 3×3 conv on 112×112 must NOT be cloned
+ * for a 3×3 conv on 56×56. Include input spatial dims for every op; include
+ * MaxPool kernel/stride/padding as well since those also parameterise its
+ * datapath.
+ */
 function computeExpectedSpecHash(layer: LayerIR): string {
   const ic = layer.input_shape.length >= 2 ? layer.input_shape[1] : 0;
   const oc = layer.output_shape.length >= 2 ? layer.output_shape[1] : 0;
+  const ih = layer.input_shape.length >= 3 ? layer.input_shape[2] : 0;
+  const iw = layer.input_shape.length >= 4 ? layer.input_shape[3] : 0;
+  const spatial = `s${ih}x${iw}`;
   if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
     const kh = layer.weight_shape[2];
     const kw = layer.weight_shape[3];
-    return `conv2d_${ic}x${oc}x${kh}x${kw}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
   }
-  return `${layer.op_type}_${ic}x${oc}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+  if (layer.op_type === "maxpool") {
+    const ks = (layer.kernel_size ?? []).join("x") || "0x0";
+    const st = (layer.pool_stride ?? []).join("x") || "0x0";
+    const pd = (layer.pool_padding ?? []).join("x") || "0x0";
+    return `maxpool_${ic}x${oc}_k${ks}_s${st}_p${pd}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+  }
+  return `${layer.op_type}_${ic}x${oc}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
 }
 
 /** Choose SCALE_MULT/SCALE_SHIFT that minimise the relative approximation error. */
