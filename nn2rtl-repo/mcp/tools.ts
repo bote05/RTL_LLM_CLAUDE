@@ -548,14 +548,20 @@ export async function run_verilator(
       if (isSystemSpawnError(error)) {
         throw error;
       }
+      const stderr = stderrFromUnknown(error);
+      const tbSetupFailure =
+        /static_verilator_tb\.cpp|VlWide<|verilated_types\.h|VMODEL_HEADER|VMODEL_CLASS/.test(stderr);
       return {
         module_id: sidecar.module_id,
-        status: "syntax_error",
+        status: tbSetupFailure ? "fail" : "syntax_error",
+        status_class: tbSetupFailure ? "tb_setup_error" : undefined,
         timing_pass: false,
-        timing_actual_cycles: 0,
-        timing_expected_cycles: 0,
-        verilator_stderr: stderrFromUnknown(error),
-        fix_hint: `Verilator build failed while compiling '${module_name}' with the static testbench.`,
+        timing_actual_cycles: tbSetupFailure ? -1 : 0,
+        timing_expected_cycles: sidecar.pipeline_latency_cycles,
+        verilator_stderr: stderr,
+        fix_hint: tbSetupFailure
+          ? `Static Verilator testbench build failed while compiling '${module_name}'. The RTL may be fine; inspect the external C++ / bus-width diagnostics before attempting module-local repair.`
+          : `Verilator build failed while compiling '${module_name}' with the static testbench.`,
       };
     }
 
@@ -580,8 +586,9 @@ export async function run_verilator(
     return {
       module_id: sidecar.module_id,
       status: "fail",
+      status_class: "tb_setup_error",
       timing_pass: false,
-      timing_actual_cycles: 0,
+      timing_actual_cycles: -1,
       timing_expected_cycles: sidecar.pipeline_latency_cycles,
       expected: [],
       got: [],

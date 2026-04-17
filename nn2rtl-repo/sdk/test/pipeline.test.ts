@@ -18,6 +18,13 @@ const FAIL_RESULT: VerifResult = {
   failure_class: "pipeline_latency_wrong",
 };
 
+const TB_SETUP_FAIL_RESULT: VerifResult = {
+  module_id: "m1",
+  status: "fail",
+  status_class: "tb_setup_error",
+  verilator_stderr: "static_verilator_tb.cpp: build failed",
+};
+
 const tempDirs: string[] = [];
 
 async function makeTempPath(fileName: string): Promise<string> {
@@ -61,6 +68,14 @@ describe("PipelineStateManager", () => {
 
     expect(manager.getState().modules.m1).toBe("fail_abort");
     expect(manager.isDone()).toBe(true);
+  });
+
+  it("does not route pure testbench/setup failures to Surgeon", () => {
+    const manager = new PipelineStateManager(["m1"], 3);
+    manager.applyVerifResult("m1", TB_SETUP_FAIL_RESULT);
+
+    expect(manager.getState().modules.m1).toBe("fail_abort");
+    expect(manager.getState().results.m1).toEqual(TB_SETUP_FAIL_RESULT);
   });
 
   it("merges nested model usage and total cost", () => {

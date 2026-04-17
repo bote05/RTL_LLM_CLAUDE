@@ -20,12 +20,14 @@ Supported `op_type` values: `conv2d`, `relu`, `add`, `maxpool`.
 - Public port names are canonical: `clk`, `rst_n` (active-low), `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`. The static testbench enforces these exactly — any other name fails before simulation.
 - `ready_in` is a module **output** (backpressure upstream). If stalling is not needed, tie high after reset.
 - `valid_out` must assert exactly `pipeline_latency_cycles` cycles after the first `valid_in` of a vector.
+- `pipeline_latency_cycles` from the LayerIR is authoritative. Do not override it with a hand-derived formula.
 - `data_out` is sampled by the bench only when `valid_out == 1`, so bubbles are allowed between valid outputs.
 - `data_in` is always packed by channel. For conv/relu, `data_in[i*8 +: 8]` is channel `i` and the port width must be `IC*8`; never use scalar `[7:0]` interfaces there. For add, `data_in[W-1:0]` is the packed lhs bus and `data_in[2W-1:W]` is the packed rhs bus.
 - `data_out` is always packed by channel the same way: `data_out[i*8 +: 8]` is channel `i` and the port width must match the output channel count times 8.
 - For `op_type=add` modules, `data_in` is a packed wide bus: `data_in[W-1:0] = lhs`, `data_in[2W-1:W] = rhs`, where `W = input_width_bits / 2`. Unpack internally, apply the INT8 quantized-add formula using `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`, saturate to INT8, and drive the result on `data_out[W-1:0]`.
-- `layer0_0_conv1` is a standard conv2d (IC=3, OC=64, 7×7 kernel) with BatchNorm folded in and ReLU. No MaxPool. Treat identically to any other conv2d.
-- **Conv modules must use an output-stationary MAC array. Single-MAC designs are rejected.** Use `OC` parallel signed 8x8 MAC lanes that share the current packed input byte and update `acc[0:OC-1]` together every cycle while `k_counter` walks `ic*kh*kw`. `pipeline_latency_cycles = input_channels * kernel_h * kernel_w + 4` already budgets for this. Deassert `ready_in` while the state machine is busy and accept the next pixel only after `valid_out` fires.
+- For conv2d layers, if `stride` / `padding` are present in the LayerIR, use them exactly. Do not infer them when explicit geometry is already available.
+- `layer0_0_conv1` must follow the current LayerIR / golden-vector contract. On the current legacy `.pth` path it is not a fused MaxPool stage; do not add extra fused stages unless the current LayerIR / goldens require them.
+- **Conv modules must use an output-stationary MAC array. Single-MAC designs are rejected.** Use `OC` parallel signed 8x8 MAC lanes that share the current packed input byte and update `acc[0:OC-1]` together every cycle while `k_counter` walks `ic*kh*kw`. Deassert `ready_in` while the state machine is busy and accept the next pixel only after `valid_out` fires.
 
 Reference template:
 
@@ -33,7 +35,7 @@ Reference template:
 // Output-stationary MAC array: OC parallel 8x8 MAC units share the input byte
 // each cycle. A k_counter walks (ic, kh, kw); after IC*KH*KW cycles the OC
 // accumulators hold full dot products and get scaled/clamped/packed to data_out.
-// pipeline_latency_cycles = IC*KH*KW + 4 (latch, bias, scale, out).
+// Honour the exact pipeline_latency_cycles from LayerIR; do not recompute it here.
 input  wire [IC*8-1:0] data_in;
 output reg  [OC*8-1:0] data_out;
 localparam integer ACC_W = 16 + $clog2(K_TOTAL);

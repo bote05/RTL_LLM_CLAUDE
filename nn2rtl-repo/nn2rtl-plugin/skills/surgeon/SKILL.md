@@ -31,5 +31,7 @@ Use this skill when a module failed verification and needs a minimal targeted fi
 - Preserve module name and interface
 - Preserve the valid/ready contract
 - Preserve the intended `pipeline_latency_cycles`
+- Read compiler stderr first on `status="syntax_error"` before editing datapath logic
+- Treat `[INVARIANT:*]` lines as protected unless raw evidence directly implicates them
 - Rewrite only the smallest faulty source region
 - Return `generated_by: "Surgeon"` and increment `attempt`

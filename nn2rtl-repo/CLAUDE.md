@@ -32,17 +32,21 @@ The three LLM agents below are the only ones dispatched via the SDK's
 `query()` path.
 
 - `cartographer`
-  - Role: PyTorch checkpoint and layer IR extractor
-  - Model: `sonnet`
+  - Role: PyTorch checkpoint and layer IR extractor (bypassed on the ONNX path)
+  - Model: `claude-sonnet-4-6` (simple extraction — Opus is waste here)
   - Defined in `nn2rtl-plugin/agents/cartographer.md`
 - `foundry`
   - Role: synthesizable Verilog generator for one `LayerIR`
-  - Model: `sonnet`
+  - Model: `claude-opus-4-7` (coding best — first-shot correctness matters)
   - Defined in `nn2rtl-plugin/agents/foundry.md`
 - `surgeon`
   - Role: targeted Verilog repair specialist
-  - Model: `opus`
+  - Model: `claude-opus-4-7`
   - Defined in `nn2rtl-plugin/agents/surgeon.md`
+
+Models are pinned to full IDs (not tier aliases like `"sonnet"`) in
+`sdk/config.ts` so the pick is reproducible regardless of the user's global
+`~/.claude/settings.json` default model.
 
 ## Architecture
 

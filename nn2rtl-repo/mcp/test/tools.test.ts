@@ -283,6 +283,34 @@ describe("mcp tools", () => {
     expect(result.verilator_stderr).toBe("compile boom");
   });
 
+  it("classifies static testbench build failures as tb_setup_error", async () => {
+    const tempDir = await makeTempDir("nn2rtl-verilator-tb-build-");
+    const sidecarPath = await writeSidecar(tempDir);
+
+    const result = await run_verilator("module unit_module; endmodule", "unit_module", sidecarPath, {
+      commandRunner: async (file) => {
+        if (file === VERILATOR_COMMAND) {
+          throw {
+            stderr:
+              "static_verilator_tb.cpp:91: error: invalid operands to binary expression\n" +
+              "note: candidate template ignored: substitution failure in 'VlWide<8>'",
+          };
+        }
+        return { stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result).toMatchObject({
+      module_id: "unit_module",
+      status: "fail",
+      status_class: "tb_setup_error",
+      timing_actual_cycles: -1,
+      timing_expected_cycles: 1,
+    });
+    expect(result.fix_hint).toContain("external C++ / bus-width diagnostics");
+    expect(result.verilator_stderr).toContain("static_verilator_tb.cpp");
+  });
+
   it("rejects non-absolute sidecar vector paths before invoking verilator", async () => {
     const tempDir = await makeTempDir("nn2rtl-verilator-sidecar-");
     const sidecarPath = await writeSidecar(tempDir, {
@@ -308,6 +336,8 @@ describe("mcp tools", () => {
     expect(result).toMatchObject({
       module_id: "unit_module",
       status: "fail",
+      status_class: "tb_setup_error",
+      timing_actual_cycles: -1,
       timing_expected_cycles: 1,
     });
     expect(result.fix_hint).toContain("did not produce results JSON");

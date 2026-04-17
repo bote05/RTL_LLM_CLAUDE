@@ -61,6 +61,84 @@ describe("orchestrate helpers", () => {
     expect(prompt).toContain('"module_id": "m1"');
   });
 
+  it("adds a compact generation brief for Foundry", () => {
+    const prompt = buildDelegationPrompt("foundry", {
+      layer_ir: {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 3, 8, 8],
+        output_shape: [1, 4, 8, 8],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [4, 3, 3, 3],
+        num_weights: 108,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 40,
+        clock_period_ns: 20,
+        input_width_bits: 24,
+        output_width_bits: 32,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+        stride: [1, 1],
+        padding: [1, 1],
+      },
+      expected_spec_hash: "conv2d_3x4x3x3_s8x8_st1x1_p1x1_i24_o32",
+    });
+
+    expect(prompt).toContain("Compact generation brief:");
+    expect(prompt).toContain("return spec_hash=conv2d_3x4x3x3_s8x8_st1x1_p1x1_i24_o32 exactly");
+    expect(prompt).toContain("spatial conv rule");
+  });
+
+  it("adds a compact repair brief for Surgeon", () => {
+    const prompt = buildDelegationPrompt("surgeon", {
+      layer_ir: {
+        module_id: "m1",
+        op_type: "add",
+        input_shape: [1, 4, 8, 8],
+        output_shape: [1, 4, 8, 8],
+        weights_path: "/tmp/w.hex",
+        bias_path: null,
+        weight_shape: [1],
+        num_weights: 0,
+        scale_factor: 0.5,
+        lhs_scale_factor: 0.25,
+        rhs_scale_factor: 0.25,
+        zero_point: 0,
+        pipeline_latency_cycles: 1,
+        clock_period_ns: 20,
+        input_width_bits: 64,
+        output_width_bits: 32,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+      verif_result: {
+        module_id: "m1",
+        status: "syntax_error",
+        iverilog_stderr: "m1.v:42: syntax error",
+      },
+    });
+
+    expect(prompt).toContain("Compact repair brief:");
+    expect(prompt).toContain("compiler-first rule");
+    expect(prompt).toContain("invariant rule");
+  });
+
   it("prefers structured_output and falls back to result JSON", () => {
     const helperSchema = z.object({
       module_id: z.string(),
@@ -165,9 +243,11 @@ describe("orchestrate helpers", () => {
 
   it("loads plugin agent definitions with merged MCP tools and skills", async () => {
     const foundry = await loadPluginAgentDefinition("foundry");
+    const cartographer = await loadPluginAgentDefinition("cartographer");
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__write_verilog");
-    expect(foundry.prompt).toContain("Supplemental skill reference");
-    expect(foundry.model).toBe("sonnet");
+    expect(foundry.prompt).not.toContain("Supplemental skill reference");
+    expect(cartographer.prompt).toContain("Supplemental skill reference");
+    expect(foundry.model).toBe("claude-opus-4-7");
   });
 
   it("creates overridable runtime defaults", () => {

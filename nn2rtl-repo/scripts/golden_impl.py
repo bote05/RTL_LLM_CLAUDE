@@ -286,7 +286,11 @@ class CheckpointResidualStack(nn.Module):
                     weight=weight_tensor,
                     bias=bias_tensor,
                     stride=coerce_int_sequence(operation.get("stride", [1, 1]), "stride"),
-                    padding=coerce_int_sequence(operation.get("padding", [0, 0]), "padding"),
+                    padding=coerce_int_sequence(
+                        operation.get("padding", [0, 0]),
+                        "padding",
+                        allow_zero=True,
+                    ),
                     dilation=coerce_int_sequence(operation.get("dilation", [1, 1]), "dilation"),
                     groups=int(operation.get("groups", 1)),
                     scale_factor=float(metadata.get("scale_factor", 1.0)),
@@ -860,6 +864,25 @@ def validate_pipeline_ir_payload(payload: Mapping[str, Any]) -> None:
                     raise GoldenGenerationError(
                         f"Layer '{module_id}' field '{field_name}' must be a positive number for add layers."
                     )
+        elif layer["op_type"] == "conv2d":
+            for field_name, allow_zero in (("stride", False), ("padding", True)):
+                value = layer.get(field_name)
+                if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) < 2:
+                    raise GoldenGenerationError(
+                        f"Layer '{module_id}' field '{field_name}' must be a 2-element sequence for conv2d layers."
+                    )
+                try:
+                    coerced = coerce_int_sequence(
+                        value,
+                        f"{module_id}.{field_name}",
+                        allow_zero=allow_zero,
+                    )
+                except GoldenGenerationError as exc:
+                    raise GoldenGenerationError(str(exc)) from exc
+                if len(coerced) != 2:
+                    raise GoldenGenerationError(
+                        f"Layer '{module_id}' field '{field_name}' must be exactly [H, W] for conv2d layers."
+                    )
 
 
 def build_legacy_pipeline_ir_payload(
@@ -925,6 +948,8 @@ def build_legacy_pipeline_ir_payload(
                 "clock_period_ns": checkpoint["clock_period_ns"],
                 "input_width_bits": checkpoint["input_width_bits"],
                 "output_width_bits": checkpoint["output_width_bits"],
+                "stride": [1, 1],
+                "padding": [0, 0],
                 **SIGNAL_LITERALS,
                 "golden_inputs_path": goldin_path.resolve().as_posix(),
                 "golden_outputs_path": goldout_path.resolve().as_posix(),
@@ -1058,6 +1083,9 @@ def build_fx_pipeline_ir_payload(
             "output_width_bits": output_width_bits,
             **SIGNAL_LITERALS,
         }
+        if op_type == "conv2d":
+            layer_payload["stride"] = list(operation_map.get(module_id, {}).get("stride", [1, 1]))
+            layer_payload["padding"] = list(operation_map.get(module_id, {}).get("padding", [0, 0]))
         if op_type == "conv2d" and not bias_values:
             raise GoldenGenerationError(f"Layer '{module_id}' did not serialize a bias vector.")
         if op_type == "add":
@@ -1549,9 +1577,13 @@ def coerce_shape(value: Any, field_name: str) -> list[int]:
     return [int(item) for item in value]
 
 
-def coerce_int_sequence(value: Any, field_name: str) -> list[int]:
+def coerce_int_sequence(value: Any, field_name: str, *, allow_zero: bool = False) -> list[int]:
     if not isinstance(value, (list, tuple)) or not value or not all(isinstance(item, int) for item in value):
         raise GoldenGenerationError(f"Field '{field_name}' must be a non-empty integer sequence.")
+    min_value = 0 if allow_zero else 1
+    if not all(int(item) >= min_value for item in value):
+        comparator = "non-negative" if allow_zero else "positive"
+        raise GoldenGenerationError(f"Field '{field_name}' must contain {comparator} integers only.")
     return [int(item) for item in value]
 
 

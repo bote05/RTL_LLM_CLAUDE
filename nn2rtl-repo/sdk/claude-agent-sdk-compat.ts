@@ -8,7 +8,11 @@ export type AgentDefinition = {
   prompt: string;
   tools?: string[];
   disallowedTools?: string[];
-  model?: "sonnet" | "opus" | "haiku" | "inherit";
+  // Accepts tier aliases ("sonnet" / "opus" / "haiku" / "inherit") OR full
+  // model IDs ("claude-opus-4-7", "claude-sonnet-4-6"). Prefer full IDs —
+  // tier aliases are affected by the user's global ~/.claude/settings default
+  // model and produce non-deterministic routing.
+  model?: string;
   skills?: string[];
   maxTurns?: number;
 };
