@@ -29,6 +29,9 @@ export interface LayerIR {
   // Conv2d geometry — populated by the modern frontends when op_type == "conv2d"
   stride?: number[];
   padding?: number[];
+  // Number of MAC lanes Foundry instantiates for this layer; FSM iterates OC
+  // in groups of mac_parallelism. Only set for op_type == "conv2d".
+  mac_parallelism?: number;
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
   pool_stride?: number[];

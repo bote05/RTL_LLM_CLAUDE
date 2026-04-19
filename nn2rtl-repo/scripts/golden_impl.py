@@ -41,12 +41,47 @@ SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 # combining them, which is the primary lever for Fmax > 100 MHz on Sky130.
 CONV_PIPELINE_STAGES = 4
 
+# Cap on the number of parallel MAC LANES (accumulator count) Foundry
+# instantiates per conv layer. Must stay in sync with PIPELINE_CONFIG.
+# MAX_PARALLEL_MACS in sdk/config.ts.
+#
+# Note: with the serialized-weight-read architecture (see foundry.md), MP
+# is the ACCUMULATOR count, not a parallel-reads count. Each ST_RUNNING
+# cycle does ONE weight read / ONE multiply / ONE accumulate; lane_counter
+# rotates through MP accumulators. MP therefore controls:
+#   - OC_PASSES = ceil(OC / MP) — how many groups per output pixel
+#   - MAC cycles per pass = MP * K_TOTAL
+#   - per-pixel latency ≈ MP * K_TOTAL * OC_PASSES ≈ K_TOTAL * OC (independent of MP!)
+#
+# Practical effect of MP: it trades accumulator storage (acc/biased/scaled
+# arrays sized [0:MP-1]) against OC_PASSES count. Smaller MP → fewer
+# accumulator registers but more passes. Larger MP → more regs, fewer
+# passes, but the widening hits Sky130 synth eventually.
+# 4 is the current sweet spot after the first OC=64 conv synthesized with
+# no timeout at MP=4.
+MAX_PARALLEL_MACS = 4
+
+
+def conv_mac_parallelism(output_channels: int) -> int:
+    """Return the mac_parallelism value a conv layer should be generated with.
+
+    The rule is ``min(OC, MAX_PARALLEL_MACS)``. For very small-OC layers
+    (OC < MAX_PARALLEL_MACS) we generate OC lanes, which keeps the existing
+    trivial synthesis path for pointwise 1×1 with few channels. Above the cap
+    we serialize into ``ceil(OC / MAX_PARALLEL_MACS)`` passes so the
+    combinational cone stays small enough for Sky130/ABC to map.
+    """
+    if output_channels <= 0:
+        return 1
+    return min(int(output_channels), MAX_PARALLEL_MACS)
+
 
 def compute_conv2d_latency_cycles(
     weight_shape: list[int],
     input_shape: list[int] | None = None,
     stride: Sequence[int] | None = None,
     padding: Sequence[int] | None = None,
+    mac_parallelism: int | None = None,
 ) -> int:
     """Return the cycle count from first valid_in to first valid_out.
 
@@ -72,29 +107,42 @@ def compute_conv2d_latency_cycles(
     """
     if len(weight_shape) < 4:
         return PIPELINE_LATENCY_CYCLES["conv2d"]
-    _oc, ic, kh, kw = weight_shape[:4]
-    ic_i, kh_i, kw_i = int(ic), int(kh), int(kw)
+    oc, ic, kh, kw = weight_shape[:4]
+    oc_i, ic_i, kh_i, kw_i = int(oc), int(ic), int(kh), int(kw)
     k_total = ic_i * kh_i * kw_i
 
-    if kh_i * kw_i <= 1:
-        # Pointwise — classical single-pixel MAC array.
-        return k_total + CONV_PIPELINE_STAGES
+    # OC-group iteration with SERIALIZED weight reads:
+    # Per OC pass, ST_RUNNING runs MP*K_TOTAL cycles (one weight read / one
+    # multiply / one accumulate per cycle; lane_counter rotates 0..MP-1).
+    # Then ST_BIAS (1) + ST_SCALE (1) + ST_OUTPUT (1) = MP*K_TOTAL + 3
+    # cycles per pass. The LAST pass's ST_OUTPUT asserts valid_out; the TB
+    # samples it the following cycle (already absorbed into the formula).
+    mp = int(mac_parallelism) if mac_parallelism and mac_parallelism > 0 else oc_i
+    mp = min(mp, oc_i) if oc_i > 0 else mp
+    oc_passes = (oc_i + mp - 1) // mp if mp > 0 and oc_i > 0 else 1
+    pass_cycles = mp * k_total + 3
 
-    # Spatial — line-buffer datapath.
+    if kh_i * kw_i <= 1:
+        # Pointwise — no window fill. First input triggers output_fires
+        # immediately → ST_RUNNING starts one cycle later.
+        # first MAC at cycle 1, last OUTPUT at OC_PASSES * pass_cycles,
+        # valid_out observed at OC_PASSES * pass_cycles + 1.
+        return 1 + oc_passes * pass_cycles
+
+    # Spatial — line-buffer datapath. ST_STREAM wraps in_col at IW-1+PW
+    # (handles right-edge padding outputs inline). Each fill row therefore
+    # takes IW+PW cycles, not IW.
     iw = int(input_shape[3]) if input_shape and len(input_shape) >= 4 else 0
     ph = int(padding[0]) if padding and len(padding) >= 1 else 0
     pw = int(padding[1]) if padding and len(padding) >= 2 else 0
 
     if iw <= 0:
-        # No geometry supplied — fall back to pointwise shape. The call site
-        # should always pass input_shape and padding for spatial convs.
-        return k_total + CONV_PIPELINE_STAGES
+        # No geometry supplied — fall back to pointwise shape.
+        return 1 + oc_passes * pass_cycles
 
     fill_rows = max(kh_i - 1 - ph, 0)
     fill_cols = max(kw_i - pw, 1)
-    # 3 = BIAS + SCALE + OUTPUT (no extra LATCH cycle: the window is already
-    # valid at the trigger input, so ST_RUNNING starts the same cycle).
-    return fill_rows * iw + fill_cols + k_total + 3
+    return fill_rows * (iw + pw) + fill_cols + oc_passes * pass_cycles
 
 
 class GoldenGenerationError(ValueError):
@@ -1068,24 +1116,30 @@ def build_fx_pipeline_ir_payload(
             "num_weights": expected_num_weights,
             "scale_factor": float(metadata["scale_factor"]),
             "zero_point": coerce_int(metadata["zero_point"], f"{module_id}.zero_point"),
-            "pipeline_latency_cycles": (
-                compute_conv2d_latency_cycles(
-                    coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape"),
-                    input_shape=coerce_shape(metadata["input_shape"], f"{module_id}.input_shape"),
-                    stride=operation_map.get(module_id, {}).get("stride", [1, 1]),
-                    padding=operation_map.get(module_id, {}).get("padding", [0, 0]),
-                )
-                if op_type == "conv2d"
-                else PIPELINE_LATENCY_CYCLES[op_type]
-            ),
             "clock_period_ns": 20,
             "input_width_bits": input_width_bits,
             "output_width_bits": output_width_bits,
             **SIGNAL_LITERALS,
         }
         if op_type == "conv2d":
-            layer_payload["stride"] = list(operation_map.get(module_id, {}).get("stride", [1, 1]))
-            layer_payload["padding"] = list(operation_map.get(module_id, {}).get("padding", [0, 0]))
+            conv_weight_shape = coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape")
+            conv_input_shape = coerce_shape(metadata["input_shape"], f"{module_id}.input_shape")
+            conv_stride = list(operation_map.get(module_id, {}).get("stride", [1, 1]))
+            conv_padding = list(operation_map.get(module_id, {}).get("padding", [0, 0]))
+            conv_oc = int(conv_weight_shape[0]) if conv_weight_shape else 0
+            conv_mp = conv_mac_parallelism(conv_oc)
+            layer_payload["stride"] = conv_stride
+            layer_payload["padding"] = conv_padding
+            layer_payload["mac_parallelism"] = conv_mp
+            layer_payload["pipeline_latency_cycles"] = compute_conv2d_latency_cycles(
+                conv_weight_shape,
+                input_shape=conv_input_shape,
+                stride=conv_stride,
+                padding=conv_padding,
+                mac_parallelism=conv_mp,
+            )
+        else:
+            layer_payload["pipeline_latency_cycles"] = PIPELINE_LATENCY_CYCLES[op_type]
         if op_type == "conv2d" and not bias_values:
             raise GoldenGenerationError(f"Layer '{module_id}' did not serialize a bias vector.")
         if op_type == "add":

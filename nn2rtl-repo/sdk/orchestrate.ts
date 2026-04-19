@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   query,
   type AgentDefinition,
+  type EffortLevel,
   type OutputFormat,
   type SDKMessage,
   type SDKResultMessage,
@@ -56,11 +57,6 @@ const APPEND_SKILL_TO_PROMPT = {
   surgeon: false,
 } as const;
 
-const GLOBAL_ALLOWED_TOOLS = [
-  "Agent",
-  ...new Set(Object.values(AGENT_MCP_TOOLS).flat()),
-];
-
 type SynthesisReport = z.infer<typeof synthesisReportZod>;
 type AgentSlug = (typeof AGENT_SLUGS)[AgentName];
 type AgentRunResult<T> = {
@@ -94,6 +90,14 @@ export type RunPipelineOptions = {
   resume?: boolean;
   runtime?: Partial<OrchestratorRuntime>;
   maxRetries?: number;
+  // When set, restrict the pipeline to a single module (scoped run for
+  // testing). The pipeline state is built with only that module in the
+  // module set, so isDone() resolves after it passes or fail_aborts.
+  only?: string;
+  // Inverse of `only` — list of module_ids to exclude from the run. The
+  // pipeline state is built with every other module; excluded ones never
+  // appear in moduleOrder and don't block isDone().
+  except?: string[];
 };
 
 const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
@@ -418,6 +422,13 @@ export async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentD
     ? `${body}\n\nSupplemental skill reference:\n\n${parsedSkill.body}`
     : body;
 
+  const effortRaw = typeof frontmatter.effort === "string" ? frontmatter.effort : undefined;
+  const effort: EffortLevel | undefined =
+    effortRaw === "low" || effortRaw === "medium" || effortRaw === "high" ||
+    effortRaw === "xhigh" || effortRaw === "max"
+      ? effortRaw
+      : undefined;
+
   return {
     description: AGENT_CONFIG[agentName].description,
     prompt,
@@ -426,17 +437,8 @@ export async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentD
     model: AGENT_CONFIG[agentName].model,
     maxTurns: AGENT_CONFIG[agentName].maxTurns,
     skills,
+    effort,
   };
-}
-
-export async function loadAllAgentDefinitions(): Promise<Record<string, AgentDefinition>> {
-  const entries = await Promise.all(
-    Object.values(AGENT_SLUGS).map(
-      async (slug) => [slug, await loadPluginAgentDefinition(slug)] as const,
-    ),
-  );
-
-  return Object.fromEntries(entries);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -506,6 +508,16 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   }
   const layer = payload.layer_ir as unknown as LayerIR;
   const verif = payload.verif_result as unknown as VerifResult;
+
+  // Distinguish the sim-passed / synth-only failure from a full functional
+  // failure. When sim passed, the datapath is already correct by evidence —
+  // Surgeon must NOT rewrite the numerical logic, only the constructs that
+  // upset Yosys (wide unrolled blocks, non-synthesizable $signed patterns,
+  // deep combinational cones, etc.). Framing this narrowly prevents Surgeon
+  // from regressing sim in the process of "fixing" synth.
+  const isSynthOnlyFailure =
+    verif.status_class === "sim_passed" && verif.failure_class === "synthesis_failed";
+
   const lines = [
     "Compact repair brief:",
     `- op_type=${layer.op_type}; bus contract=data_in ${layer.input_width_bits} bits, data_out ${layer.output_width_bits} bits; preserve the public interface exactly.`,
@@ -513,8 +525,46 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
     `- current failure: status=${verif.status}; status_class=${verif.status_class ?? "n/a"}; failure_class=${verif.failure_class ?? "n/a"}.`,
     "- compiler-first rule: if status=syntax_error or compiler stderr is populated, read iverilog/verilator stderr before touching datapath logic.",
     "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
-    "- invariant rule: find all [INVARIANT:*] comments first and treat those lines as protected unless raw evidence directly implicates them.",
   ];
+
+  if (isSynthOnlyFailure) {
+    lines.push(
+      "- SYNTHESIS-ONLY FAILURE: simulation passed with correct outputs and exact timing." +
+      " The datapath is proven correct — DO NOT rewrite numerical logic, MAC ordering," +
+      " requantisation, ready/valid handshaking, or state transitions." +
+      " Your ONLY job is to make the existing logic synthesizable." +
+      " Typical synth-hostile patterns to target: deep combinational cones that abc can't map," +
+      " unsynthesizable constructs (non-constant array indices into large regs, dynamic $signed," +
+      " latch inference from incomplete case statements), or register/wire width issues." +
+      " Read the Yosys error output below carefully and make the minimum change that addresses it.",
+    );
+  } else {
+    // Any non-synth-only failure means the module has not yet been proven to
+    // simulate correctly. No line is invariant regardless of [INVARIANT:*]
+    // markers — markers are placed by Foundry before verification and may sit
+    // on the exact buggy lines.
+    lines.push(
+      "- invariant scope: this module has NOT yet passed functional verification." +
+      " [INVARIANT:*] markers were placed speculatively by Foundry and may cover the bug." +
+      " Treat every line as mutable — no marker confers protection until sim+synth both pass.",
+    );
+  }
+
+  // Flag when verif.expected/got have been windowed (synth-only drops them
+  // entirely; sim-failure trims them to a window around first_mismatch_index)
+  // so Surgeon doesn't try to scan the arrays for a "late" mismatch it won't
+  // find. outputs_expected is authoritative for the total vector length.
+  const expLen = Array.isArray(verif.expected) ? verif.expected.length : 0;
+  const totalLen = verif.outputs_expected ?? 0;
+  if (isSynthOnlyFailure && expLen === 0 && totalLen > 0) {
+    lines.push(
+      `- verif arrays: expected/got were dropped (sim passed, full ${totalLen}-sample vectors are not diagnostic for a synth-only failure).`,
+    );
+  } else if (expLen > 0 && totalLen > expLen) {
+    lines.push(
+      `- verif arrays: expected/got are a ±${SURGEON_MISMATCH_WINDOW}-sample window around first_mismatch_index=${verif.first_mismatch_index} (${expLen} of ${totalLen} total samples shown).`,
+    );
+  }
 
   if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
     const kh = layer.weight_shape[2];
@@ -547,24 +597,24 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
 }
 
 export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
+  // The outer query() IS the agent (see runDelegatedAgent: no Task/Agent
+  // dispatch, agent body is attached via systemPrompt.append). This prompt is
+  // therefore a direct task instruction, not a "dispatch to subagent" message.
   const lines = [
-    `Invoke the \`${slug}\` subagent immediately.`,
-    "Do not solve the task yourself.",
-    "Do not use any other subagent.",
-    "Return only the subagent's final JSON object.",
-    "The only data channel into the subagent is this prompt string, so the payload is embedded below as JSON.",
+    `You are the \`${slug}\` agent. Execute the task described below.`,
+    "The payload is embedded as JSON at the end of this message.",
   ];
 
   if (slug === "foundry" || slug === "surgeon") {
     lines.push(
       "",
-      "HARD CONTRACT for this subagent — do not accept any other output:",
-      "1. The subagent MUST call the mcp__nn2rtl-tools__write_verilog tool exactly once to persist the RTL before returning.",
-      "2. The subagent's final message MUST be a single JSON object with exactly these five fields and NOTHING else:",
+      "HARD CONTRACT — do not accept any other output:",
+      "1. You MUST call the mcp__nn2rtl-tools__write_verilog tool exactly once to persist the RTL before returning.",
+      "2. Your final message MUST be a single JSON object with exactly these five fields and NOTHING else:",
       '   { "module_id": string, "spec_hash": string, "verilog_source": string, "generated_by": "Foundry"|"Surgeon", "attempt": integer >= 1 }',
       "3. `verilog_source` MUST be the full Verilog source code as a single string (the same string passed to write_verilog).",
       "4. Do NOT invent other keys (no `source_path`, no `port_list`, no `module_name`). Do NOT wrap the JSON in markdown fences.",
-      "5. If the subagent cannot comply, it must still return the five-field JSON with a best-effort `verilog_source`.",
+      "5. If you cannot comply, still return the five-field JSON with a best-effort `verilog_source`.",
     );
   }
 
@@ -625,7 +675,16 @@ async function runDelegatedAgent<T>(
   runtime: OrchestratorRuntime,
 ): Promise<AgentRunResult<T>> {
   const agentName = normalizeAgentName(slug);
-  const agents = await loadAllAgentDefinitions();
+  // Single-layer dispatch: the agent body runs AS the query()'s main agent,
+  // not as a Task/Agent-dispatched subagent. This eliminates the outer-driver
+  // middleman that was burning ~60k output tokens wrapping the subagent's
+  // tool-use loop. We load one agent definition instead of all three, and we
+  // do not register `agents` or expose the `Agent`/`Task` tools.
+  const agent = await loadPluginAgentDefinition(slug);
+  const agentTools = agent.tools ?? [...AGENT_MCP_TOOLS[slug]];
+  const disallowed = [
+    ...new Set([...(agent.disallowedTools ?? []), "Agent", "Task"]),
+  ];
   const messages: SDKMessage[] = [];
   let finalResult: SDKResultMessage | null = null;
 
@@ -633,12 +692,19 @@ async function runDelegatedAgent<T>(
     prompt: buildDelegationPrompt(slug, payload),
     options: {
       cwd: repoRoot,
-      tools: ["Agent"],
-      allowedTools: ["Agent", ...AGENT_MCP_TOOLS[slug]],
+      model: AGENT_CONFIG[agentName].model,
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        append: agent.prompt,
+      },
+      tools: agentTools,
+      allowedTools: agentTools,
+      disallowedTools: disallowed,
       plugins: [{ type: "local", path: pluginPath }],
-      agents,
       outputFormat,
       maxTurns: AGENT_CONFIG[agentName].maxTurns,
+      ...(agent.effort ? { effort: agent.effort } : {}),
     },
   })) {
     messages.push(message);
@@ -649,7 +715,7 @@ async function runDelegatedAgent<T>(
   }
 
   if (!finalResult) {
-    throw new Error(`No final result message was received for subagent '${slug}'.`);
+    throw new Error(`No final result message was received for agent '${slug}'.`);
   }
 
   return {
@@ -1636,6 +1702,45 @@ function unifiedishDiff(priorSource: string, nextSource: string, maxChars = 6000
   return `${joined.slice(0, maxChars)}\n[... diff truncated at ${maxChars} chars ...]`;
 }
 
+// Window size (samples before and after) kept around first_mismatch_index when
+// trimming expected/got arrays for the Surgeon payload. 64 samples gives enough
+// local context to see the pattern (e.g. an off-by-one, sign flip, saturation)
+// without dumping the full 100k-element vector that dominated cache-creation.
+const SURGEON_MISMATCH_WINDOW = 64;
+
+// Strip large noisy arrays from a VerifResult before embedding it in the
+// Surgeon prompt. Previously the full 100,352-element expected/got arrays were
+// always passed through, costing ~100k cache-creation tokens per Surgeon call
+// for conv layers. They are only diagnostic when there's a sim mismatch, and
+// even then only a window around `first_mismatch_index` is load-bearing —
+// beyond that window the arrays are just token bloat.
+function trimVerifResultForSurgeon(verif: VerifResult): VerifResult {
+  const hasArrays = Array.isArray(verif.expected) && Array.isArray(verif.got);
+  if (!hasArrays) return verif;
+
+  // Synthesis-only failure: sim passed, arrays match. They contribute nothing
+  // and waste ~100k tokens of cache. Drop them entirely.
+  if (verif.status_class === "sim_passed") {
+    return { ...verif, expected: [], got: [] };
+  }
+
+  const idx = verif.first_mismatch_index ?? -1;
+  if (idx < 0) return verif;
+
+  const expected = verif.expected as number[];
+  const got = verif.got as number[];
+  const start = Math.max(0, idx - SURGEON_MISMATCH_WINDOW);
+  const end = Math.min(expected.length, idx + SURGEON_MISMATCH_WINDOW + 1);
+  // Note: `first_mismatch_index` stays absolute; Surgeon can compute the
+  // local offset within the trimmed arrays as (first_mismatch_index - start).
+  // We don't add window-start fields because verifResultSchema is strict.
+  return {
+    ...verif,
+    expected: expected.slice(start, end),
+    got: got.slice(start, end),
+  };
+}
+
 async function invokeSurgeon(
   brokenModule: VerilogModule,
   verifResult: VerifResult,
@@ -1652,6 +1757,7 @@ async function invokeSurgeon(
   );
 
   const prior_attempts = priorSurgeonAttempts(brokenModule.module_id);
+  const trimmedVerif = trimVerifResultForSurgeon(verifResult);
 
   let result: AgentRunResult<VerilogModule>;
   try {
@@ -1659,7 +1765,7 @@ async function invokeSurgeon(
       "surgeon",
       {
         broken_module: brokenModule,
-        verif_result: verifResult,
+        verif_result: trimmedVerif,
         layer_ir: layerIr,
         prior_attempts,
         write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
@@ -1748,7 +1854,11 @@ function computeExpectedSpecHash(layer: LayerIR): string {
     const stride = layer.stride && layer.stride.length >= 2 ? `_st${layer.stride[0]}x${layer.stride[1]}` : "";
     const padding =
       layer.padding && layer.padding.length >= 2 ? `_p${layer.padding[0]}x${layer.padding[1]}` : "";
-    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+    // mac_parallelism affects the FSM's OC-group iteration, so two layers
+    // with identical geometry but different mac_parallelism have structurally
+    // different RTL and MUST NOT be clone-substituted for each other.
+    const mp = layer.mac_parallelism ? `_mp${layer.mac_parallelism}` : "";
+    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}${mp}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
   }
   if (layer.op_type === "maxpool") {
     // The schema's superRefine guarantees these three arrays exist and are
@@ -1893,7 +2003,28 @@ export async function runPipeline(
 
   const layerIrBootstrap = await ensureLayerIr(checkpointPath, runtime);
   const pipelineIr = layerIrBootstrap.pipelineIr;
-  const moduleIds = pipelineIr.layers.map((layer) => layer.module_id);
+  const allModuleIds = pipelineIr.layers.map((layer) => layer.module_id);
+  if (options.only && !allModuleIds.includes(options.only)) {
+    throw new Error(
+      `--only '${options.only}' is not a module in the current LayerIR. ` +
+        `Valid module_ids: [${allModuleIds.join(", ")}].`,
+    );
+  }
+  const exceptSet = new Set(options.except ?? []);
+  for (const id of exceptSet) {
+    if (!allModuleIds.includes(id)) {
+      throw new Error(
+        `--except '${id}' is not a module in the current LayerIR. ` +
+          `Valid module_ids: [${allModuleIds.join(", ")}].`,
+      );
+    }
+  }
+  const moduleIds = options.only
+    ? [options.only]
+    : allModuleIds.filter((id) => !exceptSet.has(id));
+  if (moduleIds.length === 0) {
+    throw new Error("--except excluded every module; nothing to run.");
+  }
   const statePath = resolveFromSdk(PIPELINE_CONFIG.pipeline_state_path);
   const maxRetries = options.maxRetries ?? PIPELINE_CONFIG.max_retries;
   const manager = new PipelineStateManager(moduleIds, maxRetries);
@@ -2267,9 +2398,13 @@ export function parseCliArgs(argv: string[]): {
   checkpointPath: string;
   resume: boolean;
   maxRetries: number | undefined;
+  only: string | undefined;
+  except: string[];
 } {
   let resume = false;
   let maxRetries: number | undefined;
+  let only: string | undefined;
+  const except: string[] = [];
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -2293,6 +2428,30 @@ export function parseCliArgs(argv: string[]): {
         throw new Error(`--max-retries must be a non-negative integer, got '${raw}'.`);
       }
       maxRetries = parsed;
+    } else if (arg === "--only") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--only requires a module_id argument.");
+      }
+      only = next;
+    } else if (arg.startsWith("--only=")) {
+      only = arg.slice("--only=".length);
+      if (!only) {
+        throw new Error("--only= requires a non-empty module_id.");
+      }
+    } else if (arg === "--except") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--except requires a comma-separated module_id argument.");
+      }
+      for (const id of next.split(",").map((s) => s.trim()).filter(Boolean)) {
+        except.push(id);
+      }
+    } else if (arg.startsWith("--except=")) {
+      const raw = arg.slice("--except=".length);
+      for (const id of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+        except.push(id);
+      }
     } else if (arg.startsWith("--")) {
       throw new Error(`Unknown flag '${arg}'.`);
     } else {
@@ -2301,13 +2460,19 @@ export function parseCliArgs(argv: string[]): {
   }
 
   if (positional.length < 1) {
-    throw new Error("Usage: tsx main.ts <checkpoint-path> [--resume] [--max-retries N]");
+    throw new Error("Usage: tsx main.ts <checkpoint-path> [--resume] [--max-retries N] [--only MODULE_ID | --except MODULE_ID[,MODULE_ID...]]");
+  }
+
+  if (only && except.length > 0) {
+    throw new Error("--only and --except are mutually exclusive.");
   }
 
   return {
     checkpointPath: positional[0],
     resume,
     maxRetries,
+    only,
+    except,
   };
 }
 
@@ -2324,6 +2489,8 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   await runPipeline(cli.checkpointPath, {
     resume: cli.resume,
     maxRetries: cli.maxRetries,
+    only: cli.only,
+    except: cli.except,
   });
 }
 

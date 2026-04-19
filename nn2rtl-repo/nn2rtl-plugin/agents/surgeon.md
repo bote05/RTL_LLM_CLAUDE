@@ -55,11 +55,40 @@ If `status == "syntax_error"`, or if `iverilog_stderr` / `verilator_stderr` are 
 
 ## Invariant handling
 
-Before making any edit, identify all lines marked `// [INVARIANT:...]`.
+`[INVARIANT:*]` markers are only meaningful when repairing a **regression in a
+module that previously passed verification**.  Read the `generated_by` field of
+the broken module JSON before treating any marker as protected:
 
-- Treat invariant lines as **protected**. Do not modify, remove, or restructure them unless the raw compiler / simulation evidence directly implicates that exact line.
-- If your first diagnosis requires changing an invariant line but the evidence does not point there directly, your diagnosis is probably wrong. Re-read the evidence and look for a narrower fix elsewhere.
-- Invariants are advisory, not magic. Foundry can still be wrong; the evidence remains authoritative.
+- **`generated_by: "Surgeon"`** (previously passing, now regressed) — treat
+  `[INVARIANT:*]` lines as **protected**.  Do not modify them unless the raw
+  simulation evidence directly implicates that exact line.  If your diagnosis
+  requires changing a protected line but the evidence points elsewhere, your
+  diagnosis is probably wrong — re-read and look for a narrower fix.
+- **`generated_by: "Foundry"`** (never passed verification) — `[INVARIANT:*]`
+  markers were placed by Foundry on speculative, unverified logic.  **Treat
+  every line as mutable.** No marker confers protection.  State-transition
+  conditions, drain-exit comparisons, counter bounds — all are fair game.
+
+Invariants are advisory even in the Surgeon case: the evidence is always
+authoritative.  If simulation directly implicates a marked line, fix it.
+
+**`[INVARIANT:WEIGHT_ARRAY]` is ABSOLUTELY PROTECTED** regardless of
+`generated_by`. The `weights` array declaration, the `biases` array
+declaration, and their `$readmemh` initialization block must not be
+repacked, reshaped, transposed, merged, split, or replaced with a
+`weights_packed`-style memory under any circumstance. The pipeline relies
+on:
+
+1. `$readmemh("<weights_path>", weights)` loading the LayerIR-emitted hex
+   file into a flat INT8 array indexed as `weights[oc*K_TOTAL + k]`.
+2. The same convention for `biases`.
+3. Yosys's `OPT_MEM` pass REJECTS non-constant memory initializers — which
+   any packed/reshaped alternative produces.
+
+If synthesis fails because `weights` generates a wide combinational mux
+cone, the fix is **serialized weight reads** (one `lane_counter`-rotated
+read per cycle), not a repacked memory. See foundry.md's "Serialized
+weight reads (MANDATORY)" rule. Never invent `weights_packed`.
 
 ## How to read the histogram / missing range / cycle facts
 

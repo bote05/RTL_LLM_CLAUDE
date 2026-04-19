@@ -61,6 +61,11 @@ export const layerIrBaseSchema = z
     // Conv2d geometry — emitted by the frontends for op-aware generation/repair.
     stride: z.array(z.number().int().positive()).optional(),
     padding: z.array(z.number().int().nonnegative()).optional(),
+    // Number of parallel MAC lanes Foundry must instantiate for this layer.
+    // The FSM runs ceil(OC / mac_parallelism) passes per output pixel. Only
+    // emitted for op_type == "conv2d"; ignored otherwise. Frontend computes
+    // it as min(OC, PIPELINE_CONFIG.MAX_PARALLEL_MACS).
+    mac_parallelism: z.number().int().positive().optional(),
     // MaxPool2d geometry — optional at the type level because only present
     // when op_type === "maxpool". The *refined* schema below requires them
     // for maxpool layers; this base schema does not so that .pick()/.omit()

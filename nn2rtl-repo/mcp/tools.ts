@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -27,18 +27,24 @@ export const SKY130_LIB_PATH = path.resolve(
   "sky130_fd_sc_hd__tt_025C_1v80.lib",
 );
 
-// Hard wall-clock cap for Yosys synthesis. Foundry can emit combinational
-// blobs that abc never finishes mapping (a 64x64 1x1 conv unrolled is
-// ~4096 parallel multipliers, which runs for hours). We'd rather fail fast
-// and tell Surgeon "synthesis timed out — the design is too combinational"
-// than burn host CPU forever.
-export const YOSYS_TIMEOUT_MS = 120_000;
-// Yosys can emit tens of MB of stdout on a single pass (mostly repetitive
-// warnings like "No latch inferred" from memory-heavy generate blocks).
-// Node's default execFile maxBuffer is 1 MiB — when exceeded the child is
-// killed and what looks like a synth failure is actually a buffer overflow.
-// Raise the cap to 64 MiB; anything larger than that is pathological.
+// Hard wall-clock cap for Yosys synthesis. Set to 25 minutes — the manual
+// run that proved synthesizability completed in ~16 min, so 25 min gives
+// a ~55% margin above the proven baseline. Designs that can't hit that
+// budget get capped; raise per-run if you know you're exercising a
+// pathological layer.
+export const YOSYS_TIMEOUT_MS = 1_500_000;
+// Deprecated — kept exported for callers that may reference it. Size control
+// is now done via rolling head/tail buffers inside the yosys spawn path, not
+// via execFile maxBuffer.
 export const YOSYS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+// Per-stream rolling buffer caps for yosys stdout/stderr. Yosys can emit
+// tens of MB of repetitive dead-port / no-latch warnings on large designs.
+// We keep the first N bytes ("head") verbatim and the last M bytes ("tail")
+// as a ring, dropping the middle. That way the orchestrator-side capYosysReport
+// head+ERRORS+tail extraction still has real content to work with, and the
+// MCP side can't blow memory on a runaway print.
+const YOSYS_STREAM_HEAD_CAP_BYTES = 512 * 1024;
+const YOSYS_STREAM_TAIL_CAP_BYTES = 1024 * 1024;
 const SKY130_ABC_DRIVING_CELL = "sky130_fd_sc_hd__buf_1";
 const SKY130_ABC_OUTPUT_LOAD_FF = 10.0;
 
@@ -599,6 +605,123 @@ export async function run_verilator(
   }, runtime);
 }
 
+// Rolling-buffer stdout/stderr capture for yosys. Head is kept verbatim up
+// to HEAD_CAP; after that, further output accumulates into a ring-limited
+// tail capped at TAIL_CAP. Middle bytes are elided but their count is
+// reported so capYosysReport downstream can reconstruct the structure.
+type RollingBuffer = {
+  head: string[];
+  headBytes: number;
+  tail: string[];
+  tailBytes: number;
+  elided: number;
+};
+
+function createRollingBuffer(): RollingBuffer {
+  return { head: [], headBytes: 0, tail: [], tailBytes: 0, elided: 0 };
+}
+
+function appendRolling(buf: RollingBuffer, chunk: string): void {
+  if (!chunk) return;
+  let remaining = chunk;
+  if (buf.headBytes < YOSYS_STREAM_HEAD_CAP_BYTES) {
+    const room = YOSYS_STREAM_HEAD_CAP_BYTES - buf.headBytes;
+    const take = remaining.length <= room ? remaining : remaining.slice(0, room);
+    buf.head.push(take);
+    buf.headBytes += take.length;
+    remaining = remaining.length <= room ? "" : remaining.slice(room);
+    if (!remaining) return;
+  }
+  buf.tail.push(remaining);
+  buf.tailBytes += remaining.length;
+  while (buf.tailBytes > YOSYS_STREAM_TAIL_CAP_BYTES && buf.tail.length > 1) {
+    const drop = buf.tail.shift()!;
+    buf.tailBytes -= drop.length;
+    buf.elided += drop.length;
+  }
+}
+
+function materializeRolling(buf: RollingBuffer): string {
+  const head = buf.head.join("");
+  const tail = buf.tail.join("");
+  if (!buf.elided) return head + tail;
+  return `${head}\n...[${buf.elided} bytes of middle output elided]...\n${tail}`;
+}
+
+type YosysSpawnResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  spawnError?: NodeJS.ErrnoException;
+};
+
+async function runYosysViaSpawn(
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+): Promise<YosysSpawnResult> {
+  return new Promise((resolve) => {
+    const stdoutBuf = createRollingBuffer();
+    const stderrBuf = createRollingBuffer();
+    let timedOut = false;
+    let spawnError: NodeJS.ErrnoException | undefined;
+    let settled = false;
+
+    const child = spawn("yosys", args, {
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: true,
+      // stdio default: pipes for stdout/stderr, no stdin
+    });
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => appendRolling(stdoutBuf, chunk));
+    child.stderr?.on("data", (chunk: string) => appendRolling(stderrBuf, chunk));
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      // SIGTERM first; on Windows spawn translates this to TerminateProcess.
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // already exited
+      }
+    }, options.timeoutMs);
+
+    const settle = (result: YosysSpawnResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      spawnError = err;
+      settle({
+        stdout: materializeRolling(stdoutBuf),
+        stderr: materializeRolling(stderrBuf),
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        spawnError,
+      });
+    });
+
+    child.on("close", (code, signal) => {
+      settle({
+        stdout: materializeRolling(stdoutBuf),
+        stderr: materializeRolling(stderrBuf),
+        exitCode: code,
+        signal,
+        timedOut,
+        spawnError,
+      });
+    });
+  });
+}
+
 export async function run_yosys(
   verilog_source: string,
   module_name: string,
@@ -661,76 +784,72 @@ export async function run_yosys(
       abcCommand,
       `stat -liberty ${sky130Lib}`,
     ].join("; ");
-    let didTimeout = false;
-    try {
-      const { stdout, stderr } = await runtime.commandRunner(
-        "yosys",
-        ["-p", yosysScript, verilogPath],
-        {
-          cwd: tempDir,
-          env: augmentEnvForOssCadSuite(runtime.env),
-          timeout: YOSYS_TIMEOUT_MS,
-          maxBuffer: YOSYS_MAX_BUFFER_BYTES,
-        },
-      );
+    // Use spawn directly (not runtime.commandRunner / execFileAsync) because
+    // execFile only returns stdout/stderr on the rejection object AFTER the
+    // child has exited; on kill-by-timeout, Node on Windows can drop buffered
+    // output. Streaming with spawn and rolling buffers preserves whatever the
+    // child managed to print right up to the kill signal — critical for
+    // Surgeon repairs, which used to get empty "Command failed: ..." messages
+    // and repair blind.
+    const spawnResult = await runYosysViaSpawn(
+      ["-p", yosysScript, verilogPath],
+      {
+        cwd: tempDir,
+        env: augmentEnvForOssCadSuite(runtime.env),
+        timeoutMs: YOSYS_TIMEOUT_MS,
+      },
+    );
 
-      const report = [stdout, stderr].filter(Boolean).join("\n");
-      return {
-        success: true,
-        report,
-        ...parseYosysReport(report),
-      };
-    } catch (error: unknown) {
-      if (isSystemSpawnError(error)) {
-        throw error;
+    if (spawnResult.spawnError) {
+      // ENOENT / EACCES / etc. — propagate as a system error so the caller
+      // doesn't route it to Surgeon as a synthesis failure.
+      if (isSystemSpawnError(spawnResult.spawnError)) {
+        throw spawnResult.spawnError;
       }
-      // execFile sets error.killed=true when it killed the child for
-      // exceeding `timeout`. Distinguish timeout from ordinary synth failure
-      // so Surgeon sees a clear diagnostic instead of empty stderr.
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        (error as { killed?: boolean }).killed === true
-      ) {
-        didTimeout = true;
-      }
-      // Capture whatever Yosys managed to print before dying. execFile
-      // populates `stdout`/`stderr` on the rejected error even on non-zero
-      // exits and timeouts, so surface both instead of just `message`.
-      const errObj = error as { stdout?: unknown; stderr?: unknown };
-      const stdoutStr =
-        typeof errObj.stdout === "string"
-          ? errObj.stdout
-          : Buffer.isBuffer(errObj.stdout)
-            ? errObj.stdout.toString("utf8")
-            : "";
-      const stderrStr =
-        typeof errObj.stderr === "string"
-          ? errObj.stderr
-          : Buffer.isBuffer(errObj.stderr)
-            ? errObj.stderr.toString("utf8")
-            : stderrFromUnknown(error);
-      const captured = [stdoutStr, stderrStr].filter(Boolean).join("\n");
-      const report = didTimeout
-        ? [
-            `Yosys synthesis timed out after ${YOSYS_TIMEOUT_MS / 1000}s. ` +
-              `Likely cause: the design is a single very deep/wide combinational blob ` +
-              `(e.g. all MACs of a conv unrolled into one always block) that abc cannot ` +
-              `map quickly. Rewrite the module to use the intended registered ` +
-              `output-stationary MAC-array structure so the combinational cone ` +
-              `between any two registers stays small.`,
-            "---",
-            captured,
-          ].join("\n")
-        : captured || "Yosys exited non-zero with no output.";
+      // Unusual spawn failure without a classifiable errno. Surface the
+      // captured output plus the error message.
+      const captured = [spawnResult.stdout, spawnResult.stderr].filter(Boolean).join("\n");
       return {
         success: false,
         lut_count: 0,
         fmax_mhz: 0,
         area_um2: 0,
-        report,
+        report: [
+          `Yosys spawn error: ${spawnResult.spawnError.message}`,
+          captured,
+        ].filter(Boolean).join("\n"),
       };
     }
+
+    const captured = [spawnResult.stdout, spawnResult.stderr].filter(Boolean).join("\n");
+    const cleanExit = spawnResult.exitCode === 0 && !spawnResult.timedOut && !spawnResult.signal;
+
+    if (cleanExit) {
+      return {
+        success: true,
+        report: captured,
+        ...parseYosysReport(captured),
+      };
+    }
+
+    const prefix = spawnResult.timedOut
+      ? `Yosys synthesis timed out after ${YOSYS_TIMEOUT_MS / 1000}s. ` +
+        `Likely cause: the design is a single very deep/wide combinational blob ` +
+        `(e.g. all MACs of a conv unrolled into one always block) that abc cannot ` +
+        `map quickly. Rewrite the module to use the intended registered ` +
+        `output-stationary MAC-array structure so the combinational cone ` +
+        `between any two registers stays small.`
+      : spawnResult.signal
+        ? `Yosys was killed by signal ${spawnResult.signal}.`
+        : `Yosys exited with code ${spawnResult.exitCode}.`;
+    const report = [prefix, "---", captured].filter(Boolean).join("\n");
+    return {
+      success: false,
+      lut_count: 0,
+      fmax_mhz: 0,
+      area_um2: 0,
+      report,
+    };
   }, runtime);
 }
 

@@ -29,13 +29,23 @@
 export const AGENT_CONFIG = {
   Cartographer: { model: "claude-sonnet-4-6" as const, maxTurns: 30, description: "Model extractor. Runs once at pipeline start. Emits output/layer_ir.json." },
   Foundry:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
-  Surgeon:      { model: "claude-opus-4-7"  as const, maxTurns: 8,  description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
+  Surgeon:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
 } as const;
 
 export type AgentName = keyof typeof AGENT_CONFIG;
 
 export const PIPELINE_CONFIG = {
   max_retries: 3,
+  // Cap on the number of parallel MAC lanes Foundry instantiates per conv
+  // layer. Per-layer mac_parallelism = min(OC, MAX_PARALLEL_MACS). The FSM
+  // iterates OC in groups of mac_parallelism — this keeps the combinational
+  // cone small enough for Sky130 / ABC to map inside YOSYS_TIMEOUT_MS. 8 is
+  // the current sweet spot: 8×8-bit INT8 multipliers feeding a 3-level adder
+  // tree maps in seconds on Sky130. Raising it trades synth time for
+  // throughput; dropping it trades throughput for synth time. Python
+  // frontends must read this same value when computing mac_parallelism and
+  // pipeline_latency_cycles.
+  MAX_PARALLEL_MACS: 8,
   output_dir: "../output",
   rtl_dir: "../output/rtl",
   tb_dir: "../output/tb",

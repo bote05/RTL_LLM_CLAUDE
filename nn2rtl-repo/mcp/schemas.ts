@@ -52,6 +52,7 @@ export const layerIrBaseSchema = z
     // Conv2d geometry — emitted by the frontends for op-aware generation/repair.
     stride: z.array(z.number().int().positive()).optional(),
     padding: z.array(z.number().int().nonnegative()).optional(),
+    mac_parallelism: z.number().int().positive().optional(),
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
     pool_padding: z.array(z.number().int().nonnegative()).optional(),
