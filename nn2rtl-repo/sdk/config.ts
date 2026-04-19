@@ -46,6 +46,17 @@ export const PIPELINE_CONFIG = {
   // frontends must read this same value when computing mac_parallelism and
   // pipeline_latency_cycles.
   MAX_PARALLEL_MACS: 8,
+  // Hard capability ceiling on per-layer bus width. Foundry's ability to emit
+  // correct bit-slicing scales poorly past a few thousand bits; burning Foundry
+  // + Surgeon attempts on a layer beyond that point is pure waste. 4096 bits
+  // = 512 channels of INT8 — covers ResNet-50 up to and including L2. Wider
+  // layers (L3/L4 at 8192/16384-bit buses) need tiled channel streaming,
+  // which is not yet implemented: the orchestrator fast-fails those layers
+  // with failure_class=architectural_unsupported and routes them directly to
+  // fail_abort (NOT to Surgeon — Surgeon cannot fix a capability gap).
+  // Change this when tiled streaming ships; until then, architectural_unsupported
+  // layers are reported separately in the pipeline summary, not as RTL failures.
+  MAX_SUPPORTED_BUS_BITS: 4096,
   output_dir: "../output",
   rtl_dir: "../output/rtl",
   tb_dir: "../output/tb",

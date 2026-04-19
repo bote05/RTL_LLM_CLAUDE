@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -20,6 +20,15 @@ const repoRoot = path.resolve(
 );
 export const TB_SOURCE_PATH = path.resolve(repoRoot, "tb", "static_verilator_tb.cpp");
 export const TB_JSON_HPP_PATH = path.resolve(repoRoot, "tb", "third_party", "json.hpp");
+
+// Handwritten library modules that generated RTL may instantiate. Each of
+// run_iverilog / run_verilator / run_yosys copies these into its temp build
+// dir and passes them as additional source files so "unknown module" errors
+// don't appear at elaboration time. Add to this list when a new handwritten
+// library module lands in rtl_library/.
+export const RTL_LIBRARY_SOURCES: readonly string[] = [
+  path.resolve(repoRoot, "rtl_library", "coord_scheduler.v"),
+];
 export const SKY130_LIB_PATH = path.resolve(
   repoRoot,
   "vendor",
@@ -33,6 +42,14 @@ export const SKY130_LIB_PATH = path.resolve(
 // budget get capped; raise per-run if you know you're exercising a
 // pathological layer.
 export const YOSYS_TIMEOUT_MS = 1_500_000;
+
+// Hard wall-clock cap for the Verilator simulation binary (after build).
+// Motivation: a partially-functioning FSM that fires valid_out intermittently
+// never triggers the TB's hang_budget (which only catches total silence), so
+// the binary can run forever. Capping at 10 min lets us fail fast and route
+// the module to Surgeon with failure_class=verilator_timeout instead of
+// burning wall-clock. Covers every layer; not ResNet-specific.
+export const VERILATOR_SIM_TIMEOUT_MS = 10 * 60 * 1000;
 // Deprecated — kept exported for callers that may reference it. Size control
 // is now done via rolling head/tail buffers inside the yosys spawn path, not
 // via execFile maxBuffer.
@@ -264,6 +281,26 @@ export function createToolsRuntime(
   };
 }
 
+/**
+ * Copy every handwritten `rtl_library/*.v` source into `tempDir` so that
+ * iverilog / Verilator / Yosys see them alongside the candidate module
+ * file at elaboration time. Returns the list of copied paths (absolute,
+ * inside tempDir) so callers can include them as additional source args.
+ * Silently skips any library file that does not exist on disk — the
+ * caller's elaboration still fails loudly on any `unknown module`
+ * reference so the gap is visible.
+ */
+export async function copyRtlLibrarySources(tempDir: string): Promise<string[]> {
+  const copied: string[] = [];
+  for (const srcPath of RTL_LIBRARY_SOURCES) {
+    if (!existsSync(srcPath)) continue;
+    const destPath = path.join(tempDir, path.basename(srcPath));
+    await copyFile(srcPath, destPath);
+    copied.push(destPath);
+  }
+  return copied;
+}
+
 export async function withTempDir<T>(
   prefix: string,
   fn: (tempDir: string) => Promise<T>,
@@ -480,12 +517,17 @@ export async function run_iverilog(
   return withTempDir("nn2rtl-iverilog-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
+    const libraryPaths = await copyRtlLibrarySources(tempDir);
 
     try {
-      await runtime.commandRunner("iverilog", ["-o", os.devNull, "-g2012", verilogPath], {
-        cwd: tempDir,
-        env: augmentEnvForOssCadSuite(runtime.env),
-      });
+      await runtime.commandRunner(
+        "iverilog",
+        ["-o", os.devNull, "-g2012", verilogPath, ...libraryPaths],
+        {
+          cwd: tempDir,
+          env: augmentEnvForOssCadSuite(runtime.env),
+        },
+      );
       return { success: true, stderr: "" };
     } catch (error: unknown) {
       if (isSystemSpawnError(error)) {
@@ -529,6 +571,8 @@ export async function run_verilator(
     await mkdir(tempJsonDir, { recursive: true });
     await copyFile(TB_SOURCE_PATH, tempTbPath);
     await copyFile(TB_JSON_HPP_PATH, tempJsonPath);
+    const libraryPaths = await copyRtlLibrarySources(tempDir);
+    const libraryBasenames = libraryPaths.map((p) => path.basename(p));
 
     try {
       await runtime.commandRunner(
@@ -547,6 +591,7 @@ export async function run_verilator(
           `-std=c++17 -DVMODEL_HEADER="\\\"V${module_name}.h\\\"" -DVMODEL_CLASS=V${module_name}`,
           "static_verilator_tb.cpp",
           `${module_name}.v`,
+          ...libraryBasenames,
         ],
         { cwd: tempDir, env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)) },
       );
@@ -574,14 +619,49 @@ export async function run_verilator(
     const binaryName = `V${module_name}${process.platform === "win32" ? ".exe" : ""}`;
     const binaryPath = path.join(tempDir, "obj_dir", binaryName);
     let simulationError: unknown = null;
+    let simulationTimedOut = false;
 
     try {
       await runtime.commandRunner(binaryPath, [sidecar_path], {
         cwd: tempDir,
         env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)),
+        timeout: VERILATOR_SIM_TIMEOUT_MS,
       });
     } catch (error: unknown) {
       simulationError = error;
+      // Node's execFile marks `killed=true` + `signal` set when it reaps a
+      // child whose wall-clock exceeded `timeout`. Distinguish that from a
+      // genuine non-zero exit so Surgeon gets the right failure class.
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        (error as { killed?: boolean }).killed === true &&
+        (error as { signal?: unknown }).signal
+      ) {
+        simulationTimedOut = true;
+      }
+    }
+
+    if (simulationTimedOut) {
+      return {
+        module_id: sidecar.module_id,
+        status: "fail",
+        status_class: "sim_stalled",
+        timing_pass: false,
+        timing_actual_cycles: -1,
+        timing_expected_cycles: sidecar.pipeline_latency_cycles,
+        expected: [],
+        got: [],
+        failure_class: "verilator_timeout",
+        verilator_stderr: stderrFromUnknown(simulationError),
+        fix_hint: [
+          `Verilator simulation exceeded the ${VERILATOR_SIM_TIMEOUT_MS / 1000}s wall-clock cap.`,
+          "The TB's hang_budget only fires on total valid_out silence, so a timeout means the FSM is",
+          "structurally wrong enough that it either never completes the output stream or fires valid_out",
+          "intermittently forever. Look at FSM exit conditions, output-counter bounds, and any state that",
+          "re-enters a wait on a signal that can never arrive. Do not assume the RTL is partially correct.",
+        ].join(" "),
+      };
     }
 
     const parsedResults = await readVerilatorResultsIfPresent(sidecar.results_path);
@@ -744,6 +824,7 @@ export async function run_yosys(
   return withTempDir("nn2rtl-yosys-", async (tempDir) => {
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
+    const libraryPaths = await copyRtlLibrarySources(tempDir);
 
     // Sky130 standard-cell flow. Previously targeted iCE40 with synth_ice40
     // -abc9; that path hung indefinitely on deep combinational blobs because
@@ -792,7 +873,7 @@ export async function run_yosys(
     // Surgeon repairs, which used to get empty "Command failed: ..." messages
     // and repair blind.
     const spawnResult = await runYosysViaSpawn(
-      ["-p", yosysScript, verilogPath],
+      ["-p", yosysScript, verilogPath, ...libraryPaths],
       {
         cwd: tempDir,
         env: augmentEnvForOssCadSuite(runtime.env),
@@ -895,6 +976,143 @@ export async function write_verilog(
   await writeFile(metadataPath, `${JSON.stringify(module, null, 2)}\n`, "utf8");
 
   return verilogPath;
+}
+
+// ---------------------------------------------------------------------------
+// Pattern library lookup — Tier 0 + 1 of the pattern-library plan.
+//
+// Returns architectural guidance (`pattern_markdown`) plus an optional proven
+// reference Verilog (`reference_verilog`) for an op_type + kernel combination.
+// Foundry calls this before emitting RTL; Surgeon calls it when diagnosing
+// synth / sim failures. All content lives under `knowledge/` — no external
+// network calls.
+// ---------------------------------------------------------------------------
+
+export type GetRtlPatternsResult = {
+  pattern_markdown: string;
+  reference_verilog: string | null;
+  license_notice: string | null;
+};
+
+const PATTERN_LIBRARY_ROOT = path.resolve(repoRoot, "knowledge");
+
+async function tryReadText(absPath: string): Promise<string | null> {
+  try {
+    return await readFile(absPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function resolvePatternPaths(
+  op_type: string,
+  kh?: number,
+  kw?: number,
+): string[] {
+  // Always include shared context + common-bugs files (when present).
+  const paths: string[] = [
+    path.join(PATTERN_LIBRARY_ROOT, "patterns", "01_context.md"),
+    path.join(PATTERN_LIBRARY_ROOT, "patterns", "08_common_bugs.md"),
+  ];
+  if (op_type === "conv2d") {
+    if (kh === 1 && kw === 1) {
+      paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "02_conv1x1.md"));
+    } else if (kh === 3 && kw === 3) {
+      paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "03_conv3x3_pad1.md"));
+    } else if (kh === 7 && kw === 7) {
+      paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "04_conv7x7_pad3.md"));
+    }
+  } else if (op_type === "add") {
+    paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "05_add_quantized.md"));
+  } else if (op_type === "relu") {
+    paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "06_relu.md"));
+  } else if (op_type === "maxpool") {
+    paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "07_maxpool.md"));
+  }
+  return paths;
+}
+
+export async function get_rtl_patterns(
+  op_type: string,
+  kernel_h?: number,
+  kernel_w?: number,
+): Promise<GetRtlPatternsResult> {
+  const patternPaths = resolvePatternPaths(op_type, kernel_h, kernel_w);
+  const sections: string[] = [];
+  for (const p of patternPaths) {
+    const text = await tryReadText(p);
+    if (text !== null) {
+      sections.push(`# ${path.basename(p)}\n\n${text.trim()}\n`);
+    }
+  }
+
+  let reference_verilog: string | null = null;
+  let license_notice: string | null = null;
+
+  // Tier 0: the only currently-proven reference is the 1x1 pointwise one.
+  if (op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
+    const ref = await tryReadText(
+      path.join(PATTERN_LIBRARY_ROOT, "references", "conv1x1_passing_reference.v"),
+    );
+    if (ref !== null) {
+      reference_verilog = ref;
+    }
+  }
+
+  const pattern_markdown =
+    sections.length > 0
+      ? sections.join("\n---\n\n")
+      : "No pattern available for this op_type yet. Proceed with foundry.md rules.";
+
+  // Side-log every invocation so post-hoc analysis can confirm whether
+  // Foundry / Surgeon actually called this tool. The log is append-only at
+  // <repoRoot>/output/reports/tool_calls.jsonl. Never blocks the tool's
+  // success path; a diagnostic goes to stderr (visible in pipeline_run.log)
+  // if the write fails so a broken side-log doesn't go unnoticed.
+  //
+  // Path resolution: repoRoot is the anchor because the MCP server is
+  // always launched with its dist/ sibling to mcp/, and repoRoot is
+  // `mcp/..` under both `tsx` and compiled `dist` execution. `.mcp.json`
+  // sets OUTPUT_DIR=../output (relative to the plugin dir), which is
+  // the same absolute path; we use the env var when present to keep
+  // this robust against plugin-dir layout changes.
+  const candidateOutputRoots = [
+    process.env.NN2RTL_OUTPUT_DIR,
+    process.env.OUTPUT_DIR,
+  ].filter((v): v is string => typeof v === "string" && v.length > 0);
+  let outputRoot = path.resolve(repoRoot, "output");
+  for (const candidate of candidateOutputRoots) {
+    const resolved = path.isAbsolute(candidate)
+      ? candidate
+      : path.resolve(repoRoot, candidate);
+    if (existsSync(resolved)) {
+      outputRoot = resolved;
+      break;
+    }
+  }
+  const logPath = path.join(outputRoot, "reports", "tool_calls.jsonl");
+  const entry = {
+    timestamp: new Date().toISOString(),
+    tool: "get_rtl_patterns",
+    op_type,
+    kernel_h: kernel_h ?? null,
+    kernel_w: kernel_w ?? null,
+    pattern_markdown_chars: pattern_markdown.length,
+    reference_verilog_chars: reference_verilog ? reference_verilog.length : 0,
+  };
+  try {
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await appendFile(logPath, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch (err) {
+    // Observability is nice-to-have; never block the tool on it, but
+    // surface a diagnostic so a broken log path doesn't go unnoticed.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[get_rtl_patterns] side-log to '${logPath}' failed: ${msg}\n`,
+    );
+  }
+
+  return { pattern_markdown, reference_verilog, license_notice };
 }
 
 export async function readSidecarIfPresent(

@@ -29,8 +29,11 @@ export interface LayerIR {
   // Conv2d geometry — populated by the modern frontends when op_type == "conv2d"
   stride?: number[];
   padding?: number[];
-  // Number of MAC lanes Foundry instantiates for this layer; FSM iterates OC
-  // in groups of mac_parallelism. Only set for op_type == "conv2d".
+  // Number of MAC lanes Foundry must instantiate for this layer. The FSM
+  // iterates OC in groups of `mac_parallelism` (ceil(OC / mac_parallelism)
+  // passes per output pixel), keeping the combinational cone small enough
+  // for Sky130 / ABC to map inside the YOSYS_TIMEOUT_MS budget. Only set for
+  // op_type == "conv2d" — other ops ignore it.
   mac_parallelism?: number;
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
@@ -70,7 +73,10 @@ export type FailureClass =
   | "scale_factor_misapplied"
   | "bias_term_missing"
   | "batch_norm_not_folded"
-  | "synthesis_failed";
+  | "synthesis_failed"
+  | "verilator_timeout"
+  | "architectural_unsupported"
+  | "structural_preflight_failed";
 
 export interface VerifResult {
   module_id: string;

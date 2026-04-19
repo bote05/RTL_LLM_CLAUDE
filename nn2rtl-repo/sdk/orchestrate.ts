@@ -47,8 +47,14 @@ export const AGENT_SLUGS = {
 
 const AGENT_MCP_TOOLS = {
   cartographer: ["mcp__nn2rtl-tools__read_weights"],
-  foundry: ["mcp__nn2rtl-tools__write_verilog"],
-  surgeon: ["mcp__nn2rtl-tools__write_verilog"],
+  foundry: [
+    "mcp__nn2rtl-tools__write_verilog",
+    "mcp__nn2rtl-tools__get_rtl_patterns",
+  ],
+  surgeon: [
+    "mcp__nn2rtl-tools__write_verilog",
+    "mcp__nn2rtl-tools__get_rtl_patterns",
+  ],
 } as const;
 
 const APPEND_SKILL_TO_PROMPT = {
@@ -265,6 +271,25 @@ function reportPath(fileName: string): string {
   return path.join(resolveFromSdk(PIPELINE_CONFIG.reports_dir), fileName);
 }
 
+/**
+ * Bus-width capability gate. Returns a `fix_hint` string when a layer's
+ * input or output bus exceeds `PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS`,
+ * or null when the layer is within capability. Not network-specific.
+ */
+export function checkBusWidthCapability(layer: LayerIR): string | null {
+  const cap = PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS;
+  const overIn = layer.input_width_bits > cap;
+  const overOut = layer.output_width_bits > cap;
+  if (!overIn && !overOut) return null;
+  const which: string[] = [];
+  if (overIn) which.push(`input_width_bits=${layer.input_width_bits}`);
+  if (overOut) which.push(`output_width_bits=${layer.output_width_bits}`);
+  return (
+    `Layer ${layer.module_id} requires tiled channel streaming which is not yet implemented. ` +
+    `${which.join(" and ")} exceeds MAX_SUPPORTED_BUS_BITS=${cap}.`
+  );
+}
+
 export function normalizeAgentName(slug: AgentSlug): AgentName {
   const match = Object.entries(AGENT_SLUGS).find(([, value]) => value === slug);
   if (!match) {
@@ -373,6 +398,157 @@ function recordUsageFromResult(
     result.total_cost_usd,
     result.modelUsage as Record<string, ModelUsageEntry>,
   );
+}
+
+/**
+ * Per-tool-call audit record. One entry per tool_use block observed in the
+ * agent's message stream, plus one entry per matching tool_result. Appended
+ * to `output/reports/agent_tool_use.jsonl` for post-hoc inspection: what
+ * files Foundry/Surgeon actually read, what Bash commands they ran, what
+ * came back. Independent of agent obedience — we read the SDK's own
+ * message stream, which the agent cannot suppress.
+ */
+export type ToolUseAuditEntry = {
+  timestamp: string;
+  agent: string;
+  module_id: string | null;
+  turn_index: number;
+  kind: "tool_use" | "tool_result";
+  tool_use_id: string | null;
+  tool_name: string | null;
+  // tool_use fields
+  input: unknown;
+  // tool_result fields (truncated to keep logs manageable)
+  is_error: boolean | null;
+  output_preview: string | null;
+  output_length: number | null;
+};
+
+const TOOL_RESULT_PREVIEW_BYTES = 2000;
+
+function isRecordLike(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/**
+ * Walk the SDK message stream and extract tool-use + tool-result blocks.
+ * Tolerant of shape variance: the SDK's message types are loose records, so
+ * we defensively guard each field lookup.
+ */
+export function extractToolUseAudits(
+  messages: SDKMessage[],
+  meta: { agent: string; module_id?: string | null; nowIso: string },
+): ToolUseAuditEntry[] {
+  const audits: ToolUseAuditEntry[] = [];
+  let turnIndex = 0;
+
+  for (const msg of messages) {
+    if (!isRecordLike(msg)) continue;
+    const msgType = typeof msg.type === "string" ? msg.type : "";
+    // SDKMessage is a loose union; cast through Record<string, unknown> to
+    // reach optional fields like `message` that only some variants carry.
+    const loose = msg as Record<string, unknown>;
+
+    // Assistant messages may carry tool_use blocks in their content array.
+    if (msgType === "assistant") {
+      const inner = isRecordLike(loose.message) ? loose.message : {};
+      const content = Array.isArray(inner.content) ? inner.content : [];
+      for (const block of content) {
+        if (!isRecordLike(block)) continue;
+        if (block.type === "tool_use") {
+          audits.push({
+            timestamp: meta.nowIso,
+            agent: meta.agent,
+            module_id: meta.module_id ?? null,
+            turn_index: turnIndex,
+            kind: "tool_use",
+            tool_use_id: typeof block.id === "string" ? block.id : null,
+            tool_name: typeof block.name === "string" ? block.name : null,
+            input: block.input ?? null,
+            is_error: null,
+            output_preview: null,
+            output_length: null,
+          });
+        }
+      }
+      turnIndex += 1;
+      continue;
+    }
+
+    // User messages may carry tool_result blocks routed back to the agent.
+    if (msgType === "user") {
+      const inner = isRecordLike(loose.message) ? loose.message : {};
+      const content = Array.isArray(inner.content) ? inner.content : [];
+      for (const block of content) {
+        if (!isRecordLike(block)) continue;
+        if (block.type === "tool_result") {
+          const rawContent = block.content;
+          const rawStr = typeof rawContent === "string"
+            ? rawContent
+            : JSON.stringify(rawContent ?? "");
+          const isError =
+            typeof block.is_error === "boolean" ? block.is_error : null;
+          audits.push({
+            timestamp: meta.nowIso,
+            agent: meta.agent,
+            module_id: meta.module_id ?? null,
+            turn_index: turnIndex,
+            kind: "tool_result",
+            tool_use_id:
+              typeof block.tool_use_id === "string" ? block.tool_use_id : null,
+            tool_name: null,
+            input: null,
+            is_error: isError,
+            output_preview: rawStr.slice(0, TOOL_RESULT_PREVIEW_BYTES),
+            output_length: rawStr.length,
+          });
+        }
+      }
+    }
+  }
+
+  return audits;
+}
+
+/** Append per-tool-call audit entries to `output/reports/agent_tool_use.jsonl`. */
+export async function appendToolUseAudits(
+  audits: ToolUseAuditEntry[],
+): Promise<void> {
+  if (audits.length === 0) return;
+  const logPath = reportPath("agent_tool_use.jsonl");
+  await mkdir(path.dirname(logPath), { recursive: true });
+  const body = audits.map((a) => JSON.stringify(a)).join("\n") + "\n";
+  await appendFile(logPath, body, "utf8");
+}
+
+/**
+ * Emit a compact summary of what tools the agent actually used, to the
+ * main run_log.jsonl. Makes post-hoc inspection fast: one line per agent
+ * dispatch telling you `{tool_call_count, tools_called: [...], bytes_read}`.
+ */
+export function summarizeToolUse(
+  audits: ToolUseAuditEntry[],
+): Record<string, unknown> {
+  const toolUseEntries = audits.filter((a) => a.kind === "tool_use");
+  const toolsCalled = toolUseEntries
+    .map((a) => a.tool_name)
+    .filter((n): n is string => typeof n === "string" && n.length > 0);
+  const toolsCounts: Record<string, number> = {};
+  for (const name of toolsCalled) {
+    toolsCounts[name] = (toolsCounts[name] ?? 0) + 1;
+  }
+  const totalResultBytes = audits
+    .filter((a) => a.kind === "tool_result")
+    .reduce((sum, a) => sum + (a.output_length ?? 0), 0);
+  const errorCount = audits
+    .filter((a) => a.kind === "tool_result" && a.is_error === true).length;
+  return {
+    tool_call_count: toolUseEntries.length,
+    tools_called: toolsCalled,
+    tools_counts: toolsCounts,
+    total_result_bytes: totalResultBytes,
+    tool_error_count: errorCount,
+  };
 }
 
 export async function appendRunLog(
@@ -527,7 +703,24 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
     "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
   ];
 
-  if (isSynthOnlyFailure) {
+  if (verif.failure_class === "verilator_timeout") {
+    lines.push(
+      "- VERILATOR TIMEOUT: the DUT compiled but the simulation never terminated." +
+      " Do NOT assume the RTL is partially correct — a timeout means the FSM is structurally" +
+      " wrong enough that it can never reach the end of the output stream." +
+      " The TB's hang_budget only catches TOTAL silence on valid_out, so intermittent" +
+      " firings keep the sim alive indefinitely. Check output-counter bounds, drain-exit" +
+      " conditions, and any state that re-enters a wait on a signal that cannot arrive." +
+      " Fix the FSM control flow — do not rewrite the datapath.",
+    );
+  } else if (verif.failure_class === "structural_preflight_failed") {
+    lines.push(
+      "- STRUCTURAL PREFLIGHT FAILURE: the RTL parsed but violated a structural rule" +
+      " before simulation. The fix_hint names the exact rule (e.g. line_buffer_missing," +
+      " window_not_registered, weights_packed_forbidden, readmemh_missing, output_counter_missing)." +
+      " Repair the indicted construct and do not touch unrelated logic.",
+    );
+  } else if (isSynthOnlyFailure) {
     lines.push(
       "- SYNTHESIS-ONLY FAILURE: simulation passed with correct outputs and exact timing." +
       " The datapath is proven correct — DO NOT rewrite numerical logic, MAC ordering," +
@@ -1008,6 +1201,234 @@ function expectedTopPortWidthBits(
   return "width_key" in spec ? layer[spec.width_key] : spec.width_bits;
 }
 
+/**
+ * Structural preflight checks — run AFTER the ANSI port preflight. These
+ * rules derive purely from LayerIR fields (op_type, weight_shape) plus
+ * generic RTL safety. They catch classes of bugs that parse cleanly but
+ * are known to wedge downstream tools (yosys OPT_MEM, Verilator hang from
+ * missing output bounds, etc.).
+ *
+ * Each violation is returned as {rule, detail}. `rule` is one of a small
+ * named set (`line_buffer_missing`, `window_not_registered`,
+ * `weights_packed_forbidden`, `readmemh_missing`, `output_counter_missing`);
+ * `detail` explains the specific failure and — when applicable — cites the
+ * offending line range. Callers synthesize a VerifResult with
+ * failure_class="structural_preflight_failed" and the rule name surfaced
+ * in fix_hint.
+ */
+export type StructuralPreflightViolation = { rule: string; detail: string };
+
+/**
+ * Extract the body of every `always @(posedge clk ...)` block. Returned
+ * text is the concatenation of those blocks with non-clocked regions
+ * elided — sufficient for pattern-matching "is `window[...] <= ...` inside
+ * a clocked always block" without a full Verilog parser.
+ */
+function extractClockedAlwaysBlocks(source: string): string {
+  const blocks: string[] = [];
+  const re = /always\s*@\s*\(\s*posedge\s+clk[^)]*\)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    let cursor = m.index + m[0].length;
+    // Skip whitespace
+    while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+    if (source.slice(cursor, cursor + 5) !== "begin") {
+      // Single-statement always — take until the next ";".
+      const semi = source.indexOf(";", cursor);
+      if (semi !== -1) blocks.push(source.slice(cursor, semi + 1));
+      continue;
+    }
+    // Walk begin/end depth.
+    let depth = 0;
+    let i = cursor;
+    while (i < source.length) {
+      const tok = source.slice(i).match(/^(\bbegin\b|\bend\b)/);
+      if (tok) {
+        if (tok[1] === "begin") depth += 1;
+        else {
+          depth -= 1;
+          if (depth === 0) {
+            i += tok[1].length;
+            blocks.push(source.slice(cursor, i));
+            break;
+          }
+        }
+        i += tok[1].length;
+      } else {
+        i += 1;
+      }
+    }
+  }
+  return blocks.join("\n");
+}
+
+export function structuralPreflightViolations(
+  module: VerilogModule,
+  layer: LayerIR,
+): StructuralPreflightViolation[] {
+  const violations: StructuralPreflightViolation[] = [];
+  const rawSource = module.verilog_source;
+  const source = stripVerilogComments(rawSource);
+  const isSpatialConv =
+    layer.op_type === "conv2d" &&
+    layer.weight_shape.length >= 4 &&
+    layer.weight_shape[2] * layer.weight_shape[3] > 1;
+
+  // Rule 1: spatial conv requires a `line_buf` array-of-arrays / memory decl.
+  if (isSpatialConv) {
+    const lineBufRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?line_buf\s*\[/;
+    if (!lineBufRe.test(source)) {
+      violations.push({
+        rule: "line_buffer_missing",
+        detail:
+          `Spatial conv2d (kernel=${layer.weight_shape[2]}x${layer.weight_shape[3]}) must ` +
+          `declare a line buffer 'line_buf' as a multi-dimensional reg memory. ` +
+          `No 'reg [...] line_buf [...]' declaration was found.`,
+      });
+    }
+  }
+
+  // Rule 2: spatial conv requires a registered window — `window` declared as
+  // `reg` AND assigned with `<=` inside an `always @(posedge clk)` block.
+  if (isSpatialConv) {
+    const windowDeclRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?window\b/;
+    if (!windowDeclRe.test(source)) {
+      violations.push({
+        rule: "window_not_registered",
+        detail:
+          "Spatial conv must declare a shift-register window as " +
+          "'reg [...] window [...]'. No such reg was found — if 'window' is " +
+          "a wire/assign, it is rebuilt combinationally every cycle, which " +
+          "blows up synth cones and loses the sliding-window invariant.",
+      });
+    } else {
+      const clocked = extractClockedAlwaysBlocks(source);
+      const windowAssignRe = /\bwindow\s*\[[^\]]+\][^;]*<=/;
+      if (!windowAssignRe.test(clocked)) {
+        violations.push({
+          rule: "window_not_registered",
+          detail:
+            "Spatial conv must update 'window' via a non-blocking assignment " +
+            "(<=) inside an always @(posedge clk ...) block. No such " +
+            "clocked window assignment was found.",
+        });
+      }
+    }
+  }
+
+  // Rule 3: forbid weights_packed / packed weight initializers.
+  if (/\bweights_packed\b/.test(source)) {
+    violations.push({
+      rule: "weights_packed_forbidden",
+      detail:
+        "Identifier 'weights_packed' is forbidden: packed weight arrays " +
+        "trigger yosys OPT_MEM rejection. Use a flat 'reg signed [7:0] " +
+        "weights [0:OC*K_TOTAL-1]' array initialized via $readmemh, and " +
+        "serialize reads via a lane_counter if the combinational mux is too wide.",
+    });
+  }
+  // initial weights[...] = <expression>; (anything other than $readmemh)
+  const initWeightsRe = /\binitial\b[\s\S]*?\bweights\s*\[[^\]]*\]\s*=/;
+  if (initWeightsRe.test(source)) {
+    violations.push({
+      rule: "weights_packed_forbidden",
+      detail:
+        "Explicit 'initial weights[...] = ...' assignment is forbidden. " +
+        "Initialize 'weights' only via $readmemh to keep the initializer " +
+        "constant and compatible with yosys OPT_MEM.",
+    });
+  }
+  // assign weights[...] = ... (continuous assign on the memory)
+  if (/\bassign\s+weights\s*\[/.test(source)) {
+    violations.push({
+      rule: "weights_packed_forbidden",
+      detail:
+        "Continuous assignment 'assign weights[...] = ...' is forbidden — " +
+        "it produces a non-constant memory initializer that yosys OPT_MEM rejects.",
+    });
+  }
+
+  // Rule 4: weights and biases must use $readmemh.
+  // Only conv2d layers have weights/biases. Add/relu/maxpool have none.
+  if (layer.op_type === "conv2d") {
+    const readmemhWeightsRe = /\$readmemh\s*\(\s*"[^"]*"\s*,\s*weights\s*\)/;
+    if (!readmemhWeightsRe.test(source)) {
+      violations.push({
+        rule: "readmemh_missing",
+        detail:
+          "Weights must be loaded via $readmemh(\"<weights_path>\", weights) " +
+          "inside an initial block. No such call was found.",
+      });
+    }
+    if (layer.bias_path) {
+      const readmemhBiasesRe = /\$readmemh\s*\(\s*"[^"]*"\s*,\s*biases\s*\)/;
+      if (!readmemhBiasesRe.test(source)) {
+        violations.push({
+          rule: "readmemh_missing",
+          detail:
+            "Biases must be loaded via $readmemh(\"<bias_path>\", biases) " +
+            "inside an initial block. No such call was found.",
+        });
+      }
+    }
+  }
+
+  // Rule 5: output counter / completion guard must exist — but ONLY for
+  // ops where the input-to-output mapping is NOT 1:1-per-input-pixel.
+  // Spatial conv (KH*KW > 1) and maxpool both traverse padding regions
+  // without consuming real input, so without an `outputs_emitted` bound
+  // the FSM can emit an unbounded valid_out stream. Pointwise 1x1 conv,
+  // add, and relu are all 1:1 with input and terminate naturally via
+  // the per-pixel FSM (oc_group / K_TOTAL exhaustion) — forcing a
+  // frame-level counter on them BREAKS back-to-back frames by latching
+  // the FSM into a terminal state after the first frame.
+  const needsFrameCounter =
+    isSpatialConv || layer.op_type === "maxpool";
+  if (needsFrameCounter) {
+    const counterRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?(?:out_row|out_col|outputs_emitted)\b/;
+    // coord_scheduler exports its own `outputs_emitted` as an output port,
+    // so a module that wires its own `outputs_emitted` reg to the
+    // scheduler's `outputs_emitted` output satisfies the bounded-counter
+    // invariant even if the reg shape varies. The reg-declaration regex
+    // above captures the canonical hand-written case; the check below
+    // additionally accepts an instantiation of coord_scheduler.
+    const coordSchedulerInstantiated = /\bcoord_scheduler\b/.test(source);
+    if (!counterRe.test(source) && !coordSchedulerInstantiated) {
+      violations.push({
+        rule: "output_counter_missing",
+        detail:
+          "Spatial conv / maxpool must bound its output count with either " +
+          "an `outputs_emitted` reg (or `out_row` / `out_col`) or a " +
+          "coord_scheduler instantiation. Without a bounded counter the " +
+          "FSM has no frame-level stop condition and Verilator can hang " +
+          "on partial valid_out firings.",
+      });
+    }
+  }
+
+  // Rule 6: spatial conv / maxpool must instantiate `coord_scheduler`. The
+  // coordinate/wrap/stride/termination math is the single most bug-prone
+  // piece of the pipeline; the handwritten module in rtl_library/ is its
+  // authoritative implementation.
+  const needsCoordScheduler =
+    isSpatialConv || layer.op_type === "maxpool";
+  if (needsCoordScheduler) {
+    if (!/\bcoord_scheduler\b/.test(source)) {
+      violations.push({
+        rule: "coord_scheduler_missing",
+        detail:
+          "Spatial conv / maxpool modules must instantiate coord_scheduler " +
+          "from rtl_library/coord_scheduler.v. No coord_scheduler reference " +
+          "was found in the RTL. Rolling your own coordinate/wrap/stride/" +
+          "termination logic is the historically most bug-prone piece of " +
+          "the pipeline — do not reinvent it.",
+      });
+    }
+  }
+
+  return violations;
+}
+
 export function preflightVerilogModule(module: VerilogModule, layer: LayerIR): string[] {
   const issues: string[] = [];
 
@@ -1111,6 +1532,22 @@ export async function ensureLayerIr(
     payload,
     pipelineIrOutputFormat,
     pipelineIrZod,
+    runtime,
+  );
+
+  const cartographerAudits = extractToolUseAudits(result.messages, {
+    agent: "Cartographer",
+    module_id: null,
+    nowIso: runtime.now().toISOString(),
+  });
+  await appendToolUseAudits(cartographerAudits);
+  await appendRunLog(
+    {
+      event: "agent_tool_use_summary",
+      agent: "Cartographer",
+      module_id: null,
+      ...summarizeToolUse(cartographerAudits),
+    },
     runtime,
   );
 
@@ -1440,6 +1877,22 @@ async function invokeFoundry(
 
   await persistVerilogModule(result.payload);
 
+  const foundryAudits = extractToolUseAudits(result.messages, {
+    agent: "Foundry",
+    module_id: layerIr.module_id,
+    nowIso: runtime.now().toISOString(),
+  });
+  await appendToolUseAudits(foundryAudits);
+  await appendRunLog(
+    {
+      event: "agent_tool_use_summary",
+      agent: "Foundry",
+      module_id: layerIr.module_id,
+      ...summarizeToolUse(foundryAudits),
+    },
+    runtime,
+  );
+
   await appendRunLog(
     {
       event: "agent_result",
@@ -1486,6 +1939,28 @@ async function runAssayerDeterministic(
       failure_class: "port_width_mismatch",
       fix_hint: preflightMessage,
       iverilog_stderr: preflightMessage,
+    };
+  }
+
+  const structuralIssues = structuralPreflightViolations(module, layer);
+  if (structuralIssues.length > 0) {
+    const rules = structuralIssues.map((v) => v.rule).join(", ");
+    const structuralMessage = [
+      "Deterministic structural preflight rejected the RTL before iverilog/Verilator.",
+      `Violated rule(s): ${rules}.`,
+      "Repair the indicted construct exactly; do not touch unrelated logic.",
+      "Violations:",
+      ...structuralIssues.map((v) => `- [${v.rule}] ${v.detail}`),
+    ].join("\n");
+    return {
+      module_id: module.module_id,
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layer.pipeline_latency_cycles,
+      failure_class: "structural_preflight_failed",
+      fix_hint: structuralMessage,
+      iverilog_stderr: structuralMessage,
     };
   }
 
@@ -1807,6 +2282,22 @@ async function invokeSurgeon(
 
   await persistVerilogModule(result.payload);
 
+  const surgeonAudits = extractToolUseAudits(result.messages, {
+    agent: "Surgeon",
+    module_id: brokenModule.module_id,
+    nowIso: runtime.now().toISOString(),
+  });
+  await appendToolUseAudits(surgeonAudits);
+  await appendRunLog(
+    {
+      event: "agent_tool_use_summary",
+      agent: "Surgeon",
+      module_id: brokenModule.module_id,
+      ...summarizeToolUse(surgeonAudits),
+    },
+    runtime,
+  );
+
   await appendRunLog(
     {
       event: "agent_result",
@@ -2108,6 +2599,46 @@ export async function runPipeline(
 
     if (nextAction.action === "invoke_foundry") {
       const layer = findLayer(pipelineIr, nextAction.module_id);
+
+      // --- Bus-width capability gate -----------------------------------------
+      // Fail-fast on layers whose bus widths exceed the pipeline's current
+      // capability. Cheaper than burning Foundry+Surgeon calls on a layer we
+      // know we cannot correctly generate. Routes directly to fail_abort via
+      // failure_class=architectural_unsupported (pipeline.ts skips Surgeon
+      // for this class).
+      const unsupportedReason = checkBusWidthCapability(layer);
+      if (unsupportedReason) {
+        const archFail: VerifResult = {
+          module_id: nextAction.module_id,
+          status: "fail",
+          timing_pass: false,
+          timing_actual_cycles: 0,
+          timing_expected_cycles: layer.pipeline_latency_cycles,
+          failure_class: "architectural_unsupported",
+          fix_hint: unsupportedReason,
+        };
+        const statusBeforeApply = manager.getState().modules[nextAction.module_id];
+        manager.applyVerifResult(nextAction.module_id, archFail);
+        const statusAfterApply = manager.getState().modules[nextAction.module_id];
+        await logStateTransition(
+          manager,
+          nextAction.module_id,
+          statusBeforeApply,
+          statusAfterApply,
+          "architectural_unsupported",
+          runtime,
+        );
+        await manager.saveState(statePath);
+        await appendRunLog(
+          {
+            event: "module_fail_abort",
+            module_id: nextAction.module_id,
+            result: archFail,
+          },
+          runtime,
+        );
+        continue;
+      }
 
       // --- Spec-hash template reuse -------------------------------------------
       // Check whether a structurally identical module has already passed.

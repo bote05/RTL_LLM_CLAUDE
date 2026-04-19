@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   VERILATOR_COMMAND,
+  get_rtl_patterns,
   parseYosysReport,
   readSidecarIfPresent,
   read_weights,
@@ -78,6 +79,21 @@ async function writeSidecar(
 }
 
 describe("mcp tools", () => {
+  it("get_rtl_patterns returns a reference Verilog for conv2d 1x1 when the file exists", async () => {
+    const result = await get_rtl_patterns("conv2d", 1, 1);
+    expect(typeof result.pattern_markdown).toBe("string");
+    // The 1x1 branch returns the checked-in reference module.
+    expect(result.reference_verilog).toContain("module layer1_0_conv1");
+    expect(result.reference_verilog).toContain("localparam IC        = 64;");
+  });
+
+  it("get_rtl_patterns returns null reference_verilog for op_types without a proven reference", async () => {
+    const relu = await get_rtl_patterns("relu");
+    expect(relu.reference_verilog).toBeNull();
+    const pool = await get_rtl_patterns("maxpool");
+    expect(pool.reference_verilog).toBeNull();
+  });
+
   it("extracts stderr text from unknown errors", () => {
     expect(stderrFromUnknown({ stderr: Buffer.from("boom") })).toBe("boom");
     expect(stderrFromUnknown(new Error("plain-error"))).toBe("plain-error");

@@ -561,6 +561,44 @@ The pipeline's bottleneck is generative RTL for spatial convs at scale, which is
 
 This conversion is the honest path to scaling past `layer1_0_conv1`. The `LLM-generates-RTL-from-scratch` loop is fine as a research demo and produces the one passing 1×1 module; the hybrid `LLM-picks-parts-from-verified-library` flow is what would actually cover the 17-module ResNet-50 pipeline, let alone L4.
 
+### Pattern-library + cross-cutting infrastructure — landed 2026-04-19
+
+The `knowledge/IMPLEMENTATION_PLAN.md` plan has shipped. What's now active
+in the pipeline (not yet re-measured against the 17-module run):
+
+- **`VERILATOR_SIM_TIMEOUT_MS = 10 min`** (`mcp/tools.ts`) — simulation
+  timeouts classify as `failure_class: verilator_timeout` (routes to
+  Surgeon with a timeout-specific rubric).
+- **Bus-width capability gate** (`sdk/config.ts::PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS = 4096`) —
+  layers above the cap fail-abort with `failure_class: architectural_unsupported`;
+  Surgeon is NOT invoked on these. Reports separately in the pipeline summary.
+- **Five structural preflight rules** (`structuralPreflightViolations` in
+  `sdk/orchestrate.ts`): `line_buffer_missing`, `window_not_registered`,
+  `weights_packed_forbidden`, `readmemh_missing`, `output_counter_missing`,
+  plus a sixth `coord_scheduler_missing` check for spatial conv / maxpool.
+  Violations surface as `failure_class: structural_preflight_failed`
+  with the specific rule name in `fix_hint`.
+- **`coord_scheduler.v`** (`rtl_library/coord_scheduler.v`) — handwritten,
+  parameterized on `IH/IW/OH/OW/KH/KW/SH/SW/PH/PW`. Terminates on
+  `outputs_emitted == OH*OW` (never on `in_row > IH-1+PH`). Spatial conv
+  and maxpool modules must instantiate it; rolling their own coordinate
+  logic is structurally rejected.
+- **`get_rtl_patterns` MCP tool** — dispatches on `op_type` + kernel
+  dimensions to concatenated `knowledge/patterns/*.md` context files,
+  and returns `conv1x1_passing_reference.v` verbatim for 1×1 convs.
+  Foundry and Surgeon call this before emitting / repairing RTL.
+- **Eight pattern markdown files** in `knowledge/patterns/`:
+  01_context, 02_conv1x1, 03_conv3x3_pad1, 04_conv7x7_pad3,
+  05_add_quantized, 06_relu, 07_maxpool, 08_common_bugs.
+- **Reference file**: `knowledge/references/conv1x1_passing_reference.v`
+  — the one proven-passing 1×1 module, adapted by Foundry on pointwise
+  convs. No external (out-of-repo) RTL is currently load-bearing.
+
+None of these are ResNet-specific; all apply to any network-any-layer
+composition. The 17-module re-measurement was deferred to a future
+session — the new infrastructure changes the `fail_abort` taxonomy and
+the PPA results will look different.
+
 ---
 
 ## Working Rules Summary

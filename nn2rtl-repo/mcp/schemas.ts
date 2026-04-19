@@ -18,6 +18,9 @@ export const failureClassSchema = z.enum([
   "bias_term_missing",
   "batch_norm_not_folded",
   "synthesis_failed",
+  "verilator_timeout",
+  "architectural_unsupported",
+  "structural_preflight_failed",
 ]);
 
 // See sdk/schemas.ts for the rationale; the two schemas must stay in
@@ -234,5 +237,21 @@ export const runYosysOutput = z
 export const writeVerilogOutput = z
   .object({
     path: z.string(),
+  })
+  .strict();
+
+export const getRtlPatternsInput = z
+  .object({
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
+    kernel_h: z.number().int().positive().optional(),
+    kernel_w: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const getRtlPatternsOutput = z
+  .object({
+    pattern_markdown: z.string(),
+    reference_verilog: z.string().nullable(),
+    license_notice: z.string().nullable(),
   })
   .strict();

@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 
 import {
+  get_rtl_patterns,
   read_weights,
   run_iverilog,
   run_verilator,
@@ -15,6 +16,8 @@ import {
   write_verilog,
 } from "./tools.js";
 import {
+  getRtlPatternsInput,
+  getRtlPatternsOutput,
   pipelineIrSchema,
   readWeightsInput,
   runIverilogInput,
@@ -28,6 +31,7 @@ import {
 } from "./schemas.js";
 
 export type ToolImplementations = {
+  get_rtl_patterns: typeof get_rtl_patterns;
   read_weights: typeof read_weights;
   run_iverilog: typeof run_iverilog;
   run_verilator: typeof run_verilator;
@@ -36,6 +40,7 @@ export type ToolImplementations = {
 };
 
 const DEFAULT_TOOL_IMPLEMENTATIONS: ToolImplementations = {
+  get_rtl_patterns,
   read_weights,
   run_iverilog,
   run_verilator,
@@ -84,6 +89,16 @@ export const toolDefinitions = [
     description: "Persist a generated Verilog module and its metadata.",
     inputSchema: toJsonSchema(writeVerilogInput),
     outputSchema: toJsonSchema(writeVerilogOutput),
+  },
+  {
+    name: "get_rtl_patterns",
+    description:
+      "Look up architectural-pattern markdown and an optional proven reference " +
+      "Verilog for an op_type (+ kernel dims for conv2d). Call this before " +
+      "emitting any Verilog (Foundry) or when diagnosing a synth / sim failure " +
+      "(Surgeon). Returns { pattern_markdown, reference_verilog, license_notice }.",
+    inputSchema: toJsonSchema(getRtlPatternsInput),
+    outputSchema: toJsonSchema(getRtlPatternsOutput),
   },
 ] as const;
 
@@ -140,6 +155,19 @@ async function handleWriteVerilog(
   return toToolResult({ path: writtenPath });
 }
 
+async function handleGetRtlPatterns(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
+  const input = getRtlPatternsInput.parse(args);
+  const result = await toolImpls.get_rtl_patterns(
+    input.op_type,
+    input.kernel_h,
+    input.kernel_w,
+  );
+  return toToolResult(result as unknown as Record<string, unknown>);
+}
+
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
@@ -156,6 +184,8 @@ export async function handleToolCall(
       return handleReadWeights(args, toolImpls);
     case "write_verilog":
       return handleWriteVerilog(args, toolImpls);
+    case "get_rtl_patterns":
+      return handleGetRtlPatterns(args, toolImpls);
     default:
       return {
         content: [{ type: "text", text: `Unknown tool '${name}'.` }],
