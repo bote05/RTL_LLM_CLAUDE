@@ -3,6 +3,18 @@
 // so we only depend on the fields the orchestrator actually uses. This
 // insulates the rest of the codebase from shape changes in the SDK.
 
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+export type SystemPromptOption =
+  | string
+  | string[]
+  | {
+      type: "preset";
+      preset: "claude_code";
+      append?: string;
+      excludeDynamicSections?: boolean;
+    };
+
 export type AgentDefinition = {
   description: string;
   prompt: string;
@@ -15,6 +27,7 @@ export type AgentDefinition = {
   model?: string;
   skills?: string[];
   maxTurns?: number;
+  effort?: EffortLevel;
 };
 
 export type OutputFormat = {
@@ -56,12 +69,20 @@ export type SDKMessage =
 
 type QueryOptions = {
   cwd?: string;
-  tools?: string[];
+  // Base set of built-in tools available to the model. Use an explicit string
+  // array to restrict the surface (preferred). `allowedTools` only auto-allows
+  // without prompting — it does not restrict availability.
+  tools?: string[] | { type: "preset"; preset: "claude_code" };
   allowedTools?: string[];
+  disallowedTools?: string[];
   plugins?: Array<{ type: "local"; path: string }>;
   agents?: Record<string, AgentDefinition>;
   outputFormat?: OutputFormat;
   maxTurns?: number;
+  env?: Record<string, string | undefined>;
+  model?: string;
+  systemPrompt?: SystemPromptOption;
+  effort?: EffortLevel;
 };
 
 type QueryParams = {

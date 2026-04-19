@@ -171,7 +171,7 @@ Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The publishe
 - `summary()` — plain-text table used when writing the pipeline summary.
 
 ### `orchestrate.ts`
-Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus many helpers for tests (`AGENT_SLUGS`, `createOrchestratorRuntime`, `resolveFromSdk`, `normalizeAgentName`, `parseFrontmatter`, `toStringList`, `readText`, `pathExists`, `readJsonFile`, `writeJsonFile`, `appendRunLog`, `ensureOutputLayout`, `loadPluginAgentDefinition`, `loadAllAgentDefinitions`, `buildDelegationPrompt`, `requireStructuredOutput`, `findLayer`, `loadPersistedVerilogModule`, `ensureLayerIr`, `writePipelineSummary`, `parseCliArgs`, `preflightVerilogModule`).
+Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus many helpers for tests (`AGENT_SLUGS`, `createOrchestratorRuntime`, `resolveFromSdk`, `normalizeAgentName`, `parseFrontmatter`, `toStringList`, `readText`, `pathExists`, `readJsonFile`, `writeJsonFile`, `appendRunLog`, `ensureOutputLayout`, `loadPluginAgentDefinition`, `buildDelegationPrompt`, `requireStructuredOutput`, `findLayer`, `loadPersistedVerilogModule`, `ensureLayerIr`, `writePipelineSummary`, `parseCliArgs`, `preflightVerilogModule`).
 
 `AGENT_SLUGS` lists only three agents: `Cartographer`, `Foundry`, `Surgeon`.
 
@@ -501,6 +501,65 @@ For the record, these items from earlier revisions are complete:
 - **CLI knobs extended**: `parseCliArgs` accepts `--max-retries N` (with both `--max-retries N` and `--max-retries=N` forms) and rejects unknown `--flag` arguments with a clear error. `runPipeline` / `RunPipelineOptions` gained an optional `maxRetries` field that overrides `PIPELINE_CONFIG.max_retries`. Unknown flags now error instead of being silently ignored.
 - **`invokeYosys` compiled-path fix**: the dynamic import specifier for the MCP `run_yosys` helper used to be the relative string `"../mcp/tools.js"`, which resolves correctly from `sdk/orchestrate.ts` source but points at the non-existent `sdk/mcp/tools.js` when running `node sdk/dist/main.js`. Fixed by computing the specifier at module load via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` with a branch on whether `__dirname` is `dist` (→ `mcp/dist/tools.js`) or source (→ `mcp/tools.ts`).
 - **Proven end-to-end result**: `layer1_0_conv1` (1x1 conv, IC=64, OC=64) passes end-to-end: max_error=1, timing=67/67 cycles (matching `IC*KH*KW + 3 = 64*1*1 + 3 = 67`), Fmax=77.4 MHz on Sky130, area=669K um^2, cost=$0.35, zero Surgeon retries.
+
+---
+
+## Known Bottleneck — Spatial Convolutions Do Not Close Reliably
+
+**What passes and what doesn't, as of 2026-04-19:**
+
+| Layer | Shape | Pipeline result | Notes |
+|---|---|---|---|
+| `layer1_0_conv1` | 1×1, IC=OC=64, no padding | ✅ **PASS** end-to-end | Foundry first shot, 0 Surgeon attempts, Yosys 12s. Fmax 116.3 MHz, lut 12,015, area ~100k µm². Reproducible across two separate runs. |
+| `layer0_0_conv1` | 7×7 stride-2, IC=3 OC=64, padding=3 | ❌ `fail_abort` in pipeline; ✅ passes when Yosys is invoked manually with no timeout | Sim+timing pass; synth times out at pipeline's 25-min cap. Manual Yosys at ~16 min: Fmax 61.4 MHz, lut 144,159, area 1.92 mm². RTL is synthesizable — tooling budget was tight. |
+| `layer1_0_conv2` | 3×3, IC=OC=64, padding=1 | ❌ Sim never closes | Three separate Surgeon attempts converge on `sim_stalled` without reaching a passing state. Spent ~$50 on Surgeon retries across the run before aborting. |
+
+### What we tried on the spatial convs, chronologically
+
+1. **Original OC-parallel design (MP = OC = 64).** Each ST_RUNNING cycle fired 64 parallel MACs and 64 parallel reads from a flat `weights[0..OC*K_TOTAL-1]` register array. Synth correct in principle, but the combinational cone at Yosys after OPT was ~300k cells, ABC on Sky130 couldn't map in 600s. Pipeline reported `fail_abort: synthesis_failed`. Tried across ~5 runs, each ~$6–$9.
+
+2. **Introduced `mac_parallelism` (MP=8).** Replaced OC-parallel with OC-group iteration: 8 parallel MAC lanes, `OC_PASSES = ceil(OC/MP)` passes per output pixel, each pass doing `K_TOTAL` MAC cycles across 8 lanes. Post-OPT cell count dropped ~7× (299k → 43k). Synth still timed out at 600s, the new hot spot was 8 parallel reads from a ~9k-element weight array. Verified end-to-end once by running Yosys manually with no timeout (the 61.4 MHz result above). Ran ~4 pipeline attempts, $5–$9 each.
+
+3. **Raised `YOSYS_TIMEOUT_MS` to 1800s then 1500s (25 min).** Manual run was 16 min. One pipeline run came within the budget, but Surgeon output varied — sometimes the particular RTL that won the manual run wasn't what Foundry/Surgeon produced next time, and the next RTL's synth still exceeded budget. Surgeon also began introducing "clever" memory-packing optimizations (`weights_packed`) to fight the cone, which Yosys's `OPT_MEM` pass rejected as non-constant `$meminit`. 3 runs, $6–$10 each.
+
+4. **Introduced registered shift-register `window`.** Foundry had been rebuilding `window[kh][kw][ic]` combinationally every cycle from `line_buf` + `cur_row` + `data_in` with per-tap bounds checks. Replaced with a shift-left + single-column load pattern. Moved line-buffer promotion from start-of-next-row to end-of-current-row to keep window loads ordered correctly. Fixed the combinational-window cone specifically. 2 runs, $4–$6 each — sim started passing more often but synth still timed out on a different axis (parallel weight reads).
+
+5. **Serialized weight reads (MP=4, one read per cycle).** Added `lane_counter` register that rotates 0..MP-1 across cycles; per cycle: one weight read, one multiply, one accumulate into `acc[lane_counter]`. Per OC pass: `MP*K_TOTAL + 3` cycles instead of `K_TOTAL + 3`. Latency for `layer0_0_conv1` went 1885 → 10,141. Synth side of the problem solved in principle. Locked in with `[INVARIANT:WEIGHT_ARRAY]` protection so Surgeon can't re-pack. 1 run: Foundry's first output stalled sim at `fmm=0`, three Surgeon attempts each burning ~20 turns of Opus converged on the same `fmm=7122` sim stall at the right-edge output column. Cost $9.95.
+
+6. **Ran `layer1_0_conv2` (3×3 pad=1, smaller geometry) in isolation to see if the spatial-specific issue reproduces on a less-extreme shape.** It does. First Foundry output: `sim_stalled fmm=0`. Two Surgeon attempts ($2.22 + unknown second attempt) made no progress before the Verilator simulation itself hung (no timeout on Verilator) and had to be killed manually.
+
+### Why it still doesn't close
+
+Each fix above is individually correct and measurable. The remaining failure modes are not single bugs — they're **LLM correctness variance at a problem size that keeps growing**:
+
+1. **Foundry emits a new FSM every time.** Even with the template pinned in `foundry.md`, Opus-generated RTL varies run-to-run. One run's right-edge drain exit condition is correct; the next run's isn't. The pinned template reduces variance but does not eliminate it, because Foundry still interprets/instantiates the template against a specific LayerIR.
+
+2. **Surgeon's repair surface grows with architecture.** Each added rule (shift-register window, serialized weights, INVARIANT:WEIGHT_ARRAY, partial-group gating, ready_in freeze, line-buffer promotion timing) narrows what Surgeon may touch. The bugs Foundry introduces still live inside that narrowed space but are harder to diagnose from the evidence because the evidence (`first_mismatch_index`, `output_gap_histogram`) looks the same for many different root causes.
+
+3. **Tooling has no Verilator-simulation timeout.** `run_yosys` has `YOSYS_TIMEOUT_MS`; `run_verilator` has no equivalent cap on the simulation binary. A Surgeon edit that produces an FSM which occasionally-but-not-always fires `valid_out` keeps the simulation alive forever — the testbench's `hang_budget` only fires on total silence. Observed once, hung for 50+ min before manual kill.
+
+4. **Weight-array size scales with the network.** At `layer0_0_conv1` (7×7, 64×3), `weights` is 9,408 INT8 bytes. At `layer1_0_conv2` (3×3, 64×64), it's 36,864. The user's projection for `layer4_0_conv2` (3×3, 512×512) is **2,359,296 INT8 weights = 18.9 Mbit** of state. No PDK-BRAM inference is possible on Sky130. Even correct RTL becomes a 2.4M-flop register file with a long mux tree for indexed access.
+
+5. **Bus widths scale too.** `data_out` at `layer4_0_conv3` (OC=2048) is 16,384 bits. Foundry has to emit correct bit-slicing (`data_out[global_oc*8 +: 8]`) across that entire width. LLM accuracy at this scale is the load-bearing risk; template doesn't help if the LLM skips one range of indices.
+
+### What the current pipeline actually proves
+
+- **Architecture is correct**: verified latency formula matches TB measurement to the cycle; shift-register window + serialized MAC + OC-group iteration produce synthesizable, functionally-correct RTL when the LLM gets the FSM right.
+- **1×1 pointwise convs work cleanly**: no window, no padding, no right-edge drain. `layer1_0_conv1` passes reproducibly, first-shot, under $1.
+- **Synth characterization is real**: `manual_yosys` run on `layer0_0_conv1` produced genuine Sky130 PPA (61.4 MHz, 1.92 mm², 144K gates).
+- **Spec-hash template reuse is implemented** but never exercised end-to-end, because no two spatial convs have both passed in the same run.
+
+### What would make it bulletproof (not done yet)
+
+The pipeline's bottleneck is generative RTL for spatial convs at scale, which is an open problem. The proposed fix, documented but not implemented:
+
+1. **Parameterized handwritten operator library** (`rtl_library/conv2d_pointwise.v`, `conv2d_spatial_k3p1.v`, `conv2d_spatial_k7p3.v`, `add_quantized.v`, `relu.v`, `maxpool.v`). Each handwritten once, verified once, parameterized on `OC, IC, IH, IW, MP, scale constants, weights_path`.
+2. **Foundry collapses to instantiation**: instead of generating RTL, Foundry picks a library module and emits an instantiation wrapper with the LayerIR's parameters. ~30 lines of LLM output instead of ~300. Zero structural variance.
+3. **Surgeon becomes optional** for conv/add/relu/maxpool. It stays available for new operators not in the library.
+4. **`VERILATOR_SIM_TIMEOUT_MS` added** to `mcp/tools.ts` mirroring the Yosys timeout. Currently missing and has burned ~1 hour of wall-clock on hung sims.
+5. **Weight-array size ceiling + BRAM-inferrable memory flow** before the pipeline accepts layers beyond ~1M weights. L2+ shapes will hit this.
+
+This conversion is the honest path to scaling past `layer1_0_conv1`. The `LLM-generates-RTL-from-scratch` loop is fine as a research demo and produces the one passing 1×1 module; the hybrid `LLM-picks-parts-from-verified-library` flow is what would actually cover the 17-module ResNet-50 pipeline, let alone L4.
 
 ---
 

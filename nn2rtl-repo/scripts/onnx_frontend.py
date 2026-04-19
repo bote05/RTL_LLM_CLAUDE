@@ -75,6 +75,7 @@ from scripts.golden_impl import (
     CONV_PIPELINE_STAGES,
     SIGNAL_LITERALS,
     GoldenGenerationError,
+    conv_mac_parallelism,
     Int8Add,
     Int8Conv2d,
     Int8ReLU,
@@ -909,6 +910,13 @@ def _spec_output_width_bits(spec: OnnxLayerSpec) -> int:
 # Pipeline latency
 # ---------------------------------------------------------------------------
 
+def _conv_mac_parallelism(spec: OnnxLayerSpec) -> int:
+    """mac_parallelism for an ONNX conv layer — min(OC, MAX_PARALLEL_MACS)."""
+    if spec.weight is None or len(spec.weight.shape) < 1:
+        return 1
+    return conv_mac_parallelism(int(spec.weight.shape[0]))
+
+
 def _pipeline_latency(spec: OnnxLayerSpec) -> int:
     if spec.op_type == "conv2d":
         weight_shape = list(spec.weight.shape) if spec.weight is not None else [1, 1, 1, 1]
@@ -917,6 +925,7 @@ def _pipeline_latency(spec: OnnxLayerSpec) -> int:
             input_shape=spec.input_shape,
             stride=spec.stride,
             padding=spec.padding,
+            mac_parallelism=_conv_mac_parallelism(spec),
         )
     if spec.op_type == "maxpool":
         return compute_maxpool_latency_cycles(spec)
@@ -1149,6 +1158,7 @@ def build_pipeline_ir_from_onnx(
         if spec.op_type == "conv2d":
             layer_payload["stride"] = list(spec.stride)
             layer_payload["padding"] = list(spec.padding)
+            layer_payload["mac_parallelism"] = _conv_mac_parallelism(spec)
 
         if spec.op_type == "maxpool":
             layer_payload["kernel_size"] = spec.pool_kernel
