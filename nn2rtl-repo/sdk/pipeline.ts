@@ -113,6 +113,15 @@ export class PipelineStateManager {
       return;
     }
 
+    // Architectural-capability gaps (e.g. bus width exceeding
+    // MAX_SUPPORTED_BUS_BITS) are not RTL bugs Surgeon can fix — they are
+    // tooling limits. Report as fail_abort so the summary separates them
+    // from real RTL failures.
+    if (result.failure_class === "architectural_unsupported") {
+      this.state.modules[module_id] = "fail_abort";
+      return;
+    }
+
     const attempts = this.state.attempts[module_id] ?? 0;
     this.state.modules[module_id] =
       attempts < this.state.max_retries ? "fail_retry" : "fail_abort";

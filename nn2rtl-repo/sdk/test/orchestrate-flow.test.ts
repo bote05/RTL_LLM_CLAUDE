@@ -99,10 +99,12 @@ function createQueryMock(
   }: {
     prompt: string;
   }): AsyncGenerator<SDKMessage, void> {
+    // The collapsed single-layer dispatch (Fix B) puts the prompt in the
+    // form "You are the `<slug>` agent. Execute the task described below."
     const key =
-      prompt.includes("Invoke the `cartographer`") ? "cartographer"
-        : prompt.includes("Invoke the `foundry`") ? "foundry"
-        : prompt.includes("Invoke the `surgeon`") ? "surgeon"
+      prompt.includes("You are the `cartographer`") ? "cartographer"
+        : prompt.includes("You are the `foundry`") ? "foundry"
+        : prompt.includes("You are the `surgeon`") ? "surgeon"
         : null;
 
     if (!key) {
@@ -148,10 +150,12 @@ describe("runPipeline", () => {
     });
 
     expect(queryFn.mock.calls.some(([call]) => (call as { prompt: string }).prompt.includes("cartographer"))).toBe(false);
+    // Single-layer dispatch (Fix B) passes allowedTools equal to the merged
+    // agent tools list; Agent/Task are in disallowedTools, not allowedTools.
     expect(queryFn.mock.calls[0]?.[0]).toMatchObject({
       options: {
         maxTurns: 20,
-        allowedTools: ["Agent", "mcp__nn2rtl-tools__write_verilog"],
+        allowedTools: expect.arrayContaining(["Bash", "mcp__nn2rtl-tools__write_verilog"]),
       },
     });
     expect(JSON.parse(await readFile(path.join(reportsDir, "pipeline_summary.json"), "utf8"))).toMatchObject({
@@ -224,7 +228,7 @@ describe("runPipeline", () => {
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
@@ -296,6 +300,48 @@ describe("runPipeline", () => {
     expect(diskMeta.generated_by).toBe("Foundry");
   });
 
+  it("fail-aborts a layer whose bus width exceeds MAX_SUPPORTED_BUS_BITS without invoking Foundry or Surgeon", async () => {
+    // Build a custom pipeline IR whose sole layer has a bus width way over
+    // the 4096-bit cap. Everything else mirrors the standard fixture so the
+    // pipeline otherwise boots cleanly.
+    const pipelineIr = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "pipeline_ir.json"), "utf8"),
+    );
+    const layer = pipelineIr.layers[0];
+    // 1024 channels * 8 = 8192 bits input. 16384 bits output. Both over 4096.
+    layer.input_shape = [1, 1024, 1, 1];
+    layer.output_shape = [1, 2048, 1, 1];
+    layer.input_width_bits = 8192;
+    layer.output_width_bits = 16384;
+    layer.weight_shape = [2048, 1024, 1, 1];
+    layer.num_weights = 2048 * 1024;
+    await writeFile(path.join(outputRoot, "layer_ir.json"), JSON.stringify(pipelineIr, null, 2), "utf8");
+    await writeFile(
+      path.join(outputRoot, "layer_ir.json.checkpoint"),
+      `${path.resolve("checkpoint.pth")}\n`,
+      "utf8",
+    );
+
+    const queryFn = createQueryMock({});
+    const assayerFn = createAssayerMock([]);
+    const yosysFn = createYosysMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+    });
+
+    expect(queryFn).not.toHaveBeenCalled();
+    expect(yosysFn).not.toHaveBeenCalled();
+    expect(assayerFn).not.toHaveBeenCalled();
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules[layer.module_id]).toBe("fail_abort");
+    expect(state.results[layer.module_id].failure_class).toBe("architectural_unsupported");
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"reason":"architectural_unsupported"');
+  });
+
   it("aborts on tb_setup_error without invoking Surgeon", async () => {
     await writePipelineIrFixture();
     const originalModule = JSON.parse(
@@ -329,12 +375,64 @@ describe("runPipeline", () => {
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(false);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(false);
     expect(yosysFn).not.toHaveBeenCalled();
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("fail_abort");
     expect(state.results.unit_module.status_class).toBe("tb_setup_error");
+  });
+
+  it("routes verilator_timeout VerifResult through Surgeon the same as other sim failures", async () => {
+    await writePipelineIrFixture();
+    const originalModule = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const repairedModule = { ...originalModule, generated_by: "Surgeon", attempt: 2 };
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+    // A Verilator-side timeout: the binary was killed after the wall-clock cap.
+    const timeoutVerif = {
+      module_id: "unit_module",
+      status: "fail",
+      status_class: "sim_stalled",
+      timing_pass: false,
+      timing_actual_cycles: -1,
+      timing_expected_cycles: 1,
+      expected: [],
+      got: [],
+      failure_class: "verilator_timeout",
+      verilator_stderr: "child process killed by SIGTERM after timeout",
+      fix_hint: "Verilator simulation exceeded the 600s wall-clock cap.",
+    };
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        return successResult(originalModule);
+      }],
+      surgeon: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        return successResult(repairedModule);
+      }],
+    });
+    const assayerFn = createAssayerMock([timeoutVerif, verifPass]);
+    const yosysFn = createYosysMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+    });
+
+    // Surgeon was invoked (not fail_abort like tb_setup_error).
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
+    // Surgeon prompt carries the verilator_timeout rubric.
+    const surgeonPrompt = prompts.find((p) => p.includes("You are the `surgeon`")) ?? "";
+    expect(surgeonPrompt).toContain("VERILATOR TIMEOUT");
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("pass");
   });
 
   it("runs the Surgeon repair path after a failed yosys synthesis report", async () => {
@@ -373,7 +471,7 @@ describe("runPipeline", () => {
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
     expect(yosysFn).toHaveBeenCalledTimes(2);
-    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
@@ -428,7 +526,7 @@ describe("runPipeline", () => {
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
     expect(yosysFn).toHaveBeenCalledTimes(2);
-    expect(prompts.some((prompt) => prompt.includes("Invoke the `surgeon`"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
     expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');

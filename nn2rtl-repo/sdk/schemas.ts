@@ -18,6 +18,9 @@ export const failureClassSchema = z.enum([
   "bias_term_missing",
   "batch_norm_not_folded",
   "synthesis_failed",
+  "verilator_timeout",
+  "architectural_unsupported",
+  "structural_preflight_failed",
 ]);
 
 export const moduleStatusSchema = z.enum([

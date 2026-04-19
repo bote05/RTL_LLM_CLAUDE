@@ -73,7 +73,10 @@ export type FailureClass =
   | "scale_factor_misapplied"
   | "bias_term_missing"
   | "batch_norm_not_folded"
-  | "synthesis_failed";
+  | "synthesis_failed"
+  | "verilator_timeout"
+  | "architectural_unsupported"
+  | "structural_preflight_failed";
 
 export interface VerifResult {
   module_id: string;
