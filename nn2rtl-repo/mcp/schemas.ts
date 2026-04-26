@@ -56,6 +56,9 @@ export const layerIrBaseSchema = z
     stride: z.array(z.number().int().positive()).optional(),
     padding: z.array(z.number().int().nonnegative()).optional(),
     mac_parallelism: z.number().int().positive().optional(),
+    weight_bank_paths: z.array(z.string()).optional(),
+    io_mode: z.enum(["packed_full", "channel_tiled"]).optional(),
+    channel_tile: z.number().int().positive().optional(),
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
     pool_padding: z.array(z.number().int().nonnegative()).optional(),
@@ -195,11 +198,13 @@ export const runVerilatorInput = z
   })
   .strict();
 
-export const runYosysInput = z
+export const runVivadoInput = z
   .object({
     verilog_source: z.string(),
     module_name: z.string(),
     clock_period_ns: z.number().nonnegative().default(0),
+    part: z.string().optional(),
+    threads: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -224,12 +229,21 @@ export const runIverilogOutput = z
   })
   .strict();
 
-export const runYosysOutput = z
+export const runVivadoOutput = z
   .object({
     success: z.boolean(),
+    tool: z.literal("vivado").default("vivado"),
+    part: z.string().default("xc7a100tcsg324-1"),
+    stage: z.literal("synth").default("synth"),
     lut_count: z.number(),
+    ff_count: z.number().default(0),
+    dsp_count: z.number().default(0),
+    bram18_count: z.number().default(0),
+    bram36_count: z.number().default(0),
+    bram18_equiv: z.number().default(0),
+    wns_ns: z.number().nullable().default(null),
+    timing_met: z.boolean().default(false),
     fmax_mhz: z.number(),
-    area_um2: z.number().default(0),
     report: z.string(),
   })
   .strict();

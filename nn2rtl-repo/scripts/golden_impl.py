@@ -38,7 +38,7 @@ SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 #   SCALE  — biased[oc] * SCALE_MULT     (32-bit × 16-bit multiply only)
 #   OUTPUT — >>> SCALE_SHIFT, saturate, pack to data_out
 # Separating BIAS from SCALE halves the critical-path logic depth compared to
-# combining them, which is the primary lever for Fmax > 100 MHz on Sky130.
+# combining them, which is the primary lever for Vivado timing on Artix-7.
 CONV_PIPELINE_STAGES = 4
 
 # Cap on the number of parallel MAC LANES (accumulator count) Foundry
@@ -56,9 +56,8 @@ CONV_PIPELINE_STAGES = 4
 # Practical effect of MP: it trades accumulator storage (acc/biased/scaled
 # arrays sized [0:MP-1]) against OC_PASSES count. Smaller MP → fewer
 # accumulator registers but more passes. Larger MP → more regs, fewer
-# passes, but the widening hits Sky130 synth eventually.
-# 4 is the current sweet spot after the first OC=64 conv synthesized with
-# no timeout at MP=4.
+# passes, but wider groups need corresponding BRAM banking and routing budget.
+# 4 is the current conservative point for the existing serialized datapath.
 MAX_PARALLEL_MACS = 4
 
 
@@ -69,7 +68,7 @@ def conv_mac_parallelism(output_channels: int) -> int:
     (OC < MAX_PARALLEL_MACS) we generate OC lanes, which keeps the existing
     trivial synthesis path for pointwise 1×1 with few channels. Above the cap
     we serialize into ``ceil(OC / MAX_PARALLEL_MACS)`` passes so the
-    combinational cone stays small enough for Sky130/ABC to map.
+    combinational cone stays small enough for Vivado to map and time.
     """
     if output_channels <= 0:
         return 1
@@ -89,14 +88,15 @@ def compute_conv2d_latency_cycles(
 
     * **Pointwise (KH = KW = 1)** — the RTL is a single-pixel output-stationary
       MAC array. One output sample takes ``IC * 1 * 1`` MAC cycles plus the
-      shared four-stage post-MAC pipeline (LATCH + BIAS + SCALE + OUTPUT).
-      Formula: ``IC * KH * KW + CONV_PIPELINE_STAGES``.
+      shared post-MAC pipeline. Vivado-friendly synchronous ROM reads add a
+      read-prime cycle per OC pass.
+      Formula: ``1 + OC_PASSES * (MP * IC * KH * KW + 4)``.
 
     * **Spatial (KH*KW > 1)** — the RTL uses a line buffer + sliding-window
       datapath (see nn2rtl-plugin/agents/foundry.md § "Spatial conv datapath").
       The first valid_out only fires once the first complete receptive-field
       window has been streamed in, plus the MAC and the post-MAC pipeline:
-      ``max(KH - 1 - PH, 0) * IW + max(KW - PW, 1) + K_TOTAL + 3``
+      ``max(KH - 1 - PH, 0) * (IW + PW) + max(KW - PW, 1) + OC_PASSES*(MP*K_TOTAL + 4)``
       where ``IW = input_shape[3]`` and ``PH, PW`` come from the layer's
       padding. If the frontend passed ``input_shape`` and ``padding``, we use
       that formula; otherwise we fall back to the pointwise shape with a
@@ -114,13 +114,15 @@ def compute_conv2d_latency_cycles(
     # OC-group iteration with SERIALIZED weight reads:
     # Per OC pass, ST_RUNNING runs MP*K_TOTAL cycles (one weight read / one
     # multiply / one accumulate per cycle; lane_counter rotates 0..MP-1).
-    # Then ST_BIAS (1) + ST_SCALE (1) + ST_OUTPUT (1) = MP*K_TOTAL + 3
-    # cycles per pass. The LAST pass's ST_OUTPUT asserts valid_out; the TB
-    # samples it the following cycle (already absorbed into the formula).
+    # Vivado BRAM-style synchronous ROM adds one read-prime cycle before the
+    # first multiply. Then ST_BIAS (1) + ST_SCALE (1) + ST_OUTPUT (1), giving
+    # MP*K_TOTAL + 4 cycles per pass. The LAST pass's ST_OUTPUT asserts
+    # valid_out; the TB samples it the following cycle (already absorbed into
+    # the formula).
     mp = int(mac_parallelism) if mac_parallelism and mac_parallelism > 0 else oc_i
     mp = min(mp, oc_i) if oc_i > 0 else mp
     oc_passes = (oc_i + mp - 1) // mp if mp > 0 and oc_i > 0 else 1
-    pass_cycles = mp * k_total + 3
+    pass_cycles = mp * k_total + 4
 
     if kh_i * kw_i <= 1:
         # Pointwise — no window fill. First input triggers output_fires
@@ -679,6 +681,65 @@ def get_weight_artifact_paths(repo_root: Path, module_id: str) -> tuple[Path, Pa
     )
 
 
+def get_weight_bank_artifact_paths(
+    repo_root: Path,
+    module_id: str,
+    mac_parallelism: int,
+) -> list[Path]:
+    _, _, weights_dir = get_output_paths(repo_root)
+    mp = max(1, int(mac_parallelism))
+    return [weights_dir / f"{module_id}_weights_bank{lane}.hex" for lane in range(mp)]
+
+
+def bank_weight_values_for_mac_lanes(
+    weight_values: Sequence[int],
+    weight_shape: Sequence[int],
+    mac_parallelism: int,
+) -> list[list[int]]:
+    if len(weight_shape) < 4:
+        raise GoldenGenerationError("weight_shape must be [OC, IC, KH, KW] to bank conv weights.")
+    oc, ic, kh, kw = (int(v) for v in weight_shape[:4])
+    if oc <= 0 or ic <= 0 or kh <= 0 or kw <= 0:
+        raise GoldenGenerationError(f"Invalid conv weight_shape for banking: {list(weight_shape)}.")
+    mp = max(1, min(int(mac_parallelism), oc))
+    k_total = ic * kh * kw
+    expected = oc * k_total
+    if len(weight_values) != expected:
+        raise GoldenGenerationError(
+            f"Cannot bank {len(weight_values)} weights for shape {list(weight_shape)}; expected {expected}."
+        )
+
+    oc_passes = (oc + mp - 1) // mp
+    banks: list[list[int]] = [[] for _ in range(mp)]
+    for oc_group in range(oc_passes):
+        for lane in range(mp):
+            oc_index = oc_group * mp + lane
+            if oc_index < oc:
+                start = oc_index * k_total
+                banks[lane].extend(int(v) for v in weight_values[start:start + k_total])
+            else:
+                banks[lane].extend(0 for _ in range(k_total))
+    return banks
+
+
+def write_weight_bank_hex_files(
+    weight_values: Sequence[int],
+    weight_shape: Sequence[int],
+    mac_parallelism: int,
+    repo_root: Path,
+    module_id: str,
+) -> list[Path]:
+    bank_values = bank_weight_values_for_mac_lanes(
+        weight_values,
+        weight_shape,
+        mac_parallelism,
+    )
+    bank_paths = get_weight_bank_artifact_paths(repo_root, module_id, len(bank_values))
+    for values, bank_path in zip(bank_values, bank_paths):
+        write_signed_int8_hex(values, bank_path)
+    return bank_paths
+
+
 def int8_to_hex(value: int) -> str:
     if value < -128 or value > 127:
         raise ValueError(f"INT8 value out of range: {value}")
@@ -931,6 +992,30 @@ def validate_pipeline_ir_payload(payload: Mapping[str, Any]) -> None:
                     raise GoldenGenerationError(
                         f"Layer '{module_id}' field '{field_name}' must be exactly [H, W] for conv2d layers."
                     )
+            weight_bank_paths = layer.get("weight_bank_paths")
+            if weight_bank_paths is not None:
+                mac_parallelism = coerce_int(
+                    layer.get("mac_parallelism"),
+                    f"{module_id}.mac_parallelism",
+                )
+                if (
+                    isinstance(weight_bank_paths, (str, bytes))
+                    or not isinstance(weight_bank_paths, Sequence)
+                    or len(weight_bank_paths) != mac_parallelism
+                ):
+                    raise GoldenGenerationError(
+                        f"Layer '{module_id}' weight_bank_paths must contain one path per "
+                        f"mac_parallelism lane ({mac_parallelism})."
+                    )
+                for bank_path in weight_bank_paths:
+                    if not isinstance(bank_path, str) or not is_absolute_posix_path(bank_path):
+                        raise GoldenGenerationError(
+                            f"Layer '{module_id}' weight_bank_paths entries must be absolute POSIX paths."
+                        )
+                    if not Path(bank_path).exists():
+                        raise GoldenGenerationError(
+                            f"Layer '{module_id}' weight bank file '{bank_path}' does not exist on disk."
+                        )
 
 
 def build_legacy_pipeline_ir_payload(
@@ -1128,9 +1213,19 @@ def build_fx_pipeline_ir_payload(
             conv_padding = list(operation_map.get(module_id, {}).get("padding", [0, 0]))
             conv_oc = int(conv_weight_shape[0]) if conv_weight_shape else 0
             conv_mp = conv_mac_parallelism(conv_oc)
+            weight_bank_paths = write_weight_bank_hex_files(
+                weight_values,
+                conv_weight_shape,
+                conv_mp,
+                repo_root,
+                module_id,
+            )
             layer_payload["stride"] = conv_stride
             layer_payload["padding"] = conv_padding
             layer_payload["mac_parallelism"] = conv_mp
+            layer_payload["weight_bank_paths"] = [
+                bank_path.resolve().as_posix() for bank_path in weight_bank_paths
+            ]
             layer_payload["pipeline_latency_cycles"] = compute_conv2d_latency_cycles(
                 conv_weight_shape,
                 input_shape=conv_input_shape,

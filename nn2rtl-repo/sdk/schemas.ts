@@ -69,6 +69,9 @@ export const layerIrBaseSchema = z
     // emitted for op_type == "conv2d"; ignored otherwise. Frontend computes
     // it as min(OC, PIPELINE_CONFIG.MAX_PARALLEL_MACS).
     mac_parallelism: z.number().int().positive().optional(),
+    weight_bank_paths: z.array(z.string()).optional(),
+    io_mode: z.enum(["packed_full", "channel_tiled"]).optional(),
+    channel_tile: z.number().int().positive().optional(),
     // MaxPool2d geometry — optional at the type level because only present
     // when op_type === "maxpool". The *refined* schema below requires them
     // for maxpool layers; this base schema does not so that .pick()/.omit()
@@ -202,9 +205,18 @@ export const verificationSidecarSchema = z
 export const synthesisReportSchema = z
   .object({
     success: z.boolean(),
+    tool: z.literal("vivado").default("vivado"),
+    part: z.string().default("xc7a100tcsg324-1"),
+    stage: z.literal("synth").default("synth"),
     lut_count: z.number(),
+    ff_count: z.number().default(0),
+    dsp_count: z.number().default(0),
+    bram18_count: z.number().default(0),
+    bram36_count: z.number().default(0),
+    bram18_equiv: z.number().default(0),
+    wns_ns: z.number().nullable().default(null),
+    timing_met: z.boolean().default(false),
     fmax_mhz: z.number(),
-    area_um2: z.number().default(0),
     report: z.string(),
   })
   .strict();

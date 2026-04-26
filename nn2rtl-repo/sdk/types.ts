@@ -31,10 +31,16 @@ export interface LayerIR {
   padding?: number[];
   // Number of MAC lanes Foundry must instantiate for this layer. The FSM
   // iterates OC in groups of `mac_parallelism` (ceil(OC / mac_parallelism)
-  // passes per output pixel), keeping the combinational cone small enough
-  // for Sky130 / ABC to map inside the YOSYS_TIMEOUT_MS budget. Only set for
-  // op_type == "conv2d" — other ops ignore it.
+  // passes per output pixel), keeping each Artix-7/Vivado timing cone small.
+  // Only set for op_type == "conv2d" — other ops ignore it.
   mac_parallelism?: number;
+  // Optional BRAM-bank artifact paths for Vivado-oriented conv generation.
+  // Legacy modules may continue to use the flat weights_path.
+  weight_bank_paths?: string[];
+  // Optional IO-mode hooks for the tiled-channel architecture. packed_full is
+  // the current default when omitted; channel_tiled is for future deep layers.
+  io_mode?: "packed_full" | "channel_tiled";
+  channel_tile?: number;
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
   pool_stride?: number[];

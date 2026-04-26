@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from scripts.golden_impl import (
+    bank_weight_values_for_mac_lanes,
     build_pipeline_ir_payload,
     fold_batch_norm_into_conv,
     int8_to_hex,
@@ -16,6 +17,7 @@ from scripts.golden_impl import (
     write_golden_vector_file,
     write_pipeline_ir,
     write_signed_int8_hex,
+    write_weight_bank_hex_files,
 )
 from scripts.quantize_impl import (
     build_toy_quantized_checkpoint,
@@ -124,6 +126,23 @@ def test_write_signed_int8_hex_writes_one_uppercase_value_per_line(tmp_path: Pat
     hex_path = tmp_path / "weights.hex"
     write_signed_int8_hex([-1, 0, 127, -128], hex_path)
     assert hex_path.read_text(encoding="utf8") == "FF\n00\n7F\n80\n"
+
+
+def test_weight_bank_files_partition_conv_weights_by_mac_lane(tmp_path: Path) -> None:
+    weight_values = list(range(10))
+    weight_shape = [5, 1, 1, 2]
+
+    banks = bank_weight_values_for_mac_lanes(weight_values, weight_shape, mac_parallelism=2)
+
+    assert banks == [
+        [0, 1, 4, 5, 8, 9],
+        [2, 3, 6, 7, 0, 0],
+    ]
+
+    paths = write_weight_bank_hex_files(weight_values, weight_shape, 2, tmp_path, "conv")
+    assert [path.name for path in paths] == ["conv_weights_bank0.hex", "conv_weights_bank1.hex"]
+    assert paths[0].read_text(encoding="utf8") == "00\n01\n04\n05\n08\n09\n"
+    assert paths[1].read_text(encoding="utf8") == "02\n03\n06\n07\n00\n00\n"
 
 
 def test_golden_vector_files_store_bus_bytes_per_sample_in_v2_header(tmp_path: Path) -> None:

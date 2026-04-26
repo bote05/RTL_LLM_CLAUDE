@@ -296,6 +296,9 @@ def test_faithful_conv_goldens_match_real_pytorch_conv(tmp_path):
     assert conv_layer["op_type"] == "conv2d"
     assert conv_layer["stride"] == [1, 1]
     assert conv_layer["padding"] == [1, 1]
+    assert len(conv_layer["weight_bank_paths"]) == conv_layer["mac_parallelism"]
+    for bank_path in conv_layer["weight_bank_paths"]:
+        assert Path(bank_path).exists()
     # Output is SAME-padded 8x8, so 64 output samples per vector
     assert conv_layer["output_shape"] == [1, 4, 8, 8]
     # Pipeline latency for spatial conv must be > K_TOTAL + 4 because of
@@ -353,3 +356,7 @@ def test_end_to_end_tiny_cnn(tmp_path):
     for l in payload["layers"]:
         assert Path(l["golden_inputs_path"]).exists()
         assert Path(l["golden_outputs_path"]).exists()
+        if l["op_type"] == "conv2d":
+            assert len(l["weight_bank_paths"]) == l["mac_parallelism"]
+            for bank_path in l["weight_bank_paths"]:
+                assert Path(bank_path).exists()

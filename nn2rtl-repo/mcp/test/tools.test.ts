@@ -8,15 +8,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   VERILATOR_COMMAND,
   get_rtl_patterns,
-  parseYosysReport,
+  parseVivadoReport,
   readSidecarIfPresent,
   read_weights,
   resolveOutputRoot,
   resolveRepoRootFromEnv,
   run_iverilog,
   run_verilator,
-  run_yosys,
+  run_vivado,
   stderrFromUnknown,
+  toVivadoPath,
   withTempDir,
   write_verilog,
 } from "../tools.js";
@@ -145,107 +146,156 @@ describe("mcp tools", () => {
     });
   });
 
-  it("parses Yosys reports for LUTs and MHz", () => {
-    expect(parseYosysReport("LUT4 12\nEstimated fmax: 50.5 MHz")).toEqual({
-      lut_count: 12,
-      fmax_mhz: 50.5,
-      area_um2: 0,
-    });
+  it("converts WSL and Windows paths into Vivado-friendly paths", () => {
+    expect(toVivadoPath("/mnt/c/Users/User/project/file with spaces.v")).toBe(
+      "C:/Users/User/project/file with spaces.v",
+    );
+    expect(toVivadoPath("C:\\Users\\User\\project\\weights.hex")).toBe(
+      "C:/Users/User/project/weights.hex",
+    );
+    expect(toVivadoPath("D:/fpga/out/report.rpt")).toBe("D:/fpga/out/report.rpt");
+    expect(toVivadoPath("/home/user/project/module.v")).toBe("/home/user/project/module.v");
   });
 
-  it("parses abc9 delay reported in ns into Fmax", () => {
-    const report = "LUT4 8\nABC: Best Delay = 10.000 ns";
-    const parsed = parseYosysReport(report);
-    expect(parsed.lut_count).toBe(8);
-    expect(parsed.fmax_mhz).toBeCloseTo(100, 5);
-  });
-
-  it("parses abc9 delay reported in ps into Fmax", () => {
-    const report = "LUT4 2\nABC: Delay = 2500.0 ps";
-    const parsed = parseYosysReport(report);
-    expect(parsed.lut_count).toBe(2);
-    expect(parsed.fmax_mhz).toBeCloseTo(400, 5);
-  });
-
-  it("parses ABC current-delay fallback lines into Fmax", () => {
-    const report = 'ABC: Current delay (882.99 ps) does not exceed the target delay (20000.00 ps).';
-    const parsed = parseYosysReport(report);
-    expect(parsed.fmax_mhz).toBeCloseTo(1_132.52, 2);
-  });
-
-  it("returns fmax_mhz=0 when no delay/MHz information is present", () => {
-    expect(parseYosysReport("LUT4 3\nnothing measurable here")).toEqual({
-      lut_count: 3,
-      fmax_mhz: 0,
-      area_um2: 0,
-    });
-  });
-
-  it("parses Sky130 stat output into total cell count and area", () => {
+  it("parses Vivado utilization and timing reports", () => {
     const report = [
-      "=== unit_module ===",
-      "   178496 cells",
-      "=== unit_module ===",
-      "   147911 1.11E+006 cells",
-      "Chip area for module '\\unit_module': 1112938.646400",
+      "| Slice LUTs*        | 1,234 |",
+      "| Slice Registers    | 567   |",
+      "| DSPs               | 8     |",
+      "| RAMB36/FIFO*       | 2     |",
+      "| RAMB18             | 1     |",
+      "| WNS(ns) | TNS(ns) |",
+      "| 2.500   | 0.000   |",
     ].join("\n");
-    expect(parseYosysReport(report)).toEqual({
-      lut_count: 147911,
-      fmax_mhz: 0,
-      area_um2: 1112938.6464,
+    const parsed = parseVivadoReport(report, 20, "xc7a100tcsg324-1");
+    expect(parsed).toMatchObject({
+      success: true,
+      tool: "vivado",
+      part: "xc7a100tcsg324-1",
+      stage: "synth",
+      lut_count: 1234,
+      ff_count: 567,
+      dsp_count: 8,
+      bram36_count: 2,
+      bram18_count: 1,
+      bram18_equiv: 5,
+      wns_ns: 2.5,
+      timing_met: true,
     });
+    expect(parsed.fmax_mhz).toBeCloseTo(57.1428, 3);
   });
 
-  it("runs yosys successfully when the command layer returns a valid report", async () => {
-    const commandRunner = vi.fn(async (_file, args: string[]) => {
-      expect(args[1]).toContain("-constr");
-      expect(args[1]).toContain("-D 20000");
-      return {
-        stdout: "ABC: WireLoad = \"none\" Delay = 857.82 ps\nChip area for module '\\passthrough': 590.566400",
-        stderr: "",
-      };
+  it("marks Vivado timing as failed when WNS is negative", () => {
+    const parsed = parseVivadoReport("WNS(ns): -1.250\n| Slice LUTs* | 4 |", 20);
+    expect(parsed.timing_met).toBe(false);
+    expect(parsed.fmax_mhz).toBeCloseTo(47.0588, 3);
+  });
+
+  it("returns fmax_mhz=0 when Vivado timing data is absent", () => {
+    const parsed = parseVivadoReport("| Slice LUTs* | 3 |", 20);
+    expect(parsed.wns_ns).toBeNull();
+    expect(parsed.fmax_mhz).toBe(0);
+    expect(parsed.timing_met).toBe(false);
+  });
+
+  it("runs vivado successfully when the command layer returns valid reports", async () => {
+    const commandRunner = vi.fn(async (_file, args: string[], options) => {
+      expect(args).toContain("-mode");
+      expect(args).toContain("batch");
+      expect(args).toContain("-notrace");
+      expect(args.some((arg) => arg.includes("synth.tcl"))).toBe(true);
+      expect(options?.cwd).toBeTruthy();
+      const cwd = options?.cwd as string;
+      const tcl = await readFile(path.join(cwd, "synth.tcl"), "utf8");
+      const rtl = await readFile(path.join(cwd, "passthrough.v"), "utf8");
+      expect(tcl).toContain("set_param general.maxThreads");
+      expect(tcl).toContain("synth_design -top passthrough -part xc7a100tcsg324-1");
+      expect(rtl).toContain('$readmemh("C:/Users/User/weights.hex", weights)');
+      await writeFile(path.join(cwd, "post_synth_utilization.rpt"), "| Slice LUTs* | 4 |\n| Slice Registers | 2 |\n| DSPs | 1 |", "utf8");
+      await writeFile(path.join(cwd, "post_synth_ram_utilization.rpt"), "| RAMB36/FIFO* | 1 |\n| RAMB18 | 0 |", "utf8");
+      await writeFile(path.join(cwd, "post_synth_timing_summary.rpt"), "WNS(ns): 5.000", "utf8");
+      return { stdout: "vivado ok", stderr: "" };
     });
-    const result = await run_yosys("module passthrough; endmodule", "passthrough", 20, {
-      commandRunner,
-    });
+    const result = await run_vivado(
+      'module passthrough; reg [7:0] weights [0:0]; initial $readmemh("/mnt/c/Users/User/weights.hex", weights); endmodule',
+      "passthrough",
+      20,
+      { commandRunner },
+    );
     expect(commandRunner).toHaveBeenCalledOnce();
     expect(result.success).toBe(true);
-    expect(result.lut_count).toBe(0);
-    expect(result.fmax_mhz).toBeCloseTo(1_165.7457, 4);
-    expect(result.area_um2).toBe(590.5664);
-    expect(result.report).toBe(
-      "ABC: WireLoad = \"none\" Delay = 857.82 ps\nChip area for module '\\passthrough': 590.566400",
-    );
+    expect(result.lut_count).toBe(4);
+    expect(result.ff_count).toBe(2);
+    expect(result.dsp_count).toBe(1);
+    expect(result.bram18_equiv).toBe(2);
+    expect(result.fmax_mhz).toBeCloseTo(66.6667, 4);
   });
 
-  it("returns a failure report when yosys execution fails", async () => {
-    const result = await run_yosys("module bad; endmodule", "bad", 20, {
+  it("returns a failure report when vivado execution fails", async () => {
+    const result = await run_vivado("module bad; endmodule", "bad", 20, {
       commandRunner: async () => {
-        throw { stderr: "yosys failed" };
+        throw { stderr: "vivado failed" };
       },
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: false,
+      tool: "vivado",
+      part: "xc7a100tcsg324-1",
+      stage: "synth",
       lut_count: 0,
+      ff_count: 0,
+      dsp_count: 0,
+      bram18_count: 0,
+      bram36_count: 0,
+      bram18_equiv: 0,
+      wns_ns: null,
+      timing_met: false,
       fmax_mhz: 0,
-      area_um2: 0,
-      report: "yosys failed",
+      report: "vivado failed",
     });
   });
 
-  it("keeps backward compatibility for run_yosys callers that pass runtime overrides as arg 3", async () => {
-    const result = await run_yosys("module passthrough; endmodule", "passthrough", {
-      commandRunner: async () => ({
-        stdout: "LUT4 4\nEstimated fmax: 42.0 MHz",
-        stderr: "",
+  it("throws missing-binary errors from vivado as infrastructure failures", async () => {
+    const missingBinary = Object.assign(new Error("spawn vivado ENOENT"), { code: "ENOENT" });
+    await expect(
+      run_vivado("module bad; endmodule", "bad", 20, {
+        commandRunner: async () => {
+          throw missingBinary;
+        },
       }),
+    ).rejects.toThrow("spawn vivado ENOENT");
+  });
+
+  it("throws vivado timeouts as infrastructure failures", async () => {
+    const timeout = Object.assign(new Error("vivado timed out"), {
+      killed: true,
+      signal: "SIGTERM",
     });
-    expect(result).toEqual({
+    await expect(
+      run_vivado("module bad; endmodule", "bad", 20, {
+        commandRunner: async () => {
+          throw timeout;
+        },
+      }),
+    ).rejects.toThrow("vivado timed out");
+  });
+
+  it("uses explicit Vivado part and thread settings", async () => {
+    const result = await run_vivado("module passthrough; endmodule", "passthrough", 10, "xc7a35tcpg236-1", 12, {
+      commandRunner: async (_file, _args, options) => {
+        const cwd = options?.cwd as string;
+        const tcl = await readFile(path.join(cwd, "synth.tcl"), "utf8");
+        expect(tcl).toContain("set_param general.maxThreads 12");
+        expect(tcl).toContain("synth_design -top passthrough -part xc7a35tcpg236-1");
+        await writeFile(path.join(cwd, "post_synth_utilization.rpt"), "| Slice LUTs* | 4 |", "utf8");
+        await writeFile(path.join(cwd, "post_synth_timing_summary.rpt"), "WNS(ns): 1.000", "utf8");
+        return { stdout: "", stderr: "" };
+      },
+    });
+    expect(result).toMatchObject({
       success: true,
+      part: "xc7a35tcpg236-1",
       lut_count: 4,
-      fmax_mhz: 42,
-      area_um2: 0,
-      report: "LUT4 4\nEstimated fmax: 42.0 MHz",
     });
   });
 

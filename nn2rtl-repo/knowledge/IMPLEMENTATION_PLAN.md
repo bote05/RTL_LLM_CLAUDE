@@ -5,8 +5,8 @@
 **Context to read before starting:**
 - `ARCHITECTURE.md` — especially the "Known Bottleneck — Spatial Convolutions Do Not Close Reliably" section (near the end). Documents what we've tried and the exact failure modes.
 - `nn2rtl-plugin/agents/foundry.md` — current Foundry system prompt and pinned template.
-- `nn2rtl-plugin/agents/surgeon.md` — Surgeon's repair rules, including `[INVARIANT:WEIGHT_ARRAY]`.
-- `knowledge/references/conv1x1_passing_reference.v` — the one module that passed the full pipeline end-to-end (Foundry first-shot, 0 Surgeon retries, fmax 116 MHz on Sky130).
+- `nn2rtl-plugin/agents/surgeon.md` — Surgeon's repair rules, including the retired invariant-tag policy.
+- `knowledge/references/conv1x1_passing_reference.v` — the historical pointwise reference that passed the earlier flow.
 - `scripts/golden_impl.py::compute_conv2d_latency_cycles` — the authoritative latency formula. Do not change; pattern files must be consistent with it.
 - `mcp/tools.ts` + `mcp/server.ts` — existing MCP tools for reference. New tool lives here.
 
@@ -109,7 +109,7 @@ Every `02-07_*.md` file must contain, in this order:
 2. **Latency contract** — the formula branch from `golden_impl.py::compute_conv2d_latency_cycles` that applies
 3. **Required FSM states** — list + allowed transitions
 4. **Required register declarations** — `acc`/`biased`/`scaled` (sized `[0:MP-1]`), `window`/`line_buf`/`cur_row` if applicable, `k_counter`/`lane_counter`/`oc_group` counters
-5. **Weight / bias convention** — `[INVARIANT:WEIGHT_ARRAY]`, `$readmemh`, layout `weights[oc*K_TOTAL + k]`
+5. **Weight / bias convention** — `$readmemh`, Vivado-friendly ROM reads, optional `weight_bank_paths`, layout `weights[oc*K_TOTAL + k]`
 6. **Known failure modes** — cross-reference to `08_common_bugs.md`
 7. **Reference Verilog skeleton** — ~50 lines of canonical structure with placeholders
 
@@ -218,7 +218,7 @@ All four items below are universal, not ResNet-specific. They encode lessons lea
 **Fix, applied across every layer of the stack:**
 
 1. **`mcp/tools.ts`:**
-   - Add `export const VERILATOR_SIM_TIMEOUT_MS = 10 * 60 * 1000;` near `YOSYS_TIMEOUT_MS`.
+   - Add `export const VERILATOR_SIM_TIMEOUT_MS = 10 * 60 * 1000;` near the external-tool timeout constants.
    - Pass `timeout: VERILATOR_SIM_TIMEOUT_MS` to the `runtime.commandRunner(binaryPath, [sidecar_path], { ... })` call inside `run_verilator`.
    - On timeout, return a `VerifResult` with `status: "fail"`, `status_class: "sim_stalled"`, `failure_class: "verilator_timeout"`, and a `fix_hint` that names the timeout duration and asks Surgeon to look for output-loop bugs.
 
@@ -256,7 +256,7 @@ All four items below are universal, not ResNet-specific. They encode lessons lea
 
 ### CX-3 — Structural preflight extensions
 
-**Problem observed:** existing `preflightVerilogModule` only checks port declarations. Surgeon has introduced RTL that parses cleanly but is structurally wrong (e.g. `weights_packed` memory that yosys's OPT_MEM rejects, purely combinational window rebuilds that blow up synth cones, missing output-counter guards that cause Verilator hangs).
+**Problem observed:** existing `preflightVerilogModule` only checks port declarations. Surgeon has introduced RTL that parses cleanly but is structurally wrong (e.g. `weights_packed` memory that Vivado cannot infer as ROM, purely combinational window rebuilds that blow up synth cones, missing output-counter guards that cause Verilator hangs).
 
 **Fix — extend `preflightVerilogModule` with five checks derivable purely from LayerIR fields:**
 
@@ -268,7 +268,7 @@ All four items below are universal, not ResNet-specific. They encode lessons lea
    
    Parsing note: this requires scanning the `always @(posedge clk*)` block bodies for `window[...]` on the LHS of `<=`. Doable with the existing ANSI-port-parse infrastructure plus a second-pass regex on always-block contents. Violation → `structural_preflight_failed: window_not_registered`.
 
-3. **No packed weight array initializers.** Any `$meminit`-style pattern where the initial value of `weights` is derived from anything other than a direct `$readmemh` call is rejected. Specifically: reject any `weights_packed`, `initial weights[...] = <expression>`, or `assign weights[...] = ...` constructs. Violation → `structural_preflight_failed: weights_packed_forbidden`. Cross-reference the `[INVARIANT:WEIGHT_ARRAY]` rule in `foundry.md`.
+3. **No packed weight array initializers.** Any `$meminit`-style pattern where the initial value of `weights` is derived from anything other than a direct `$readmemh` call is rejected. Specifically: reject any `weights_packed`, `initial weights[...] = <expression>`, or `assign weights[...] = ...` constructs. Violation → `structural_preflight_failed: weights_packed_forbidden`. Cross-reference the memory-inference rule in `foundry.md`.
 
 4. **Weight and bias must use `$readmemh`.** Require at least one `$readmemh("...", weights)` and at least one `$readmemh("...", biases)` inside an `initial` block. Violation → `structural_preflight_failed: readmemh_missing`.
 

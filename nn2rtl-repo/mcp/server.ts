@@ -12,7 +12,7 @@ import {
   read_weights,
   run_iverilog,
   run_verilator,
-  run_yosys,
+  run_vivado,
   write_verilog,
 } from "./tools.js";
 import {
@@ -23,8 +23,8 @@ import {
   runIverilogInput,
   runIverilogOutput,
   runVerilatorInput,
-  runYosysInput,
-  runYosysOutput,
+  runVivadoInput,
+  runVivadoOutput,
   verifResultSchema,
   writeVerilogInput,
   writeVerilogOutput,
@@ -35,7 +35,7 @@ export type ToolImplementations = {
   read_weights: typeof read_weights;
   run_iverilog: typeof run_iverilog;
   run_verilator: typeof run_verilator;
-  run_yosys: typeof run_yosys;
+  run_vivado: typeof run_vivado;
   write_verilog: typeof write_verilog;
 };
 
@@ -44,7 +44,7 @@ const DEFAULT_TOOL_IMPLEMENTATIONS: ToolImplementations = {
   read_weights,
   run_iverilog,
   run_verilator,
-  run_yosys,
+  run_vivado,
   write_verilog,
 };
 
@@ -73,10 +73,10 @@ export const toolDefinitions = [
     outputSchema: toJsonSchema(verifResultSchema),
   },
   {
-    name: "run_yosys",
-    description: "Run Yosys synthesis reporting for a candidate Verilog module.",
-    inputSchema: toJsonSchema(runYosysInput),
-    outputSchema: toJsonSchema(runYosysOutput),
+    name: "run_vivado",
+    description: "Run Vivado synth-only reporting for a candidate Verilog module.",
+    inputSchema: toJsonSchema(runVivadoInput),
+    outputSchema: toJsonSchema(runVivadoOutput),
   },
   {
     name: "read_weights",
@@ -124,15 +124,17 @@ async function handleRunVerilator(
   return toToolResult(result as unknown as Record<string, unknown>);
 }
 
-async function handleRunYosys(
+async function handleRunVivado(
   args: Record<string, unknown>,
   toolImpls: ToolImplementations,
 ): Promise<CallToolResult> {
-  const input = runYosysInput.parse(args);
-  const result = await toolImpls.run_yosys(
+  const input = runVivadoInput.parse(args);
+  const result = await toolImpls.run_vivado(
     input.verilog_source,
     input.module_name,
     input.clock_period_ns,
+    input.part,
+    input.threads,
   );
   return toToolResult(result);
 }
@@ -178,8 +180,8 @@ export async function handleToolCall(
       return handleRunIverilog(args, toolImpls);
     case "run_verilator":
       return handleRunVerilator(args, toolImpls);
-    case "run_yosys":
-      return handleRunYosys(args, toolImpls);
+    case "run_vivado":
+      return handleRunVivado(args, toolImpls);
     case "read_weights":
       return handleReadWeights(args, toolImpls);
     case "write_verilog":

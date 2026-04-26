@@ -146,7 +146,7 @@ Each generated module must implement:
 - `valid_out`,
 - exact cycle-accurate latency from input valid to output valid.
 
-The baseline target is `50 MHz` on an iCE40 FPGA. A functionally correct module that fails timing is treated as a real pipeline failure.
+The baseline target is `50 MHz` on the Nexys A7-100T Artix-7 part (`xc7a100tcsg324-1`). A functionally correct module that fails Vivado synth timing is treated as a real pipeline failure.
 
 ### The C++ Testbench Is Static Infrastructure
 
@@ -259,7 +259,7 @@ sees the whole pipeline simultaneously, and its job is to:
 - select the next action,
 - dispatch the four LLM agents below,
 - enforce retry limits,
-- run Yosys directly on every Assayer-passed module, and
+- run Vivado directly on every Assayer-passed module, and
 - write final summary reports.
 
 Keeping the coordinator deterministic makes the run reproducible and avoids
@@ -354,7 +354,7 @@ Human-run one-time steps before the autonomous loop:
 6. Foundry generates Verilog and persists it via `write_verilog`.
 7. The orchestrator marks the module `verifying` and invokes Assayer.
 8. Assayer runs syntax and simulation checks and returns a `VerifResult`.
-9. If the module passes, the orchestrator records success and runs Yosys for synthesis metrics.
+9. If the module passes, the orchestrator records success and runs Vivado synth-only for FPGA metrics.
 10. If the module fails and retries remain, the orchestrator invokes Surgeon.
 11. Surgeon repairs the module and returns a replacement `VerilogModule`.
 12. Assayer verifies the repaired module.
@@ -470,11 +470,11 @@ The MCP server exposes exactly five tools.
 - Action: compiles with Verilator, runs the static C++ testbench, parses results JSON
 - Output: full `VerifResult`
 
-### `run_yosys`
+### `run_vivado`
 
-- Inputs: Verilog source, module name
-- Action: runs synthesis and extracts LUT and Fmax proxy metrics
-- Output: `{ success, lut_count, fmax_mhz, report }`
+- Inputs: Verilog source, module name, clock period, optional Artix-7 part, optional thread count
+- Action: runs Vivado synth-only for Nexys A7 / Artix-7 and extracts utilization/timing metrics
+- Output: `{ success, tool, part, stage, lut_count, ff_count, dsp_count, bram18_count, bram36_count, bram18_equiv, wns_ns, timing_met, fmax_mhz, report }`
 
 ### `read_weights`
 
@@ -511,10 +511,10 @@ The acceptance threshold is based on fixed-point tolerance calibrated empiricall
 
 ### Phase 3: Synthesis
 
-`yosys` runs only after functional and timing success. This phase confirms that the RTL is actually synthesizable and provides proxy metrics for:
+`vivado` runs only after functional and timing success. This phase confirms that the RTL is actually synthesizable on the Artix-7 target and provides FPGA metrics for:
 
-- area via LUT count,
-- performance via Fmax estimate.
+- resources via LUT / FF / DSP / BRAM counts,
+- performance via WNS and Fmax estimate.
 
 ## Failure Mode Taxonomy
 
@@ -566,13 +566,13 @@ Used for:
 - timing verification
 - high-performance simulation via the static C++ testbench
 
-### Yosys
+### Vivado
 
 Used for:
 
 - synthesis validation
-- LUT count extraction
-- Fmax proxy measurement for iCE40 FPGA targets
+- LUT / FF / DSP / BRAM extraction
+- Fmax proxy measurement for the Nexys A7 Artix-7 target
 
 The agent loop is deliberately built on open-source tooling only so that the experiment remains reproducible and cluster-friendly.
 
@@ -647,7 +647,7 @@ Mitigation: pin the SDK version and do not upgrade during experiments.
 Risk: total model cost becomes too high.  
 Mitigation: use Haiku for Assayer, monitor `total_cost_usd`, secure research credits, and budget for multiple full runs.
 
-### Yosys Compatibility
+### Vivado Compatibility
 
 Risk: generated RTL passes simulation but uses synthesis-hostile constructs.  
 Mitigation: validate a reference module through the full synthesis flow before building the pipeline.
