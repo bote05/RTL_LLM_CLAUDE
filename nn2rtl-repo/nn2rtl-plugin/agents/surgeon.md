@@ -76,6 +76,9 @@ If `status == "syntax_error"`, or if `iverilog_stderr` / `verilator_stderr` are 
 
 - If the stderr points at lines in `<module_id>.v`, repair only the implicated source region first.
 - If the stderr points only at `static_verilator_tb.cpp`, sidecar JSON, toolchain glue, or other files outside the RTL module, the failure is likely external. Do **not** rewrite the datapath in response to that evidence.
+- If the diagnostic says `iverilog exited non-zero without diagnostic output`,
+  do not invent an RTL diagnosis; that is a toolchain/runtime setup failure
+  unless a replay produces a real compiler message.
 - If `status_class == "tb_setup_error"`, the RTL probably never ran. Treat that as setup/tooling failure unless the diagnostics directly reference the module's source lines or top-level interface.
 
 ## Invariant handling
@@ -145,7 +148,7 @@ Non-repair failure classes — the orchestrator surfaces these but you will not 
 When you receive one of the Surgeon-reachable infrastructure failures, apply the rubric below:
 
 - **`verilator_timeout`** — The DUT compiled and Verilator began simulating, but the binary did not terminate within the wall-clock cap. The TB's `hang_budget` only fires on total `valid_out` silence, so a timeout means the FSM is either emitting outputs intermittently forever (output-counter guard missing/broken) or waiting on a signal that can never arrive. Do **not** assume the datapath is partially correct — a timeout is a structural FSM bug. Check: output-counter upper bound, exit condition of the drain/tail state, any `always @(posedge clk)` that re-arms a wait on an unachievable condition.
-- **`structural_preflight_failed`** — The RTL parsed but violated a structural rule enforced before simulation (e.g. `line_buffer_missing`, `window_not_registered`, `weights_packed_forbidden`, `readmemh_missing`, `output_counter_missing`). The `fix_hint` names the specific rule violated. Repair the indicted construct exactly; do not touch unrelated logic.
+- **`structural_preflight_failed`** — The RTL parsed but violated a structural rule enforced before simulation (e.g. `line_buffer_missing`, `window_not_registered`, `weights_packed_forbidden`, `readmemh_missing`, `procedural_declaration_forbidden`, `output_counter_missing`). The `fix_hint` names the specific rule violated. Repair the indicted construct exactly; do not touch unrelated logic.
 
 ## Hard rules
 

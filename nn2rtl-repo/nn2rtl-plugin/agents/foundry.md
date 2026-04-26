@@ -104,6 +104,10 @@ files — do not guess.
 - **All datapath signals are signed.** Use `reg signed` / `wire signed` /
   `$signed(...)` consistently. Concatenation-based sign extension is
   forbidden (see `01_context.md`).
+- **Declare temporaries at module scope.** Do not declare `integer`, `reg`,
+  `wire`, or `logic` inside an `always` block or named procedural block;
+  the SDK structural preflight rejects this for Vivado / Verilog-2001
+  compatibility.
 - **If `stride` / `padding` are present in the LayerIR, use them exactly.**
   Do not infer them from input/output shapes.
 - **`mac_parallelism` is authoritative for conv.** Use the LayerIR value;

@@ -146,6 +146,19 @@ describe("mcp tools", () => {
     });
   });
 
+  it("surfaces process context when iverilog exits without diagnostics", async () => {
+    const result = await run_iverilog("module maybe_valid; endmodule", "maybe_valid", {
+      commandRunner: async () => {
+        throw { code: 1, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toContain("iverilog exited non-zero without diagnostic output");
+    expect(result.stderr).toContain("exit_code=1");
+    expect(result.stderr).toContain("Treat this as a toolchain/runtime setup failure");
+  });
+
   it("converts WSL and Windows paths into Vivado-friendly paths", () => {
     expect(toVivadoPath("/mnt/c/Users/User/project/file with spaces.v")).toBe(
       "C:/Users/User/project/file with spaces.v",

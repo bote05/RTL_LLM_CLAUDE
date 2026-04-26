@@ -1,8 +1,9 @@
-import { readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createOrchestratorRuntime,
@@ -16,6 +17,17 @@ const repoRoot = path.resolve(__dirname, "../..");
 const outputRoot = path.join(repoRoot, "output");
 const reportsDir = path.join(outputRoot, "reports");
 const rtlDir = path.join(outputRoot, "rtl");
+const outputResetTargets = [
+  "reports",
+  "rtl",
+  "tb",
+  "weights",
+  "layer_ir.json",
+  "layer_ir.json.checkpoint",
+  "pipeline_state.json",
+  "golden_vectors.json",
+] as const;
+let outputBackupRoot: string | null = null;
 
 type MockStep = SDKResultMessage | (() => Promise<SDKResultMessage> | SDKResultMessage);
 type VivadoReport = {
@@ -88,6 +100,24 @@ async function resetOutput(): Promise<void> {
   }
 }
 
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+async function copyPathIfPresent(source: string, destination: string): Promise<void> {
+  await mkdir(path.dirname(destination), { recursive: true });
+  try {
+    await cp(source, destination, { recursive: true, force: true });
+  } catch (error: unknown) {
+    if (!isEnoent(error)) throw error;
+  }
+}
+
 async function writeFixture(relativeFixturePath: string, destinationPath: string): Promise<unknown> {
   const raw = await readFile(path.join(repoRoot, "test", "fixtures", relativeFixturePath), "utf8");
   await writeFile(destinationPath, raw, "utf8");
@@ -146,12 +176,30 @@ function createQueryMock(
   });
 }
 
+beforeAll(async () => {
+  outputBackupRoot = await mkdtemp(path.join(os.tmpdir(), "nn2rtl-sdk-output-backup-"));
+  for (const target of outputResetTargets) {
+    await copyPathIfPresent(path.join(outputRoot, target), path.join(outputBackupRoot, target));
+  }
+});
+
 beforeEach(async () => {
   await resetOutput();
 });
 
 afterEach(async () => {
   await resetOutput();
+});
+
+afterAll(async () => {
+  if (!outputBackupRoot) return;
+  for (const target of outputResetTargets) {
+    const originalPath = path.join(outputRoot, target);
+    await rm(originalPath, { recursive: true, force: true });
+    await copyPathIfPresent(path.join(outputBackupRoot, target), originalPath);
+  }
+  await rm(outputBackupRoot, { recursive: true, force: true });
+  outputBackupRoot = null;
 });
 
 describe("runPipeline", () => {
@@ -405,6 +453,39 @@ describe("runPipeline", () => {
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("fail_abort");
     expect(state.results.unit_module.status_class).toBe("tb_setup_error");
+  });
+
+  it("aborts when deterministic assayer infrastructure crashes", async () => {
+    await writePipelineIrFixture();
+    const originalModule = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        return successResult(originalModule);
+      }],
+    });
+    const assayerFn = createAssayerMock([
+      async () => {
+        throw new Error("iverilog exited non-zero without diagnostic output");
+      },
+    ]);
+    const synthesisFn = createVivadoMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(false);
+    expect(synthesisFn).not.toHaveBeenCalled();
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("fail_abort");
+    expect(state.results.unit_module.status_class).toBe("tb_setup_error");
+    expect(state.results.unit_module.fix_hint).toContain("Assayer runner crashed");
   });
 
   it("routes verilator_timeout VerifResult through Surgeon the same as other sim failures", async () => {
