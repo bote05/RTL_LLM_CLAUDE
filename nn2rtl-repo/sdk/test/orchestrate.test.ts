@@ -571,6 +571,57 @@ describe("orchestrate helpers", () => {
     expect(rules).toContain("weights_packed_forbidden");
   });
 
+  it("flags declarations inside always blocks as a structural violation", () => {
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Surgeon",
+        attempt: 3,
+        verilog_source: [
+          "module m1(input wire clk);",
+          "  reg signed [7:0] weights [0:63];",
+          "  reg signed [31:0] biases [0:0];",
+          "  initial begin",
+          "    $readmemh(\"w.hex\", weights);",
+          "    $readmemh(\"b.hex\", biases);",
+          "  end",
+          "  always @(posedge clk) begin : BIAS_LANE",
+          "    integer bias_oc;",
+          "    bias_oc = 0;",
+          "  end",
+          "endmodule",
+        ].join("\n"),
+      },
+      {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 64, 1, 1],
+        output_shape: [1, 1, 1, 1],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [1, 64, 1, 1],
+        num_weights: 64,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 67,
+        clock_period_ns: 20,
+        input_width_bits: 512,
+        output_width_bits: 8,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+    );
+    expect(violations.map((v) => v.rule)).toContain("procedural_declaration_forbidden");
+  });
+
   it("passes structural preflight for a pointwise (1x1) conv without needing line_buf / window / output counter", () => {
     // Regression: the output_counter_missing rule must NOT fire on pointwise
     // conv2d. Pointwise is 1:1 pixel-in-to-pixel-out; adding a frame-level

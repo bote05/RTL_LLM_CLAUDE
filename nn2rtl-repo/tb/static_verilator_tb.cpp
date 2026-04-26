@@ -629,6 +629,12 @@ int main(int argc, char** argv) {
 
       if (vector_first_valid_in >= 0 && vector_first_valid_out >= 0) {
         const int64_t vector_actual = vector_first_valid_out - vector_first_valid_in;
+        std::cerr << "[NN2RTL_DEBUG] vec=" << v
+                  << " first_in=" << vector_first_valid_in
+                  << " first_out=" << vector_first_valid_out
+                  << " actual=" << vector_actual
+                  << " expected=" << sidecar.pipeline_latency_cycles
+                  << "\n";
         if (vector_actual != sidecar.pipeline_latency_cycles) {
           all_vectors_timing_ok = false;
         }
@@ -636,6 +642,10 @@ int main(int argc, char** argv) {
           worst_vector_actual_cycles = vector_actual;
         }
       } else {
+        std::cerr << "[NN2RTL_DEBUG] vec=" << v
+                  << " first_in=" << vector_first_valid_in
+                  << " first_out=" << vector_first_valid_out
+                  << " (incomplete)\n";
         all_vectors_timing_ok = false;
       }
     }

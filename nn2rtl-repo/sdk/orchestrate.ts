@@ -1185,7 +1185,8 @@ function expectedTopPortWidthBits(
  *
  * Each violation is returned as {rule, detail}. `rule` is one of a small
  * named set (`line_buffer_missing`, `window_not_registered`,
- * `weights_packed_forbidden`, `readmemh_missing`, `output_counter_missing`);
+ * `weights_packed_forbidden`, `readmemh_missing`,
+ * `procedural_declaration_forbidden`, `output_counter_missing`);
  * `detail` explains the specific failure and — when applicable — cites the
  * offending line range. Callers synthesize a VerifResult with
  * failure_class="structural_preflight_failed" and the rule name surfaced
@@ -1258,6 +1259,7 @@ export function structuralPreflightViolations(
   const usesLineBufWindow  = /\bline_buf_window\b/.test(source);
   const usesConvDatapath   = /\bconv_datapath\b/.test(source);
   const usesCoordScheduler = /\bcoord_scheduler\b/.test(source);
+  const clockedAlwaysBlocks = extractClockedAlwaysBlocks(source);
 
   // Rule 1: spatial conv requires a `line_buf` array-of-arrays / memory decl.
   // Skipped when the top-level instantiates `line_buf_window` (the library
@@ -1289,9 +1291,8 @@ export function structuralPreflightViolations(
           "cycle, which blows up synth cones and loses the sliding-window invariant.",
       });
     } else {
-      const clocked = extractClockedAlwaysBlocks(source);
       const windowAssignRe = /\bwindow\s*\[[^\]]+\][^;]*<=/;
-      if (!windowAssignRe.test(clocked)) {
+      if (!windowAssignRe.test(clockedAlwaysBlocks)) {
         violations.push({
           rule: "window_not_registered",
           detail:
@@ -1332,6 +1333,23 @@ export function structuralPreflightViolations(
       detail:
         "Continuous assignment 'assign weights[...] = ...' is forbidden — " +
         "it produces a non-constant memory initializer that Vivado cannot infer as ROM.",
+    });
+  }
+
+  // Rule 3b: no declarations inside procedural blocks. Icarus versions differ
+  // on how much SystemVerilog block scoping they accept, and Vivado rejects
+  // many of these constructs in otherwise Verilog-style modules. Make the
+  // rule deterministic before the external tools get a vote.
+  const proceduralDeclRe =
+    /\b(?:reg|wire|logic|integer)\b\s+(?:signed\s+)?(?:\[[^\]]+\]\s*)?[A-Za-z_][A-Za-z0-9_$]*\b/;
+  const proceduralDecl = clockedAlwaysBlocks.match(proceduralDeclRe);
+  if (proceduralDecl) {
+    violations.push({
+      rule: "procedural_declaration_forbidden",
+      detail:
+        "Declarations inside always blocks are forbidden for Vivado / " +
+        `Verilog-2001 compatibility. Move '${proceduralDecl[0].trim()}' ` +
+        "to module scope and assign it procedurally instead.",
     });
   }
 
@@ -2015,6 +2033,28 @@ async function runAssayerDeterministic(
   // error (not a numerical/timing issue).
   const iverilog = await mcpTools.run_iverilog(module.verilog_source, module.module_id);
   if (!iverilog.success) {
+    const noDiagnosticIverilogFailure =
+      /iverilog exited non-zero without diagnostic output/i.test(iverilog.stderr);
+    if (noDiagnosticIverilogFailure) {
+      return {
+        module_id: module.module_id,
+        status: "fail",
+        status_class: "tb_setup_error",
+        timing_pass: false,
+        timing_actual_cycles: -1,
+        timing_expected_cycles: layer.pipeline_latency_cycles,
+        iverilog_stderr: iverilog.stderr,
+        fix_hint: [
+          "iverilog exited non-zero without compiler diagnostics.",
+          "This is treated as a deterministic verification/toolchain setup failure, not an RTL syntax bug.",
+          "Check the pipeline process environment, especially PATH, YOSYSHQ_ROOT, TMPDIR/TEMP, and the exact iverilog binary.",
+          "Replay the embedded verilog_source before spending a Surgeon attempt.",
+          "iverilog diagnostic:",
+          iverilog.stderr,
+        ].join("\n\n"),
+      };
+    }
+
     return {
       module_id: module.module_id,
       status: "syntax_error",
@@ -2062,14 +2102,16 @@ async function invokeAssayer(
     }
     payload = parsed.data;
   } catch (error: unknown) {
-    // Tool crashed before producing a structured VerifResult. Synthesize a
-    // fail so Surgeon gets a chance to look at the broken RTL; the fix_hint
-    // carries whatever the runner surfaced. This mirrors processSynthesisOutcome.
+    // Tool crashed before producing a structured VerifResult. That means the
+    // RTL never received a real deterministic verdict, so stop the retry loop
+    // as a testbench/toolchain setup failure instead of spending Surgeon turns
+    // on a module-local repair that has no evidence.
     payload = {
       module_id: module.module_id,
       status: "fail",
+      status_class: "tb_setup_error",
       timing_pass: false,
-      timing_actual_cycles: 0,
+      timing_actual_cycles: -1,
       timing_expected_cycles: layerIr.pipeline_latency_cycles,
       fix_hint: `Assayer runner crashed before producing a VerifResult: ${error instanceof Error ? error.message : String(error)}`,
     };

@@ -329,21 +329,18 @@ export function isSystemSpawnError(error: unknown): boolean {
 }
 
 export function stderrFromUnknown(error: unknown): string {
-  if (typeof error === "object" && error !== null && "stderr" in error) {
-    const stderr = (error as { stderr?: string | Buffer }).stderr;
-    if (typeof stderr === "string") {
-      return stderr;
-    }
-    if (stderr instanceof Buffer) {
-      return stderr.toString("utf8");
-    }
-  }
+  const stderr = outputFieldFromUnknown(error, "stderr");
+  if (stderr.length > 0) return stderr;
+
+  const stdout = outputFieldFromUnknown(error, "stdout");
+  if (stdout.length > 0) return stdout;
 
   if (error instanceof Error) {
     return error.message;
   }
 
-  return String(error);
+  const summary = processErrorSummary(error);
+  return summary || String(error);
 }
 
 function outputFieldFromUnknown(error: unknown, field: "stdout" | "stderr"): string {
@@ -353,6 +350,62 @@ function outputFieldFromUnknown(error: unknown, field: "stdout" | "stderr"): str
     if (value instanceof Buffer) return value.toString("utf8");
   }
   return "";
+}
+
+function processErrorSummary(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "";
+
+  const err = error as {
+    code?: unknown;
+    signal?: unknown;
+    killed?: unknown;
+    syscall?: unknown;
+    path?: unknown;
+    spawnargs?: unknown;
+  };
+  const fields: string[] = [];
+  if (err.code !== undefined) fields.push(`exit_code=${String(err.code)}`);
+  if (err.signal !== undefined && err.signal !== null) fields.push(`signal=${String(err.signal)}`);
+  if (err.killed !== undefined) fields.push(`killed=${String(err.killed)}`);
+  if (err.syscall !== undefined) fields.push(`syscall=${String(err.syscall)}`);
+  if (err.path !== undefined) fields.push(`path=${String(err.path)}`);
+  if (Array.isArray(err.spawnargs) && err.spawnargs.length > 0) {
+    fields.push(`spawnargs=${err.spawnargs.map(String).join(" ")}`);
+  }
+  return fields.join(" ");
+}
+
+function toolFailureDiagnostic(
+  toolName: string,
+  args: readonly string[],
+  cwd: string,
+  error: unknown,
+): string {
+  const stderr = outputFieldFromUnknown(error, "stderr").trim();
+  if (stderr.length > 0) return stderr;
+
+  const stdout = outputFieldFromUnknown(error, "stdout").trim();
+  if (stdout.length > 0) {
+    return [
+      `${toolName} exited non-zero and wrote diagnostics to stdout instead of stderr.`,
+      stdout,
+    ].join("\n\n");
+  }
+
+  const message = error instanceof Error ? error.message.trim() : "";
+  const summary = processErrorSummary(error);
+  if (message.length > 0 && message !== summary) {
+    return summary ? `${message}\n\nprocess: ${summary}` : message;
+  }
+
+  const command = [toolName, ...args].join(" ");
+  return [
+    `${toolName} exited non-zero without diagnostic output.`,
+    `command: ${command}`,
+    `cwd: ${cwd}`,
+    summary ? `process: ${summary}` : "process: no exit metadata was provided by Node.",
+    "Treat this as a toolchain/runtime setup failure unless the same source produces a real compiler diagnostic when replayed.",
+  ].join("\n");
 }
 
 export type VivadoSynthesisReport = {
@@ -528,11 +581,12 @@ export async function run_iverilog(
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
     const libraryPaths = await copyRtlLibrarySources(tempDir);
+    const args = ["-o", os.devNull, "-g2012", verilogPath, ...libraryPaths];
 
     try {
       await runtime.commandRunner(
         "iverilog",
-        ["-o", os.devNull, "-g2012", verilogPath, ...libraryPaths],
+        args,
         {
           cwd: tempDir,
           env: augmentEnvForOssCadSuite(runtime.env),
@@ -543,7 +597,10 @@ export async function run_iverilog(
       if (isSystemSpawnError(error)) {
         throw error;
       }
-      return { success: false, stderr: stderrFromUnknown(error) };
+      return {
+        success: false,
+        stderr: toolFailureDiagnostic("iverilog", args, tempDir, error),
+      };
     }
   }, runtime);
 }
