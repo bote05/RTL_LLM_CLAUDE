@@ -34,6 +34,19 @@ export const RTL_LIBRARY_SOURCES: readonly string[] = [
 export const VIVADO_DEFAULT_PART = "xc7a100tcsg324-1";
 export const VIVADO_TIMEOUT_MS = 30 * 60 * 1000;
 export const VIVADO_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+// Sim-threading default is 0 (= no `--threads` flag, single-threaded
+// model). Empirically, on the layers we run (stem 7x7 119M cycles, conv2
+// 3x3 463M cycles), threaded Verilator was *slower* than single-threaded:
+// stem with --threads 8 hit the 600s wall-clock cap; the same DUT with
+// --threads 0 finished in 24s (~5 MHz). Threading helps only on much
+// larger / asymmetric models where the cycle-update graph splits cleanly
+// across cores; for our tightly-coupled split-architecture pipeline the
+// inter-thread coordination overhead dominates. Override with
+// `NN2RTL_VERILATOR_THREADS=N` if you want to test an alternative.
+// Build parallelism is independent and stays high (16 by default) so the
+// C++ compile finishes in seconds on a multi-core host.
+const VERILATOR_DEFAULT_THREAD_CAP = 0;
+const VERILATOR_DEFAULT_BUILD_JOB_CAP = 16;
 
 // Hard wall-clock cap for the Verilator simulation binary (after build).
 // Motivation: a partially-functioning FSM that fires valid_out intermittently
@@ -41,7 +54,7 @@ export const VIVADO_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 // the binary can run forever. Capping at 10 min lets us fail fast and route
 // the module to Surgeon with failure_class=verilator_timeout instead of
 // burning wall-clock. Covers every layer; not ResNet-specific.
-export const VERILATOR_SIM_TIMEOUT_MS = 10 * 60 * 1000;
+export const VERILATOR_SIM_TIMEOUT_MS = Number(process.env.NN2RTL_VERILATOR_SIM_TIMEOUT_MS ?? "") || 10 * 60 * 1000;
 export function resolveVivadoCommand(env: NodeJS.ProcessEnv = process.env): string {
   return env.NN2RTL_VIVADO_BIN ?? "vivado";
 }
@@ -62,6 +75,48 @@ export const VERILATOR_COMMAND =
 export const PYTHON_COMMAND =
   process.env.NN2RTL_PYTHON_BIN ??
   (process.platform === "win32" ? "python" : "python3");
+
+function resolveHostParallelism(): number {
+  try {
+    const available = os.availableParallelism();
+    if (Number.isInteger(available) && available > 0) {
+      return available;
+    }
+  } catch {
+    // Fall back below. availableParallelism can throw on unusual platforms.
+  }
+  return Math.max(1, os.cpus().length);
+}
+
+function parseIntegerEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  minValue: number,
+): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= minValue ? parsed : undefined;
+}
+
+export function resolveVerilatorThreads(env: NodeJS.ProcessEnv = process.env): number {
+  const envThreads = parseIntegerEnv(env, "NN2RTL_VERILATOR_THREADS", 0);
+  if (envThreads !== undefined) {
+    return envThreads;
+  }
+  const available = resolveHostParallelism();
+  return available >= 2 ? Math.min(VERILATOR_DEFAULT_THREAD_CAP, available) : 0;
+}
+
+export function resolveVerilatorBuildJobs(env: NodeJS.ProcessEnv = process.env): number {
+  const envJobs = parseIntegerEnv(env, "NN2RTL_VERILATOR_BUILD_JOBS", 0);
+  if (envJobs !== undefined) {
+    return envJobs;
+  }
+  return Math.min(VERILATOR_DEFAULT_BUILD_JOB_CAP, resolveHostParallelism());
+}
 
 function resolveTmpDirRoot(): string {
   // os.tmpdir() handles TMPDIR / TMP / TEMP / USERPROFILE / platform defaults
@@ -655,15 +710,34 @@ export async function run_verilator(
       //                         is only ever executed on the machine that built
       //                         it (temp dir, single shot).
       //   -DNDEBUG              kill Verilator runtime asserts.
+      //   --threads N           generate a threaded simulation model. Default
+      //                         is capped at 8 workers; set
+      //                         NN2RTL_VERILATOR_THREADS=0 to disable.
+      //   -j N                  parallelize the C++ build. Default is capped
+      //                         at 16 jobs; override with
+      //                         NN2RTL_VERILATOR_BUILD_JOBS.
+      //   -MAKEFLAGS ...        Verilator 4.x appends its threaded-runtime
+      //                         C++ standard flag after -CFLAGS; force that
+      //                         generated make variable to C++17 too.
+      const verilatorThreads = resolveVerilatorThreads(runtime.env);
+      const verilatorBuildJobs = resolveVerilatorBuildJobs(runtime.env);
+      const verilatorThreadArgs =
+        verilatorThreads > 0 ? ["--threads", String(verilatorThreads)] : [];
+      const verilatorBuildArgs =
+        verilatorBuildJobs > 0 ? ["-j", String(verilatorBuildJobs)] : [];
       await runtime.commandRunner(
         VERILATOR_COMMAND,
         [
           "--cc",
           "--exe",
           "--build",
+          ...verilatorBuildArgs,
           "--Mdir",
           "obj_dir",
+          ...verilatorThreadArgs,
           "-O3",
+          "-MAKEFLAGS",
+          "CFG_CXXFLAGS_STD_NEWEST=-std=c++17",
           "--x-assign",
           "fast",
           "--x-initial",
@@ -785,7 +859,7 @@ function resolveVivadoThreads(
   if (Number.isInteger(envThreads) && envThreads > 0) {
     return envThreads;
   }
-  return Math.max(1, os.cpus().length);
+  return resolveHostParallelism();
 }
 
 function convertReadmemhPathsForVivado(verilogSource: string): string {
@@ -1087,10 +1161,27 @@ export async function get_rtl_patterns(
   let reference_verilog: string | null = null;
   let license_notice: string | null = null;
 
-  // Tier 0: the only currently-proven reference is the 1x1 pointwise one.
+  // Concrete worked-example wrappers — one per kernel shape we have a
+  // proven reference for. Foundry adapts the localparams + $readmemh
+  // paths from the LayerIR; the architecture (FSM / library
+  // instantiation / start_pulse) stays identical.
   if (op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
     const ref = await tryReadText(
       path.join(PATTERN_LIBRARY_ROOT, "references", "conv1x1_passing_reference.v"),
+    );
+    if (ref !== null) {
+      reference_verilog = ref;
+    }
+  } else if (op_type === "conv2d" && kernel_h === 3 && kernel_w === 3) {
+    const ref = await tryReadText(
+      path.join(PATTERN_LIBRARY_ROOT, "references", "conv3x3_passing_reference.v"),
+    );
+    if (ref !== null) {
+      reference_verilog = ref;
+    }
+  } else if (op_type === "conv2d" && kernel_h === 7 && kernel_w === 7) {
+    const ref = await tryReadText(
+      path.join(PATTERN_LIBRARY_ROOT, "references", "conv7x7_passing_reference.v"),
     );
     if (ref !== null) {
       reference_verilog = ref;

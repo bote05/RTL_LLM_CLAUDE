@@ -4,6 +4,7 @@
 .codex
 
 # Test and coverage artifacts
+node_modules/
 .pytest_cache/
 .coverage
 .coverage.*
@@ -13,6 +14,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+*.stackdump
 
 # IDE
 .vscode/

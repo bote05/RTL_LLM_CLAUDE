@@ -18,6 +18,7 @@ npm-debug.log*
 
 # Simulator artifacts (Verilator / Icarus / Yosys / GTKWave)
 obj_dir/
+tb_build*/
 *.vcd
 *.fst
 *.vvp
@@ -32,6 +33,7 @@ venv/
 output/rtl/
 output/tb/
 output/reports/
+output/tmp/
 output/weights/
 output/goldens/
 output/layer_ir.json

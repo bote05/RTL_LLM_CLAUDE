@@ -38,6 +38,14 @@
 
 #include "third_party/json.hpp"
 #include "verilated.h"
+// Note: `verilated_heavy.h` was a Verilator 4.x convenience header that
+// pulled in all the wide-signal machinery; in Verilator 5.x (current
+// OSS-CAD-Suite ships 5.x) those types live directly in `verilated.h` /
+// `verilated_types.h` and the header was removed. Do not reinstate it
+// without first checking that the local Verilator install actually
+// exposes the file -- otherwise the build dies with
+// "verilated_heavy.h: No such file or directory" and the simulator
+// binary is never produced.
 
 // Verilator's linker looks for this stub; it is the simulation timestamp used
 // by waveform dumps. The bench does not emit waves, so a constant is fine.

@@ -234,9 +234,17 @@ def test_conv_latency_uses_serialized_mac_lane_contract() -> None:
 
     layer0_0_conv1 (7x7 stem): K_TOTAL=147, MP=4, OC_PASSES=16, IW=224,
     PH=PW=3, KH=KW=7. fill_rows = max(KH-1-PH,0) = 3, fill_cols = max(KW-PW,1) = 4.
-        spatial offset = 3*(IW+PW) + fill_cols = 3*227 + 4 = 685
+        spatial offset = 3*(IW+PW) + fill_cols + 1 = 3*227 + 4 + 1 = 686
         per_pass = 4*147 + 6 = 594
-        total    = 685 + 16*594 = 10189
+        total    = 686 + 16*594 = 10190
+        (the +1 is the spatial-only coord_scheduler->output_fires->ST_IDLE
+        transition latency; absent in the pointwise path.)
+
+    layer1_0_conv2 (3x3): K_TOTAL=576, MP=4, OC_PASSES=16, IW=112,
+    PH=PW=1, KH=KW=3. fill_rows=1, fill_cols=2.
+        spatial offset = 1*113 + 2 + 1 = 116
+        per_pass = 4*576 + 6 = 2310
+        total    = 116 + 16*2310 = 37076
     """
     assert compute_conv2d_latency_cycles([64, 64, 1, 1], mac_parallelism=4) == 4193
 
@@ -247,7 +255,16 @@ def test_conv_latency_uses_serialized_mac_lane_contract() -> None:
         padding=[3, 3],
         mac_parallelism=4,
     )
-    assert stem_latency == 10189
+    assert stem_latency == 10190
+
+    conv2_latency = compute_conv2d_latency_cycles(
+        [64, 64, 3, 3],
+        input_shape=[1, 64, 112, 112],
+        stride=[1, 1],
+        padding=[1, 1],
+        mac_parallelism=4,
+    )
+    assert conv2_latency == 37076
 
 
 def test_golden_vector_files_store_bus_bytes_per_sample_in_v2_header(tmp_path: Path) -> None:

@@ -38,8 +38,10 @@ Additionally, based on the LayerIR's `op_type` and (for conv2d)
 
 - `op_type == "conv2d"` with `KH == KW == 1` → `02_conv1x1.md` plus
   `knowledge/references/conv1x1_passing_reference.v`.
-- `op_type == "conv2d"` with `KH == KW == 3` → `03_conv3x3_pad1.md`.
-- `op_type == "conv2d"` with `KH == KW == 7` → `04_conv7x7_pad3.md`.
+- `op_type == "conv2d"` with `KH == KW == 3` → `03_conv3x3_pad1.md` plus
+  `knowledge/references/conv3x3_passing_reference.v`.
+- `op_type == "conv2d"` with `KH == KW == 7` → `04_conv7x7_pad3.md` plus
+  `knowledge/references/conv7x7_passing_reference.v`.
 - `op_type == "add"` → `05_add_quantized.md`.
 - `op_type == "relu"` → `06_relu.md`.
 - `op_type == "maxpool"` → `07_maxpool.md`.
@@ -66,8 +68,22 @@ increases cross-op pattern contamination.
 - `knowledge/patterns/08_common_bugs.md` — known failure modes, symptoms,
   and fixes. **Read for every module.**
 - `knowledge/references/conv1x1_passing_reference.v` — proven-passing 1×1
-  reference. Adapt parameters (IC/OC/IH/IW, `$readmemh` paths, SCALE_MULT/
-  SCALE_SHIFT) to the current LayerIR; do not copy `module_id` or paths.
+  reference (`layer1_0_conv1` in concrete form). Adapt parameters
+  (IC/OC/IH/IW, `$readmemh` paths, SCALE_MULT/SCALE_SHIFT) to the current
+  LayerIR; do not copy `module_id` or paths verbatim.
+- `knowledge/references/conv3x3_passing_reference.v` — proven-passing
+  3×3 spatial reference (`layer1_0_conv2` in concrete form). The whole
+  body is library-module instantiation (coord_scheduler +
+  line_buf_window + conv_datapath); adapt the localparam block + the
+  `$readmemh`-equivalent `WEIGHTS_PATH` / `BIAS_PATH` parameters. Do
+  NOT add extra `always` blocks beyond the single `start_pulse` one
+  shown.
+- `knowledge/references/conv7x7_passing_reference.v` — proven-passing
+  7×7 stride-2 stem reference (`layer0_0_conv1` in concrete form). Same
+  split-architecture skeleton as the 3×3 reference; only differs in the
+  `KH/KW=7, SH/SW=2, PH/PW=3, IC=3` localparams and the asymmetric bus
+  (`data_in [23:0]`, `data_out [511:0]`). Adapt the same way as the
+  3×3 reference -- do NOT roll your own stride/padding/wrap math.
 - `knowledge/references/LICENSES.md` — provenance rules for reference files.
 - `rtl_library/coord_scheduler.v` — handwritten coordinate FSM. Spatial
   conv and maxpool **must** instantiate it. Bundled into every iverilog /

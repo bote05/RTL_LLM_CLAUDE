@@ -1,5 +1,6 @@
 // Vivado smoke test — runs `run_vivado` against the proven-passing 1×1 conv
-// reference to validate the entire MCP-side chain:
+// reference (or another reference passed as argv[2]) to validate the
+// entire MCP-side chain end-to-end:
 //   * Tcl generation
 //   * toVivadoPath / readmemh path conversion
 //   * batch invocation
@@ -10,7 +11,8 @@
 //
 // Usage:
 //   set NN2RTL_VIVADO_BIN=D:/vivado/2025.2/Vivado/bin/vivado.bat
-//   npx tsx scripts/vivado_smoke.ts
+//   npx tsx scripts/vivado_smoke.ts                          # 1x1 reference
+//   npx tsx scripts/vivado_smoke.ts conv3x3_passing_reference  # 3x3 reference
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -23,10 +25,8 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 
 async function main(): Promise<void> {
-  // Use the proven-passing 1×1 reference — has real pipelined logic so we
-  // get a non-null WNS / Fmax measurement, not the "no constrained path"
-  // case a pure passthrough produces.
-  const refPath = path.join(repoRoot, "knowledge", "references", "conv1x1_passing_reference.v");
+  const refStem = process.argv[2] ?? "conv1x1_passing_reference";
+  const refPath = path.join(repoRoot, "knowledge", "references", `${refStem}.v`);
   const moduleSource = await readFile(refPath, "utf8");
   const moduleMatch = moduleSource.match(/^\s*module\s+([A-Za-z_][A-Za-z0-9_]*)/m);
   if (!moduleMatch) throw new Error("Could not extract module name from reference Verilog.");
@@ -72,34 +72,6 @@ async function main(): Promise<void> {
     console.log("[smoke] ---- report (head) ----");
     console.log(report.report.slice(0, 4000));
     process.exit(2);
-  }
-  // Always dump the timing-summary slice so we can see why WNS may be null.
-  if (report.wns_ns === null) {
-    const tStart = report.report.indexOf("post_synth_timing_summary.rpt");
-    if (tStart >= 0) {
-      // Grab a big slice and grep for the Design Timing Summary block,
-      // which is the canonical WNS source. Skip the verbose "checking"
-      // sections at the top.
-      const fullSlice = report.report.slice(tStart);
-      const designSummary = fullSlice.match(/Design Timing Summary[\s\S]{0,3500}/);
-      if (designSummary) {
-        console.log("[smoke] ---- Design Timing Summary ----");
-        console.log(designSummary[0]);
-      } else {
-        console.log("[smoke] ---- timing-summary head (4 KB) ----");
-        console.log(fullSlice.slice(0, 4000));
-      }
-    }
-  }
-  // Threading echo: dump the head of the combined report so we see what
-  // Vivado actually accepted for general.maxThreads.
-  const headLines = report.report.split(/\r?\n/).slice(0, 80);
-  const threadEcho = headLines.filter((l) =>
-    /maxThreads|Detected processor|Detected.*cores|Number of CPUs|Number of threads/i.test(l),
-  );
-  if (threadEcho.length > 0) {
-    console.log("[smoke] ---- threading lines ----");
-    threadEcho.forEach((l) => console.log("[smoke]   " + l.trim()));
   }
   if (report.lut_count === 0 && report.ff_count === 0) {
     console.log("[smoke] WARNING: zero LUT and FF — parser may not have matched the report.");
