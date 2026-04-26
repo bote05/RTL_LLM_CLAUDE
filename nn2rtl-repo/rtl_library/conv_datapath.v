@@ -124,13 +124,33 @@ module conv_datapath #(
         tap_q    <= $signed(tap_at(k_counter));
     end
 
-    (* use_dsp = "yes" *) wire signed [PROD_W-1:0] mul_q;
-    assign mul_q = $signed(weight_q) * $signed(tap_q);
+    // Pipeline stages from issue to acc-write:
+    //   stage 1 (1 cycle delay):  weight_q, tap_q register from the
+    //                              issued (lane, k); mac_*_q1 capture
+    //                              issue metadata.
+    //   stage 2 (1 more cycle):   mul_q registers weight_q1 * tap_q1;
+    //                              mac_*_q2 forward the metadata.
+    //   stage 3 (1 more cycle):   acc[mac_lane_q2] += mul_q.
+    //
+    // Per OC-group pass therefore costs MP*K_TOTAL issue cycles + 2
+    // trailing drain cycles + ST_BIAS + ST_SCALE + ST_OUTPUT, i.e.
+    // MP*K_TOTAL + 6. Latency formula in golden_impl.py is kept in lock
+    // step (CONV_PIPELINE_STAGES = 6).
+    //
+    // (* use_dsp = "yes" *) on the registered `mul_q` is the canonical
+    // Vivado DSP-inference pattern: a registered multiplier output
+    // (DSP48E1 MREG=1) feeding an external accumulator. The MP-way mux
+    // on `acc[mac_lane_q2]` lives in LUT fabric.
+    (* use_dsp = "yes" *) reg signed [PROD_W-1:0] mul_q;
 
-    reg                        mac_valid_q;
-    reg [LANE_COUNTER_W-1:0]   mac_lane_q;
-    reg [OC_INDEX_W-1:0]       mac_global_oc_q;
+    reg                        mac_valid_q1;
+    reg [LANE_COUNTER_W-1:0]   mac_lane_q1;
+    reg [OC_INDEX_W-1:0]       mac_global_oc_q1;
     reg                        mac_done_issuing;
+
+    reg                        mac_valid_q2;
+    reg [LANE_COUNTER_W-1:0]   mac_lane_q2;
+    reg [OC_INDEX_W-1:0]       mac_global_oc_q2;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -140,10 +160,14 @@ module conv_datapath #(
             k_counter        <= 0;
             lane_counter     <= 0;
             oc_group         <= 0;
-            mac_valid_q      <= 1'b0;
-            mac_lane_q       <= 0;
-            mac_global_oc_q  <= 0;
+            mac_valid_q1     <= 1'b0;
+            mac_lane_q1      <= 0;
+            mac_global_oc_q1 <= 0;
+            mac_valid_q2     <= 1'b0;
+            mac_lane_q2      <= 0;
+            mac_global_oc_q2 <= 0;
             mac_done_issuing <= 1'b0;
+            mul_q            <= 0;
             for (i = 0; i < MP; i = i + 1) begin
                 acc[i]    <= 0;
                 biased[i] <= 0;
@@ -152,9 +176,15 @@ module conv_datapath #(
         end else begin
             valid_out <= 1'b0;
 
-            // Consume the registered ROM/tap pair from the previous issue.
-            if (mac_valid_q && mac_global_oc_q < OC) begin
-                acc[mac_lane_q] <= acc[mac_lane_q] + $signed(mul_q);
+            // Stage 2: register the multiplier output. Stage 3 consumes
+            // mul_q on the next cycle, indexed by mac_lane_q2.
+            mul_q            <= $signed(weight_q) * $signed(tap_q);
+            mac_valid_q2     <= mac_valid_q1;
+            mac_lane_q2      <= mac_lane_q1;
+            mac_global_oc_q2 <= mac_global_oc_q1;
+
+            if (mac_valid_q2 && mac_global_oc_q2 < OC) begin
+                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(mul_q);
             end
 
             case (state)
@@ -164,7 +194,8 @@ module conv_datapath #(
                         k_counter        <= 0;
                         lane_counter     <= 0;
                         oc_group         <= 0;
-                        mac_valid_q      <= 1'b0;
+                        mac_valid_q1     <= 1'b0;
+                        mac_valid_q2     <= 1'b0;
                         mac_done_issuing <= 1'b0;
                         for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
                             acc[lane_i] <= 0;
@@ -173,14 +204,19 @@ module conv_datapath #(
 
                 ST_MAC: begin
                     if (mac_done_issuing) begin
-                        // Final consume already happened above; advance to BIAS.
-                        mac_valid_q      <= 1'b0;
-                        mac_done_issuing <= 1'b0;
-                        state            <= ST_BIAS;
+                        // Stop issuing. Wait two more cycles for stages 2
+                        // and 3 to drain. State transitions only when
+                        // both mac_valid_q1 and mac_valid_q2 are 0 — i.e.
+                        // the very last consume has just landed.
+                        mac_valid_q1 <= 1'b0;
+                        if (!mac_valid_q1 && !mac_valid_q2) begin
+                            mac_done_issuing <= 1'b0;
+                            state            <= ST_BIAS;
+                        end
                     end else begin
-                        mac_lane_q      <= lane_counter;
-                        mac_global_oc_q <= current_global_oc;
-                        mac_valid_q     <= 1'b1;
+                        mac_lane_q1      <= lane_counter;
+                        mac_global_oc_q1 <= current_global_oc;
+                        mac_valid_q1     <= 1'b1;
 
                         if (lane_counter == MP - 1) begin
                             lane_counter <= 0;

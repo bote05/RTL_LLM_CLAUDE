@@ -225,7 +225,20 @@ def test_weight_bank_files_partition_conv_weights_by_mac_lane(tmp_path: Path) ->
 
 
 def test_conv_latency_uses_serialized_mac_lane_contract() -> None:
-    assert compute_conv2d_latency_cycles([64, 64, 1, 1], mac_parallelism=4) == 4161
+    """Pin the latency formula for the verified serialized-MAC contract
+    with the registered mul_q (DSP MREG) pipeline. Per pass:
+    MP*K_TOTAL + 6 cycles (CONV_PIPELINE_STAGES = 6).
+
+    layer1_0_conv1: K_TOTAL=64, MP=4, OC_PASSES=16.
+        per_pass = 4*64 + 6 = 262;  total = 1 + 16*262 = 4193.
+
+    layer0_0_conv1 (7x7 stem): K_TOTAL=147, MP=4, OC_PASSES=16, IW=224,
+    PH=PW=3, KH=KW=7. fill_rows = max(KH-1-PH,0) = 3, fill_cols = max(KW-PW,1) = 4.
+        spatial offset = 3*(IW+PW) + fill_cols = 3*227 + 4 = 685
+        per_pass = 4*147 + 6 = 594
+        total    = 685 + 16*594 = 10189
+    """
+    assert compute_conv2d_latency_cycles([64, 64, 1, 1], mac_parallelism=4) == 4193
 
     stem_latency = compute_conv2d_latency_cycles(
         [64, 3, 7, 7],
@@ -234,7 +247,7 @@ def test_conv_latency_uses_serialized_mac_lane_contract() -> None:
         padding=[3, 3],
         mac_parallelism=4,
     )
-    assert stem_latency == 10157
+    assert stem_latency == 10189
 
 
 def test_golden_vector_files_store_bus_bytes_per_sample_in_v2_header(tmp_path: Path) -> None:

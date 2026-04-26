@@ -215,10 +215,12 @@ endmodule
 `pipeline_latency_cycles` from the LayerIR is authoritative. The exact
 formula is in `scripts/golden_impl.py::compute_conv2d_latency_cycles` and
 is derived from the scheduler's fill-row / fill-col startup plus
-`OC_PASSES * (MP * K_TOTAL + 4)` cycles per firing coord (synchronous ROM
-read prime, serialized lane MAC loop, bias, scale, output). Here `MP` is the
-number of accumulator lanes in an OC group; the current contract still issues
-one weight read / one MAC per cycle. Do not re-derive; trust LayerIR.
+`OC_PASSES * (MP * K_TOTAL + 6)` cycles per firing coord — the 6 covers
+the 3-stage MAC pipeline (weight ROM, registered DSP multiply, indexed
+accumulate) and the post-MAC ST_BIAS / ST_SCALE / ST_OUTPUT stages. Here
+`MP` is the number of accumulator lanes in an OC group; the current
+contract still issues one weight read / one MAC per cycle. Do not
+re-derive; trust LayerIR.
 
 ## Known failure modes
 
