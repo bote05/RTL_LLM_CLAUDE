@@ -59,9 +59,10 @@ Models are pinned to full IDs (not tier aliases like `"sonnet"`) in
   - TypeScript MCP server exposing:
     - `run_iverilog`
     - `run_verilator`
-    - `run_yosys`
+    - `run_vivado`
     - `read_weights`
     - `write_verilog`
+    - `get_rtl_patterns`
 
 ## Working Style
 

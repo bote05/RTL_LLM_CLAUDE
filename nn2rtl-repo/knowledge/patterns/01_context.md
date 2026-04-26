@@ -51,16 +51,19 @@ together — the output is `saturate(((lhs * lhs_scale + rhs * rhs_scale) * scal
 
 ## Weight and bias loading
 
-- Declare `reg signed [7:0]  weights [0:OC*K_TOTAL-1];` — flat INT8 array.
-- Declare `reg signed [31:0] biases  [0:OC-1];` — flat INT32 array.
+- Declare `$readmemh`-initialized weight ROMs using a Vivado-friendly
+  registered read path. Flat legacy arrays may remain as
+  `reg signed [7:0] weights [0:OC*K_TOTAL-1]`; new BRAM-oriented convs may
+  use one bank per MAC lane from `LayerIR.weight_bank_paths`.
+- Declare `reg signed [31:0] biases [0:OC-1];` — flat INT32 array.
 - Inside an `initial` block, load via `$readmemh("<weights_path>", weights);`
   and `$readmemh("<bias_path>", biases);` using the LayerIR-provided paths.
-- Index as `weights[oc * K_TOTAL + k]` where `k` is a flat kernel index.
+- Index legacy flat weights as `weights[oc * K_TOTAL + k]` where `k` is a
+  flat kernel index.
 
-Mark each declaration and each $readmemh line `// [INVARIANT:WEIGHT_ARRAY]`.
 NEVER introduce `weights_packed`, `initial weights[...] = expr`, or
-`assign weights[...] = ...` — yosys `OPT_MEM` rejects non-constant memory
-initializers and the pipeline's structural preflight will reject these
+`assign weights[...] = ...` — Vivado cannot infer clean ROMs from dynamic
+packed initializers and the pipeline's structural preflight will reject these
 constructs before simulation.
 
 ## Valid / ready handshake
@@ -164,12 +167,12 @@ $signed(SCALE_MULT_CONST);`.
 Weight and bias arrays carry a `(* ram_style = "block" *)` hint:
 
 ```verilog
-(* ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
-(* ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
+(* rom_style = "block", ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
+(* rom_style = "block", ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
 ```
 
-Sky130 has no dedicated BRAM macros, so this is a portability hint that
-maps to flip-flops on this PDK. Keep it regardless.
+Vivado uses these hints when inferring Artix-7 block RAM / ROM. Keep them
+and prefer simple `$readmemh`-initialized memories over packed reshapes.
 
 ---
 
@@ -187,9 +190,6 @@ independent of simulation results.
 - `READY_IN_GATING` — the exact assertion/deassertion points for `ready_in`.
 - `VALID_OUT_LATENCY` — the line that drives `valid_out` high for the
   current pixel.
-- `WEIGHT_ARRAY` — the `weights` / `biases` declarations and their
-  `$readmemh` loader lines. Surgeon MUST NOT pack, reshape, or merge these.
-
 ### Tags you MUST NOT mark
 
 Speculative per-module control logic is not invariant. Never mark:
@@ -197,8 +197,10 @@ Speculative per-module control logic is not invariant. Never mark:
 - State-transition conditions (any next-state assignment)
 - Counter comparisons (`k_counter == K_TOTAL - 1`, row/col bound checks)
 - Loop termination conditions (e.g. `in_row > IH - 1 + PH`)
+- Weight / bias memory declarations and `$readmemh` loaders. Vivado BRAM work
+  may need to convert flat legacy memories into synchronous ROMs or lane banks.
 
-The retired tags `DRAIN_EXIT` and `INTER_VECTOR_RESET` must not be used.
+The retired tags `DRAIN_EXIT`, `INTER_VECTOR_RESET`, and `WEIGHT_ARRAY` must not be used.
 
 ---
 
@@ -206,7 +208,7 @@ The retired tags `DRAIN_EXIT` and `INTER_VECTOR_RESET` must not be used.
 
 All `reg` and `wire` signals must be declared at **module scope**, before
 any `always` block. Verilog-2001 rejects procedural declarations, and
-Yosys will error out.
+Vivado will error out.
 
 ```verilog
 // WRONG
@@ -251,83 +253,45 @@ biased[lane] <= $signed(acc[lane]) + $signed(biases[oc]);
 
 ---
 
-## coord_scheduler contract — spatial conv and maxpool
+## Spatial conv / maxpool — split-module architecture
 
 For any `op_type == "conv2d"` with `KH*KW > 1`, and for any
-`op_type == "maxpool"`, the generated module MUST instantiate
-`coord_scheduler` from `rtl_library/coord_scheduler.v`. Do not roll your
-own row/col counters, stride-divisibility gate, `IW-1+PW` wrap, or
-drain-row exit — the scheduler owns all of them. The library file is
-bundled into every iverilog / Verilator / Yosys invocation, so the module
-is always in scope.
+`op_type == "maxpool"`, the generated module MUST NOT contain a
+hand-written line buffer / window / FSM / MAC pipeline. Those live in
+three handwritten library modules under `rtl_library/`:
 
-### Region handshake
+- `coord_scheduler.v` — row/col counters, stride/padding gate, output-
+  completion count. Emits `advance` (combinational, high when scheduler
+  moves this cycle) and `output_fires` (registered 1-cycle pulse the
+  cycle AFTER advance past a firing coord).
+- `line_buf_window.v` — KH-row line buffer with vertical shift on row
+  transitions, KH×KW×IC registered shift-register window. Exposes
+  `window_flat`. Takes a `frame_start` input for multi-frame reset.
+- `conv_datapath.v` — MP-lane serialized MAC + BIAS + SCALE + OUTPUT
+  pipeline. Exposes `mac_busy` (so the top-level can drive
+  `stall_in = mac_busy`) and `valid_out` / `data_out`.
 
-The scheduler classifies each coordinate as one of two regions and imposes
-an upstream handshake only in the REAL region:
+All three are automatically bundled into every iverilog / Verilator /
+Vivado invocation via `RTL_LIBRARY_SOURCES` in `mcp/tools.ts`.
 
-- **REAL region** (`in_row < IH && in_col < IW`): scheduler asserts
-  `needs_real_input = 1` and raises `ready_in` combinationally when it can
-  accept a pixel. It advances ONLY on a `valid_in && ready_in` cycle. Your
-  top-level must forward the external `valid_in` in, route the scheduler's
-  `ready_in` back out as the module's `ready_in`, and write `data_in` into
-  `line_buf` on the same handshake cycle.
-- **PADDED region** (`in_row >= IH || in_col >= IW`): no upstream
-  handshake; the scheduler free-runs under `!stall_in && running`.
+### Top-level contract (what the generated wrapper does)
 
-### `stall_in` contract — combinational
+- `stall_in = mac_busy` — one combinational wire. Do NOT include
+  `output_fires` or FSM states; the scheduler handles its own firing-coord
+  freeze internally via `eff_stall = stall_in || output_fires`.
+- `start_pulse` fires the cycle after reset deassertion (not on
+  `valid_in`). The static TB waits for `ready_in` before asserting
+  `valid_in`, and the scheduler's `ready_in` stays low until `running`,
+  which requires `start`. Pulsing start independently of `valid_in`
+  breaks this circular wait.
+- `frame_start` on `line_buf_window` is wired from `start_pulse` so
+  back-to-back input frames clear the buffer.
+- The FSM terminates on `sched_out_frame_done` (equivalently
+  `sched_outputs_emitted == OH*OW`), never on `in_row > IH-1+PH`.
 
-`stall_in` MUST be driven combinationally (not registered) from the union
-of `output_fires` and any MAC-busy state, so the scheduler freezes on the
-firing coord for the entire MAC pipeline and advances past it on the last
-ST_OUTPUT cycle:
-
-```verilog
-wire stall_in = sched_output_fires
-             || (state == ST_RUNNING)
-             || (state == ST_BIAS)
-             || (state == ST_SCALE)
-             || (state == ST_OUTPUT);
-```
-
-### Instantiation form
-
-```verilog
-wire        sched_needs_real_input;
-wire        sched_ready_in;
-wire        sched_output_fires;
-wire        sched_out_frame_done;
-wire [$clog2(IH+PH+1)-1:0]     sched_in_row;
-wire [$clog2(IW+PW+1)-1:0]     sched_in_col;
-wire [$clog2(OH*OW+1)-1:0]     sched_outputs_emitted;
-
-coord_scheduler #(
-    .IH(<IH>), .IW(<IW>), .OH(<OH>), .OW(<OW>),
-    .KH(<KH>), .KW(<KW>), .SH(<stride[0]>), .SW(<stride[1]>),
-    .PH(<padding[0]>), .PW(<padding[1]>)
-) scheduler (
-    .clk(clk), .rst_n(rst_n),
-    .start(<one-cycle pulse when the FSM accepts the first frame>),
-    .stall_in(stall_in),
-    .valid_in(valid_in),
-    .ready_in(sched_ready_in),
-    .needs_real_input(sched_needs_real_input),
-    .in_row(sched_in_row), .in_col(sched_in_col),
-    .output_fires(sched_output_fires),
-    .in_frame_done(),
-    .out_frame_done(sched_out_frame_done),
-    .outputs_emitted(sched_outputs_emitted)
-);
-
-// Top-level ready_in is simply the scheduler's ready_in.
-assign ready_in = sched_ready_in;
-```
-
-The FSM terminates on `sched_out_frame_done` (equivalently
-`sched_outputs_emitted == OH*OW`), never on `in_row > IH-1+PH`. Writing
-`line_buf[cur_row][sched_in_col]` on every `valid_in && sched_ready_in`
-handshake keeps the scheduler's coord stream and the line-buffer fill in
-lockstep.
+See `03_conv3x3_pad1.md` (or `04_conv7x7_pad3.md`, `07_maxpool.md`) for
+the full wiring template. `rtl_library/SPLIT_ARCHITECTURE.md` documents
+the scheduler firing-coord timing in detail.
 
 ---
 
@@ -357,4 +321,3 @@ end
 Never combine BIAS and SCALE in the same registered stage — that collapses
 a wide integer add and a wide multiply into one combinational cone and
 hurts Fmax.
-

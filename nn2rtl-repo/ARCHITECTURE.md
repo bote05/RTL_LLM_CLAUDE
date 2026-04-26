@@ -25,7 +25,7 @@ nn2rtl-repo/
 ├── mcp/                       # Layer 3: MCP server exposing hardware toolchain
 ├── scripts/                   # Frontend prep plus shared maintenance checks
 ├── tb/                        # Static C++ Verilator testbench
-├── vendor/sky130/             # Sky130 standard-cell library + download script
+├── vendor/sky130/             # Legacy ASIC library artifacts, not used by current Vivado flow
 ├── test/fixtures/             # Cross-language fixtures used by Python & TS tests
 └── output/                    # Runtime artifacts (git-ignored; empty subdirs kept)
 ```
@@ -60,7 +60,7 @@ Default pytest options (`-ra` report) and registered markers: `full` (heavy / sl
 Ignores `node_modules/`, `dist/`, `*.tsbuildinfo`, log files, IDE dirs, simulator artifacts (`obj_dir/`, `*.vcd`, `*.fst`, `*.vvp`, `*.blif`), Python virtualenvs (`.venv/`, `venv/`, `*.egg-info/`), test/coverage caches (`.pytest_cache/`, `.coverage*`, `coverage/`, `htmlcov/`, `.mypy_cache/`, `.ruff_cache/`), local Codex state, runtime outputs under `output/`, `checkpoints/`, `__pycache__/`, `.env*`, and OS junk.
 
 ### `.claude/settings.json`
-Workspace permissions for Claude Code. Permits Bash invocations for `node`, `npm`, `python3`, `iverilog`, `verilator`, and `yosys`.
+Workspace permissions for Claude Code. Permits Bash invocations for `node`, `npm`, `python3`, `iverilog`, `verilator`, and Vivado when configured locally.
 
 ---
 
@@ -127,7 +127,7 @@ Canonical TypeScript interfaces for the pipeline data contracts:
 - `VerificationSidecar` — the JSON blob the orchestrator writes for the static testbench to consume; includes all seven signal names and `bus_bytes_per_sample`.
 - `PipelineState` — authoritative run state. Includes `total_cost_usd` and per-model `model_usage`.
 - `ModuleStatus` and `NextAction` — discriminated unions for the state machine.
-- `FailureClass` — the README's 16-category repair taxonomy plus `synthesis_failed`, used when a module passes simulation but fails the post-pass Yosys synthesis step.
+- `FailureClass` — the README's repair taxonomy plus `synthesis_failed`, used when a module passes simulation but fails the post-pass Vivado synthesis step.
 
 ### `schemas.ts`
 Zod 4 runtime schemas mirroring `types.ts`. Single source of truth for every JSON Schema the SDK or MCP server advertises — those are now derived with `z.toJSONSchema(...)` rather than hand-written. Exports: `failureClassSchema`, `moduleStatusSchema`, `layerIrSchema`, `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`, `synthesisReportSchema`, `modelUsageEntrySchema`, `pipelineStateSchema`.
@@ -135,7 +135,7 @@ Zod 4 runtime schemas mirroring `types.ts`. Single source of truth for every JSO
 Constraint highlights:
 
 - `layerIrSchema`: all seven signal-name fields are `z.literal(...)`; `attempt`, widths, latency are `int().positive()`.
-- `synthesisReportSchema`: includes `area_um2` (defaults to 0 for non-Sky130 reports).
+- `synthesisReportSchema`: Vivado synth-only report with LUT/FF/DSP/BRAM counts, WNS, timing_met, and computed Fmax.
 - `verilogModuleSchema.attempt`: `z.number().int().positive()` (Foundry starts at 1).
 - `pipelineStateSchema`: `max_retries`, `attempts.value` are `int().nonnegative()`; `total_cost_usd` is `nonnegative()`. A `superRefine` enforces cross-field invariants:
   - Every `modules` key has an `attempts` entry and vice versa.
@@ -185,20 +185,20 @@ Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus man
    - `invoke_surgeon` → load the persisted broken module plus the prior `VerifResult`, call Surgeon, validate/persist the repaired `VerilogModule`, then invoke the deterministic Assayer on the repaired module.
    - Every structured agent return is validated through Zod before it is trusted.
 5. Feed the Assayer's `VerifResult` into `PipelineStateManager.applyVerifResult()`, save state, and append run-log events after each transition.
-6. On a passing module, invoke `run_yosys` via direct MCP import (Sky130 flow) and write `output/reports/<module_id>.yosys.json`. If Yosys reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"` and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
+6. On a passing module, invoke `run_vivado` via direct MCP import (Artix-7 synth-only flow) and write `output/reports/<module_id>.vivado.json`. If Vivado reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"` and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
 7. On terminal state, write `output/reports/pipeline_summary.json`.
 
 **Deterministic Assayer (`runAssayerDeterministic`).** Verification is no longer an LLM agent. The orchestrator writes the sidecar JSON from LayerIR fields (all signal names are fixed literals, widths and paths copied from the LayerIR), runs a deterministic RTL preflight that parses the ANSI port list to catch port-direction, port-width, and missing-port errors before invoking the toolchain, then calls `run_iverilog` for a fast lint pass followed by `run_verilator` for full simulation — both imported directly from the MCP package. The Verilator testbench produces a structured `VerifResult` JSON validated by Zod. No Haiku, no hallucination — a module has a `VerifResult` iff Verilator produced one.
 
 The sidecar includes `bus_bytes_per_sample` (= `input_width_bits / 8`), which the testbench cross-checks against the NN2V binary header's `bytes_per_sample` field.
 
-**Deterministic Yosys invocation (`invokeYosys`).** Yosys is also invoked via direct MCP import, not through an LLM mediator. The result is validated against `synthesisReportSchema`.
+**Deterministic Vivado invocation (`invokeVivado`).** Vivado is invoked via direct MCP import, not through an LLM mediator. The result is validated against `synthesisReportSchema`.
 
 **RTL Preflight (`preflightVerilogModule`).** Before running any toolchain, the orchestrator parses the generated Verilog's ANSI port list and checks: (1) all seven canonical ports are present, (2) directions match the spec (e.g. `ready_in` must be `output`), (3) bus widths match `input_width_bits` / `output_width_bits` from the LayerIR. Preflight failures return a `VerifResult` with `failure_class: port_width_mismatch` and skip the iverilog/Verilator invocations entirely, saving minutes of build time.
 
-**PPA gates (`evaluateSynthesis`).** After Yosys succeeds, `evaluateSynthesis` checks: (1) Fmax >= 50 MHz target (else `failure_class: missing_pipeline_register`), (2) `fmax_mhz > 0` (else `synthesis_failed` — timing could not be measured), (3) when no standard-cell area metric is present, LUT count <= 5000 per module. Under the current Sky130 flow, `lut_count` is a total standard-cell count proxy (from `stat -liberty`), not a real LUT count, so the 5k LUT ceiling is only enforced as a fallback. Reports larger than ~6 KB are summarized as head + ERROR lines + tail so Surgeon sees the actual diagnostics instead of warning spam.
+**PPA gates (`evaluateSynthesis`).** After Vivado succeeds, `evaluateSynthesis` checks: (1) `timing_met === true`, (2) Fmax >= 50 MHz target (else `failure_class: missing_pipeline_register`), and (3) timing data is present (`wns_ns !== null` and `fmax_mhz > 0`, else `synthesis_failed`). LUT/FF/DSP/BRAM metrics are recorded for thesis analysis but are not hard-failed yet. Reports larger than ~6 KB are summarized as head + ERROR lines + tail so Surgeon sees the actual diagnostics instead of warning spam.
 
-**Runtime injection** via `OrchestratorRuntime = { now, queryFn, yosysFn, assayerFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks, a mock `query()` implementation, a mock Yosys invocation, and a mock Assayer function. The default is `{ now: () => new Date(), queryFn: query, yosysFn: invokeYosys, assayerFn: runAssayerDeterministic }`.
+**Runtime injection** via `OrchestratorRuntime = { now, queryFn, synthesisFn, assayerFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks, a mock `query()` implementation, a mock Vivado invocation, and a mock Assayer function. The default is `{ now: () => new Date(), queryFn: query, synthesisFn: invokeVivado, assayerFn: runAssayerDeterministic }`.
 
 Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resultSchema, runtime)`. Both the SDK `outputFormat` (JSON Schema, generated from Zod via `z.toJSONSchema`) and the local `resultSchema` (Zod) are derived from the same schema export, so drift is structurally impossible.
 
@@ -206,7 +206,7 @@ Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resu
 
 `requireStructuredOutput` unwraps the SDK's `structured_output`, falls back to `JSON.parse(result.result)` if missing, validates through the supplied Zod schema, and throws a field-level error on mismatch.
 
-Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, Surgeon, and direct Yosys invocations.
+Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, and Surgeon. Vivado is deterministic local tooling and is logged separately as synthesis metadata.
 
 ---
 
@@ -236,8 +236,8 @@ Byte-for-byte mirror of `sdk/types.ts`. The two packages have separate `rootDir`
 Single source of truth for MCP-side schemas. Exports:
 
 - Shared data contracts: `failureClassSchema`, `layerIrSchema` (with all seven canonical signal literals), `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`, `verificationSidecarSchema` (with all seven canonical signal literals plus `bus_bytes_per_sample`).
-- Per-tool input schemas: `runIverilogInput`, `runVerilatorInput`, `runYosysInput` (includes optional `clock_period_ns`), `readWeightsInput`, `writeVerilogInput`.
-- Per-tool output schemas: `runIverilogOutput`, `runYosysOutput` (includes `area_um2`), `writeVerilogOutput`.
+- Per-tool input schemas: `runIverilogInput`, `runVerilatorInput`, `runVivadoInput` (includes optional `clock_period_ns`, `part`, and `threads`), `readWeightsInput`, `writeVerilogInput`.
+- Per-tool output schemas: `runIverilogOutput`, `runVivadoOutput` (Vivado resource/timing fields), `writeVerilogOutput`.
 
 `server.ts` advertises each tool's `inputSchema` and `outputSchema` via `z.toJSONSchema(...)` from these Zod definitions — no hand-written JSON Schema.
 
@@ -246,11 +246,11 @@ Tool implementations. Each exposes a `ToolsRuntime` override parameter so tests 
 
 `isSystemSpawnError` distinguishes Node-level spawn failures (ENOENT, EACCES, EPERM, ENOMEM, ETIMEDOUT, EMFILE, ENFILE, `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`, killed-by-signal) from tool-level exit-code errors. System spawn errors are thrown rather than laundered into Verilog syntax/synthesis failures, so Surgeon does not try to "fix" an out-of-memory error by rewriting correct code.
 
-Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `stderrFromUnknown`, `isSystemSpawnError`, `parseYosysReport`, `resolveOutputRoot`, `resolveRepoRootFromEnv`, `TB_SOURCE_PATH`, `TB_JSON_HPP_PATH`, `SKY130_LIB_PATH`, `VERILATOR_COMMAND`, `PYTHON_COMMAND`, `YOSYS_TIMEOUT_MS`, `YOSYS_MAX_BUFFER_BYTES`, `augmentEnvForOssCadSuite`, `augmentEnvForOssCadSuiteLibOnly`, `augmentEnvForVerilatorCxx`, `run_iverilog`, `run_verilator`, `run_yosys`, `read_weights`, `write_verilog`, `readSidecarIfPresent`.
+Exports: `CommandRunner`, `ToolsRuntime`, `createToolsRuntime`, `withTempDir`, `stderrFromUnknown`, `isSystemSpawnError`, `parseVivadoReport`, `toVivadoPath`, `resolveVivadoCommand`, `resolveOutputRoot`, `resolveRepoRootFromEnv`, `TB_SOURCE_PATH`, `TB_JSON_HPP_PATH`, `VERILATOR_COMMAND`, `PYTHON_COMMAND`, `VIVADO_DEFAULT_PART`, `VIVADO_TIMEOUT_MS`, `VIVADO_MAX_BUFFER_BYTES`, `augmentEnvForOssCadSuite`, `augmentEnvForOssCadSuiteLibOnly`, `augmentEnvForVerilatorCxx`, `run_iverilog`, `run_verilator`, `run_vivado`, `read_weights`, `write_verilog`, `readSidecarIfPresent`.
 
 - `run_iverilog(verilog_source, module_name)` — writes the source to a temp file, runs `iverilog -o <os.devNull> -g2012`, returns `{ success, stderr }`. System spawn errors are re-thrown. **Implemented.**
 - `run_verilator(verilog_source, module_name, sidecar_path)` — loads and validates the sidecar via `readSidecarIfPresent` (Zod-checked), rejects relative `golden_inputs_path` / `golden_outputs_path` / `results_path`, copies the static testbench plus vendored `third_party/json.hpp` into a temp build dir, invokes `VERILATOR_COMMAND --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS`, runs the produced binary with the sidecar path, reads `sidecar.results_path`, validates it through `verifResultSchema`, and maps build / execution failures into well-formed `VerifResult` payloads. **Implemented.**
-- `run_yosys(verilog_source, module_name, clock_period_ns)` — **Sky130 standard-cell flow.** Runs `yosys -p "synth -top <module_name>; dfflibmap -liberty sky130.lib; abc -liberty sky130.lib [-constr ... -D <period_ps>]; stat -liberty sky130.lib"`. When `clock_period_ns > 0`, generates an ABC constraint file setting `set_driving_cell sky130_fd_sc_hd__buf_1` and `set_load 10.0`, and passes `-constr <file> -D <period_ps>` to `abc` to enable timing-aware mapping and `stime -p` critical-path reporting. The lib is `vendor/sky130/sky130_fd_sc_hd__tt_025C_1v80.lib` (downloaded via `vendor/sky130/download.sh`). `parseYosysReport` extracts `Chip area for module` (um^2), `Number of cells` (or `N cells` summary lines), and ABC delay lines (ns/ps → MHz). Has a **120-second timeout** (`YOSYS_TIMEOUT_MS`) and a **64 MiB maxBuffer** (`YOSYS_MAX_BUFFER_BYTES`). Timeout errors include a diagnostic explaining the likely cause (deep combinational blob that abc cannot map) and advising the registered output-stationary MAC-array structure. **Implemented.**
+- `run_vivado(verilog_source, module_name, clock_period_ns, part?, threads?)` — **Artix-7 synth-only flow.** Writes a batch Tcl script, converts WSL `/mnt/<drive>/...` paths to `C:/...` form for Windows Vivado, sets `general.maxThreads`, reads candidate + `rtl_library/*.v` sources, creates a clock, runs `synth_design -top <module_name> -part xc7a100tcsg324-1` by default, emits utilization/RAM/timing reports and a post-synth checkpoint. `parseVivadoReport` extracts LUT/FF/DSP/BRAM18/BRAM36, WNS, timing_met, and Fmax. Has a **30-minute timeout** (`VIVADO_TIMEOUT_MS`) and a **64 MiB maxBuffer** (`VIVADO_MAX_BUFFER_BYTES`). **Implemented.**
 - `read_weights(checkpoint_path, quantization_config)` — spawns `PYTHON_COMMAND scripts/generate_golden.py`, reads `output/golden_vectors.json`, and validates it against `pipelineIrSchema` before returning. `generate_golden.py` now writes the canonical artifact to `output/layer_ir.json` and mirrors the same JSON to `output/golden_vectors.json` for MCP compatibility, so `read_weights` still sees a valid `PipelineIR` without any TypeScript changes.
 - `write_verilog(module, output_dir)` — the persistence path agents are expected to use. Writes `<output_dir>/rtl/<module_id>.v` and `<module_id>.meta.json`, returns the absolute `.v` path. The orchestrator also has a `persistVerilogModule()` safety net in `sdk/orchestrate.ts` for cases where an agent returns valid structured RTL but skipped the MCP tool call. **Implemented.**
 - `readSidecarIfPresent(filePath)` — returns the parsed `VerificationSidecar` or `null` if the file is missing (ENOENT). Any other error, or a schema mismatch, throws with a field-level message.
@@ -271,9 +271,9 @@ Each handler parses its arguments through the matching Zod schema before invokin
 ## Vendor Libraries (`vendor/`)
 
 ### `vendor/sky130/`
-Contains the Sky130 open standard-cell library used for ASIC synthesis.
+Legacy Sky130 open standard-cell library artifacts from the earlier ASIC-proxy synthesis flow. The current synthesis backend is Vivado Artix-7 and does not consume these files.
 
-- `sky130_fd_sc_hd__tt_025C_1v80.lib` — the Liberty timing library for the SkyWater Sky130 high-density standard-cell family, typical-typical corner at 25C and 1.80V. Used by `run_yosys` for `dfflibmap -liberty`, `abc -liberty`, and `stat -liberty`.
+- `sky130_fd_sc_hd__tt_025C_1v80.lib` — the Liberty timing library kept for provenance of historical reports.
 - `download.sh` — script to fetch the Liberty file from the SkyWater PDK repository.
 - `README.md` — provenance and license notes.
 
@@ -392,7 +392,7 @@ Shared fixtures used by both vitest suites and pytest. Today:
 - `verif_pass.json`, `verif_fail.json` — sample `VerifResult` payloads for both outcomes.
 - `verilator/stream_passthrough.v`, `stream_offset.v`, `stream_latency2.v`, `stream_stall.v`, `stream_bubble.v` — real DUT fixtures for the full MCP integration suite, covering happy-path streaming, numerical mismatch, exact-latency mismatch, `ready_in` backpressure, and `valid_out` bubbles.
 
-Actual suites now live in `sdk/test/`, `mcp/test/`, and the Python files under `scripts/` (`test_paths.py`, `test_quantize_impl.py`, `test_golden_impl.py`, `test_cli.py`, `test_prepare_pipeline.py`). The fast path is mostly mocked and deterministic; the full path exercises real `iverilog`, `verilator`, `yosys`, and the Python frontend scripts, including the `prepare_pipeline.py` smoke harness and its failure-path coverage in `scripts/test_prepare_pipeline.py`.
+Actual suites now live in `sdk/test/`, `mcp/test/`, and the Python files under `scripts/` (`test_paths.py`, `test_quantize_impl.py`, `test_golden_impl.py`, `test_cli.py`, `test_prepare_pipeline.py`). The fast path is mostly mocked and deterministic; the full path exercises real `iverilog`, `verilator`, optional real Vivado smoke tests when `NN2RTL_VIVADO_BIN` is set, and the Python frontend scripts, including the `prepare_pipeline.py` smoke harness and its failure-path coverage in `scripts/test_prepare_pipeline.py`.
 
 ---
 
@@ -406,7 +406,7 @@ All runtime artifacts live here. The four subdirectories (`rtl/`, `tb/`, `report
 - `output/weights/<module_id>_weights.hex`, `<module_id>_bias.hex` — Cartographer's hex-format tensors.
 - `output/goldens/<module_id>.goldin`, `<module_id>.goldout` — per-module binary golden-activation streams in NN2V v2 format, written by `scripts/generate_golden.py` and referenced by the LayerIR's `golden_inputs_path` / `golden_outputs_path` fields (see `golden_impl.py` → `write_golden_vector_file` for the format).
 - `output/reports/run_log.jsonl` — JSONL event stream for the full run, produced by `appendRunLog`.
-- `output/reports/<module_id>.yosys.json` — Yosys synthesis report per passing module.
+- `output/reports/<module_id>.vivado.json` — Vivado synth-only resource/timing report per passing module.
 - `output/reports/<module_id>.results.json` — Verilator testbench results per verification run.
 - `output/reports/pipeline_summary.json` — final summary including total cost and model usage.
 - `output/layer_ir.json` — Cartographer's canonical `PipelineIR`, Zod-validated on load. `scripts/generate_golden.py` now writes this file directly.
@@ -431,7 +431,7 @@ Every JSON trust boundary is Zod-validated. The same schemas drive both local va
 | `output/layer_ir.json` on load | `sdk/orchestrate.ts` `ensureLayerIr` | `pipelineIrSchema` + `validateAddModulePacking` |
 | `output/rtl/<id>.meta.json` on load | `sdk/orchestrate.ts` `loadPersistedVerilogModule` | `verilogModuleSchema` |
 | `output/pipeline_state.json` on resume | `sdk/pipeline.ts` `loadState` | `pipelineStateSchema` (incl. `superRefine`) |
-| Yosys direct MCP result | `sdk/orchestrate.ts` `invokeYosys` | `synthesisReportSchema` |
+| Vivado direct MCP result | `sdk/orchestrate.ts` `invokeVivado` | `synthesisReportSchema` |
 
 Validation failures throw with field-level error paths so corrupted artifacts and malformed agent outputs fail loudly instead of silently propagating.
 
@@ -467,28 +467,28 @@ For the record, these items from earlier revisions are complete:
 - `VerifResult` extended with `timing_pass`, `timing_actual_cycles`, `timing_expected_cycles`, `failure_class`.
 - `PipelineState` extended with `total_cost_usd` and `model_usage`, both tracked across agent calls, with cross-field invariants enforced via `superRefine`.
 - Foundry and Cartographer system prompts rewritten to require `$readmemh`, valid/ready streaming, exact pipeline latency, and canonical signal-name literal constants.
-- Stale TODO comments on `run_iverilog`, `run_yosys`, and `write_verilog` removed — those tools are implemented.
+- Stale TODO comments on `run_iverilog`, `run_vivado`, and `write_verilog` removed — those tools are implemented.
 - Zod runtime validation added at every JSON trust boundary, including MCP tool inputs/outputs, agent structured outputs, `read_weights` PipelineIR read, `run_verilator` sidecar read, and the resume state file.
 - JSON-Schema blobs deduplicated: `sdk/orchestrate.ts` and `mcp/server.ts` now derive every advertised schema from the Zod exports via `z.toJSONSchema()`.
 - Static Verilator testbench (`tb/static_verilator_tb.cpp`) implemented: sidecar parsing, seven-name canonical enforcement, ready/backpressure-aware drive loop, per-vector sampling that correctly ticks past the final output, hang detection, cycle-accurate timing, numerical tolerance check, structured results JSON, best-effort error propagation. `nlohmann/json` vendored at `tb/third_party/json.hpp`.
 - `run_verilator` fully wired end-to-end: copies the static testbench into a tempdir with preserved `third_party/json.hpp` layout, invokes `verilator --cc --exe --build` with `VMODEL_HEADER` / `VMODEL_CLASS` macros, runs the produced binary against the sidecar, reads and Zod-validates the results JSON, and maps build / execution failures to properly shaped `VerifResult`s.
 - `PipelineStateManager.loadState` now recovers transient `generating` / `verifying` statuses from a crashed prior run, correctly rolling back the attempts counter for Surgeon-path crashes so the retry budget is not over-billed.
 - Entry points separated: `sdk/main.ts` and `mcp/main.ts` are the runnable CLIs, leaving `orchestrate.ts` / `server.ts` as library code importable by tests.
-- Dependency injection seams in place: `OrchestratorRuntime` (`now`, `queryFn`, `yosysFn`, `assayerFn`) in the SDK, `ToolsRuntime` (`commandRunner`, `cwd`, `env`, `tmpDirRoot`) in the MCP tools, `ToolImplementations` in the MCP server — all testable without touching the real toolchain, real clock, or real Claude API.
+- Dependency injection seams in place: `OrchestratorRuntime` (`now`, `queryFn`, `synthesisFn`, `assayerFn`) in the SDK, `ToolsRuntime` (`commandRunner`, `cwd`, `env`, `tmpDirRoot`) in the MCP tools, `ToolImplementations` in the MCP server — all testable without touching the real toolchain, real clock, or real Claude API.
 - Test infrastructure implemented: root `package.json` with `test:fast` / `test:full` / `coverage`, `pytest.ini` with markers, per-package `vitest.config.ts` with coverage thresholds, SDK and MCP test suites, Python helper tests, and shared fixtures under `test/fixtures/`.
 - Python preprocessing split into importable `*_impl.py` helpers (`paths.py`, `quantize_impl.py`, `golden_impl.py`), with a real ResNet-50 PTQ export path, the `torch.fx` golden-capture path driven by an embedded `residual_stack_spec`, and the older deterministic toy compatibility path.
 - **Real PTQ path implemented**: `scripts/quantize_model.py` / `scripts/quantize_impl.py` now load torchvision ResNet-50, run deterministic synthetic calibration, fold BN into conv weights, quantize to symmetric INT8 per tensor, and persist the flattened `format_version: 2` checkpoint schema validated by `load_quantized_checkpoint`.
 - **ResNet-50 frontend correctness pass landed**: the PTQ export emits all 17 layer1 modules (stem fused with MaxPool, three bottlenecks × {conv1, conv2, conv3, add, post_add_relu}, plus `layer1_0_downsample`), embeds a `residual_stack_spec` describing the DAG with explicit `lhs` / `rhs` wiring for every residual add, and populates `lhs_scale_factor` / `rhs_scale_factor` on add modules so the int8 quantized-add math is implementable. `scripts/golden_impl.py`'s fx path reads the spec, scales both add operands via `Int8Add`, and emits `golden_inputs` as packed 16-bit values matching the single-`data_in`-port contract. Foundry's agent and skill files document both the packed-add convention (PATTERN A) and the stem fusion rule (PATTERN B); no twin-protected schema change beyond two new optional `lhs_scale_factor` / `rhs_scale_factor` fields on `layerIrSchema`.
 - **Twin-file check protects the add-scale fields**: `scripts/check-twins.mjs` covers the `layerIrSchema` shared export, so the two new optional add-scale fields cannot drift between `sdk/` and `mcp/`. The twin check runs first in every root test target.
 - **MCP `run_verilator` test no longer leaks `mcp/relative-inputs.json`**: `writeSidecar` in `mcp/test/tools.test.ts` now materializes the golden input/output vector files only when the sidecar paths are absolute, so the "rejects relative path" test case no longer writes into the package root cwd on Windows runs.
-- Yosys policy decided and implemented: a failed post-pass Yosys synthesis report now feeds back into the retry loop as `failure_class: "synthesis_failed"` instead of being recorded as a degraded-but-still-passing module.
-- **Fmax gate tightened**: `parseYosysReport` now extracts ABC delay lines (`Delay = X ns`, `Delay = X ps`, `Current delay (X ns/ps)`) in addition to explicit `MHz` numbers. `evaluateSynthesis` no longer silently skips the timing gate when `fmax_mhz === 0` — that path now emits a `synthesis_failed` VerifResult with `fix_hint` explaining that timing could not be measured, so Surgeon is forced to address the issue instead of the gate being quietly bypassed.
-- **Surgeon retry loop tested**: `test/orchestrate-flow.test.ts` now exercises two forced-failure yosys paths end-to-end — `fmax_mhz === 0` (synthesis_failed) and `fmax_mhz` below the PPA target (missing_pipeline_register). Both route through `applyVerifResult` into a Surgeon dispatch and a second Assayer + Yosys round. A new `yosysFn` runtime seam on `OrchestratorRuntime` makes these tests possible without invoking the real toolchain.
+- Vivado policy decided and implemented: a failed post-pass Vivado synthesis report now feeds back into the retry loop as `failure_class: "synthesis_failed"` instead of being recorded as a degraded-but-still-passing module.
+- **Fmax gate tightened**: `parseVivadoReport` extracts WNS and computes Fmax from the requested clock. `evaluateSynthesis` no longer silently skips the timing gate when `wns_ns === null` or `fmax_mhz === 0` — that path emits a `synthesis_failed` VerifResult, while negative WNS / below-target Fmax emits `missing_pipeline_register`.
+- **Surgeon retry loop tested**: `test/orchestrate-flow.test.ts` exercises forced-failure Vivado paths end-to-end — missing timing data (`synthesis_failed`) and below-target/timing-miss reports (`missing_pipeline_register`). Both route through `applyVerifResult` into a Surgeon dispatch and a second Assayer + Vivado round. A `synthesisFn` runtime seam on `OrchestratorRuntime` makes these tests possible without invoking the real toolchain.
 - **Frontmatter parser replaced**: the hand-rolled `---`-delimited parser in `orchestrate.ts` is gone; frontmatter now goes through the `yaml` package. A new `toStringList` helper accepts both CSV strings (`tools: Bash, Read`) and YAML lists (`tools: [Bash, Read]`), and the legacy `splitCsvField` export was deleted.
 - **SDK typing hacks resolved**: `@anthropic-ai/claude-agent-sdk@0.2.107` exposes `AgentDefinition.skills` and `AgentDefinition.maxTurns`, so the local compat shim now advertises both fields and `loadPluginAgentDefinition` propagates them from `AGENT_CONFIG` (per-agent `maxTurns`) and from agent-markdown frontmatter (`skills`). The parent `query()` call keeps its own `maxTurns: 6` as an outer safety cap.
 - **Conductor agent removed**: there is no LLM "Conductor" anymore. The deterministic TypeScript orchestrator in `sdk/orchestrate.ts` owns the role directly, and `nn2rtl-plugin/agents/conductor.md` plus `nn2rtl-plugin/skills/conductor/` were deleted. `AGENT_CONFIG` and `AGENT_SLUGS` now list only the three real subagents (Cartographer, Foundry, Surgeon).
 - **Assayer agent removed**: there is no LLM "Assayer" anymore. The Haiku-based simulation runner repeatedly hallucinated `VerifResult` payloads instead of calling the MCP tools, and had zero real reasoning to do (run iverilog, run Verilator, parse JSON, return). Verification is now handled by `runAssayerDeterministic` in `sdk/orchestrate.ts`, which writes the sidecar from LayerIR fields, runs `run_iverilog` then `run_verilator` directly via MCP import, and returns a Zod-validated `VerifResult`. `nn2rtl-plugin/agents/assayer.md` and `nn2rtl-plugin/skills/assayer/` are deleted. `AGENT_CONFIG` and `AGENT_SLUGS` list only three agents: Cartographer, Foundry, Surgeon. The `assayerFn` runtime seam on `OrchestratorRuntime` allows tests to mock this path.
-- **Sky130 replaces iCE40 for synthesis**: `run_yosys` now targets the Sky130 open standard-cell library instead of iCE40. The Yosys script is `synth -top X; dfflibmap -liberty sky130.lib; abc -liberty sky130.lib [-constr ... -D <period_ps>]; stat -liberty sky130.lib`. `parseYosysReport` extracts `Chip area for module` (um^2), total cell count, and ABC critical-path delay. The lib is vendored at `vendor/sky130/sky130_fd_sc_hd__tt_025C_1v80.lib`. Yosys has a 120s timeout and 64 MiB maxBuffer to prevent hung synthesis and buffer overflow. `isSystemSpawnError` distinguishes infra failures from synth failures.
+- **Vivado Artix-7 replaces the Sky130/Yosys proxy flow**: `run_vivado` targets Nexys A7-100T (`xc7a100tcsg324-1`) by default. The batch Tcl uses `read_verilog -sv`, `create_clock`, `synth_design`, utilization/RAM/timing reports, and `write_checkpoint`. `toVivadoPath` converts WSL `/mnt/c/...` paths into Windows `C:/...` paths for native Vivado. `NN2RTL_VIVADO_BIN` overrides the binary and `NN2RTL_VIVADO_THREADS` overrides detected CPU threads.
 - **Wide-bus packed-channel interface**: `data_in` is `IC*8` bits wide (all channels of a pixel arrive in one clock), `data_out` is `OC*8` bits wide. LayerIR carries `input_width_bits = in_channels * 8` and `output_width_bits = out_channels * 8`. For add modules, `input_width_bits = in_channels * 16` (lhs + rhs packed). The golden model, Foundry prompt, deterministic verification path, and C++ testbench all implement this contract.
 - **Output-stationary MAC array**: Foundry prompt mandates OC parallel MAC lanes with one accumulator per output channel. `pipeline_latency_cycles = IC * KH * KW + 3` (from `compute_conv2d_latency_cycles`). Single-MAC designs are rejected. Foundry prompt includes a Verilog pseudo-template for the MAC-array state machine.
 - **Golden model applies scale_factor**: `requantize_tensor_with_scale(tensor, sf)` does `clamp(round(tensor * sf), -128, 127)` for conv (multiply). `Int8Add` divides by `output_scale_factor` (real → int domain).
@@ -499,32 +499,35 @@ For the record, these items from earlier revisions are complete:
 - **All agents disallow Agent/Task tools**: `disallowedTools: Agent, Task` in every agent markdown. No implicit Opus subagent spawning.
 - **Deterministic RTL preflight**: `preflightVerilogModule` in `orchestrate.ts` parses ANSI port list, checks canonical port names, directions, and bus widths before running Verilator.
 - **CLI knobs extended**: `parseCliArgs` accepts `--max-retries N` (with both `--max-retries N` and `--max-retries=N` forms) and rejects unknown `--flag` arguments with a clear error. `runPipeline` / `RunPipelineOptions` gained an optional `maxRetries` field that overrides `PIPELINE_CONFIG.max_retries`. Unknown flags now error instead of being silently ignored.
-- **`invokeYosys` compiled-path fix**: the dynamic import specifier for the MCP `run_yosys` helper used to be the relative string `"../mcp/tools.js"`, which resolves correctly from `sdk/orchestrate.ts` source but points at the non-existent `sdk/mcp/tools.js` when running `node sdk/dist/main.js`. Fixed by computing the specifier at module load via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` with a branch on whether `__dirname` is `dist` (→ `mcp/dist/tools.js`) or source (→ `mcp/tools.ts`).
-- **Proven end-to-end result**: `layer1_0_conv1` (1x1 conv, IC=64, OC=64) passes end-to-end: max_error=1, timing=67/67 cycles (matching `IC*KH*KW + 3 = 64*1*1 + 3 = 67`), Fmax=77.4 MHz on Sky130, area=669K um^2, cost=$0.35, zero Surgeon retries.
+- **`invokeVivado` compiled-path fix**: the dynamic import specifier for the MCP `run_vivado` helper is computed at module load via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` with a branch on whether `__dirname` is `dist` (→ `mcp/dist/tools.js`) or source (→ `mcp/tools.ts`).
+- **Proven historical end-to-end result**: `layer1_0_conv1` (1x1 conv, IC=64, OC=64) passed the earlier end-to-end flow first-shot. The current Vivado migration keeps that as a functional reference while replacing the synthesis backend and moving weight memory toward synchronous ROM / BRAM inference.
 
 ---
 
 ## Known Bottleneck — Spatial Convolutions Do Not Close Reliably
 
-**What passes and what doesn't, as of 2026-04-19:**
+**Historical pre-Vivado notes, as of 2026-04-19.** The failure analysis still
+explains why the split architecture exists, but synthesis numbers in this
+section came from the old Yosys/Sky130 proxy flow and should not be treated as
+current Artix-7 PPA.
 
 | Layer | Shape | Pipeline result | Notes |
 |---|---|---|---|
-| `layer1_0_conv1` | 1×1, IC=OC=64, no padding | ✅ **PASS** end-to-end | Foundry first shot, 0 Surgeon attempts, Yosys 12s. Fmax 116.3 MHz, lut 12,015, area ~100k µm². Reproducible across two separate runs. |
-| `layer0_0_conv1` | 7×7 stride-2, IC=3 OC=64, padding=3 | ❌ `fail_abort` in pipeline; ✅ passes when Yosys is invoked manually with no timeout | Sim+timing pass; synth times out at pipeline's 25-min cap. Manual Yosys at ~16 min: Fmax 61.4 MHz, lut 144,159, area 1.92 mm². RTL is synthesizable — tooling budget was tight. |
+| `layer1_0_conv1` | 1×1, IC=OC=64, no padding | ✅ **PASS** end-to-end | Historical first-shot pass. Needs fresh Vivado characterization under the Artix-7 flow. |
+| `layer0_0_conv1` | 7×7 stride-2, IC=3 OC=64, padding=3 | ❌ `fail_abort` in pipeline; ✅ passed historical manual synth | Sim+timing passed; old synth flow timed out inside the pipeline budget. RTL was synthesizable in the historical flow, but needs the split scheduler/window/datapath architecture for repeatability. |
 | `layer1_0_conv2` | 3×3, IC=OC=64, padding=1 | ❌ Sim never closes | Three separate Surgeon attempts converge on `sim_stalled` without reaching a passing state. Spent ~$50 on Surgeon retries across the run before aborting. |
 
 ### What we tried on the spatial convs, chronologically
 
-1. **Original OC-parallel design (MP = OC = 64).** Each ST_RUNNING cycle fired 64 parallel MACs and 64 parallel reads from a flat `weights[0..OC*K_TOTAL-1]` register array. Synth correct in principle, but the combinational cone at Yosys after OPT was ~300k cells, ABC on Sky130 couldn't map in 600s. Pipeline reported `fail_abort: synthesis_failed`. Tried across ~5 runs, each ~$6–$9.
+1. **Original OC-parallel design (MP = OC = 64).** Each ST_RUNNING cycle fired 64 parallel MACs and 64 parallel reads from a flat `weights[0..OC*K_TOTAL-1]` register array. Synth correct in principle, but the combinational cone became huge and did not close in the historical flow. Pipeline reported `fail_abort: synthesis_failed`. Tried across ~5 runs, each ~$6–$9.
 
-2. **Introduced `mac_parallelism` (MP=8).** Replaced OC-parallel with OC-group iteration: 8 parallel MAC lanes, `OC_PASSES = ceil(OC/MP)` passes per output pixel, each pass doing `K_TOTAL` MAC cycles across 8 lanes. Post-OPT cell count dropped ~7× (299k → 43k). Synth still timed out at 600s, the new hot spot was 8 parallel reads from a ~9k-element weight array. Verified end-to-end once by running Yosys manually with no timeout (the 61.4 MHz result above). Ran ~4 pipeline attempts, $5–$9 each.
+2. **Introduced `mac_parallelism` (MP=8).** Replaced OC-parallel with OC-group iteration: 8 MAC lanes, `OC_PASSES = ceil(OC/MP)` passes per output pixel, each pass doing `K_TOTAL` MAC cycles across 8 lanes. Cell count dropped sharply, but the new hot spot was multiple reads from a large weight array. Ran ~4 pipeline attempts, $5–$9 each.
 
-3. **Raised `YOSYS_TIMEOUT_MS` to 1800s then 1500s (25 min).** Manual run was 16 min. One pipeline run came within the budget, but Surgeon output varied — sometimes the particular RTL that won the manual run wasn't what Foundry/Surgeon produced next time, and the next RTL's synth still exceeded budget. Surgeon also began introducing "clever" memory-packing optimizations (`weights_packed`) to fight the cone, which Yosys's `OPT_MEM` pass rejected as non-constant `$meminit`. 3 runs, $6–$10 each.
+3. **Raised synthesis timeout to 25 min.** One pipeline run came within the budget, but Surgeon output varied. Surgeon also began introducing "clever" memory-packing optimizations (`weights_packed`) to fight the cone, which synthesis rejected as non-constant memory initialization. 3 runs, $6–$10 each.
 
 4. **Introduced registered shift-register `window`.** Foundry had been rebuilding `window[kh][kw][ic]` combinationally every cycle from `line_buf` + `cur_row` + `data_in` with per-tap bounds checks. Replaced with a shift-left + single-column load pattern. Moved line-buffer promotion from start-of-next-row to end-of-current-row to keep window loads ordered correctly. Fixed the combinational-window cone specifically. 2 runs, $4–$6 each — sim started passing more often but synth still timed out on a different axis (parallel weight reads).
 
-5. **Serialized weight reads (MP=4, one read per cycle).** Added `lane_counter` register that rotates 0..MP-1 across cycles; per cycle: one weight read, one multiply, one accumulate into `acc[lane_counter]`. Per OC pass: `MP*K_TOTAL + 3` cycles instead of `K_TOTAL + 3`. Latency for `layer0_0_conv1` went 1885 → 10,141. Synth side of the problem solved in principle. Locked in with `[INVARIANT:WEIGHT_ARRAY]` protection so Surgeon can't re-pack. 1 run: Foundry's first output stalled sim at `fmm=0`, three Surgeon attempts each burning ~20 turns of Opus converged on the same `fmm=7122` sim stall at the right-edge output column. Cost $9.95.
+5. **Serialized weight reads (MP=4, one read per cycle).** Added `lane_counter` register that rotates 0..MP-1 across cycles; per cycle: one weight read, one multiply, one accumulate into `acc[lane_counter]`. Under the current Vivado BRAM shape, synchronous ROM reads add one read-prime cycle, so each OC pass is `MP*K_TOTAL + 4`. The memory shape is now protected by structural preflight and banked weight files rather than `WEIGHT_ARRAY` invariant markers.
 
 6. **Ran `layer1_0_conv2` (3×3 pad=1, smaller geometry) in isolation to see if the spatial-specific issue reproduces on a less-extreme shape.** It does. First Foundry output: `sim_stalled fmm=0`. Two Surgeon attempts ($2.22 + unknown second attempt) made no progress before the Verilator simulation itself hung (no timeout on Verilator) and had to be killed manually.
 
@@ -534,11 +537,11 @@ Each fix above is individually correct and measurable. The remaining failure mod
 
 1. **Foundry emits a new FSM every time.** Even with the template pinned in `foundry.md`, Opus-generated RTL varies run-to-run. One run's right-edge drain exit condition is correct; the next run's isn't. The pinned template reduces variance but does not eliminate it, because Foundry still interprets/instantiates the template against a specific LayerIR.
 
-2. **Surgeon's repair surface grows with architecture.** Each added rule (shift-register window, serialized weights, INVARIANT:WEIGHT_ARRAY, partial-group gating, ready_in freeze, line-buffer promotion timing) narrows what Surgeon may touch. The bugs Foundry introduces still live inside that narrowed space but are harder to diagnose from the evidence because the evidence (`first_mismatch_index`, `output_gap_histogram`) looks the same for many different root causes.
+2. **Surgeon's repair surface grows with architecture.** Each added rule (shift-register window, serialized weights, partial-group gating, ready_in freeze, line-buffer promotion timing) narrows what Surgeon may touch. The bugs Foundry introduces still live inside that narrowed space but are harder to diagnose from the evidence because the evidence (`first_mismatch_index`, `output_gap_histogram`) looks the same for many different root causes.
 
-3. **Tooling has no Verilator-simulation timeout.** `run_yosys` has `YOSYS_TIMEOUT_MS`; `run_verilator` has no equivalent cap on the simulation binary. A Surgeon edit that produces an FSM which occasionally-but-not-always fires `valid_out` keeps the simulation alive forever — the testbench's `hang_budget` only fires on total silence. Observed once, hung for 50+ min before manual kill.
+3. **Verilator-simulation timeout was missing historically.** A Surgeon edit that produces an FSM which occasionally-but-not-always fires `valid_out` can keep the simulation alive forever — the testbench's `hang_budget` only fires on total silence. `VERILATOR_SIM_TIMEOUT_MS` now caps that path.
 
-4. **Weight-array size scales with the network.** At `layer0_0_conv1` (7×7, 64×3), `weights` is 9,408 INT8 bytes. At `layer1_0_conv2` (3×3, 64×64), it's 36,864. The user's projection for `layer4_0_conv2` (3×3, 512×512) is **2,359,296 INT8 weights = 18.9 Mbit** of state. No PDK-BRAM inference is possible on Sky130. Even correct RTL becomes a 2.4M-flop register file with a long mux tree for indexed access.
+4. **Weight-array size scales with the network.** At `layer0_0_conv1` (7×7, 64×3), `weights` is 9,408 INT8 bytes. At `layer1_0_conv2` (3×3, 64×64), it's 36,864. The user's projection for `layer4_0_conv2` (3×3, 512×512) is **2,359,296 INT8 weights = 18.9 Mbit** of state. Artix-7 BRAM can store this class of data, but only if the RTL uses synchronous ROM inference or explicit lane banking; async flat arrays still become LUT/register pressure.
 
 5. **Bus widths scale too.** `data_out` at `layer4_0_conv3` (OC=2048) is 16,384 bits. Foundry has to emit correct bit-slicing (`data_out[global_oc*8 +: 8]`) across that entire width. LLM accuracy at this scale is the load-bearing risk; template doesn't help if the LLM skips one range of indices.
 
@@ -546,7 +549,7 @@ Each fix above is individually correct and measurable. The remaining failure mod
 
 - **Architecture is correct**: verified latency formula matches TB measurement to the cycle; shift-register window + serialized MAC + OC-group iteration produce synthesizable, functionally-correct RTL when the LLM gets the FSM right.
 - **1×1 pointwise convs work cleanly**: no window, no padding, no right-edge drain. `layer1_0_conv1` passes reproducibly, first-shot, under $1.
-- **Synth characterization is real**: `manual_yosys` run on `layer0_0_conv1` produced genuine Sky130 PPA (61.4 MHz, 1.92 mm², 144K gates).
+- **Synth characterization needs refreshing**: the previous manual synth data was useful historically, but current PPA must come from Vivado reports on `xc7a100tcsg324-1`.
 - **Spec-hash template reuse is implemented** but never exercised end-to-end, because no two spatial convs have both passed in the same run.
 
 ### What would make it bulletproof (not done yet)
@@ -556,8 +559,8 @@ The pipeline's bottleneck is generative RTL for spatial convs at scale, which is
 1. **Parameterized handwritten operator library** (`rtl_library/conv2d_pointwise.v`, `conv2d_spatial_k3p1.v`, `conv2d_spatial_k7p3.v`, `add_quantized.v`, `relu.v`, `maxpool.v`). Each handwritten once, verified once, parameterized on `OC, IC, IH, IW, MP, scale constants, weights_path`.
 2. **Foundry collapses to instantiation**: instead of generating RTL, Foundry picks a library module and emits an instantiation wrapper with the LayerIR's parameters. ~30 lines of LLM output instead of ~300. Zero structural variance.
 3. **Surgeon becomes optional** for conv/add/relu/maxpool. It stays available for new operators not in the library.
-4. **`VERILATOR_SIM_TIMEOUT_MS` added** to `mcp/tools.ts` mirroring the Yosys timeout. Currently missing and has burned ~1 hour of wall-clock on hung sims.
-5. **Weight-array size ceiling + BRAM-inferrable memory flow** before the pipeline accepts layers beyond ~1M weights. L2+ shapes will hit this.
+4. **`VERILATOR_SIM_TIMEOUT_MS` added** to `mcp/tools.ts` so hung simulations fail with structured evidence instead of burning wall-clock indefinitely.
+5. **Tiled-channel streaming** for layers whose packed buses exceed the current top-level interface shape. `io_mode` / `channel_tile` are schema hooks; the static TB and goldens still need the multi-beat channel-tile path before enabling it.
 
 This conversion is the honest path to scaling past `layer1_0_conv1`. The `LLM-generates-RTL-from-scratch` loop is fine as a research demo and produces the one passing 1×1 module; the hybrid `LLM-picks-parts-from-verified-library` flow is what would actually cover the 17-module ResNet-50 pipeline, let alone L4.
 

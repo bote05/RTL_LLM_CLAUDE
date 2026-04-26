@@ -12,7 +12,7 @@ import {
   read_weights,
   run_iverilog,
   run_verilator,
-  run_yosys,
+  run_vivado,
 } from "../tools.js";
 
 const execFileAsync = promisify(execFile);
@@ -165,9 +165,9 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
     expect(result.stderr.length).toBeGreaterThan(0);
   });
 
-  it("runs yosys against a real fixture module", async () => {
+  it.skipIf(!process.env.NN2RTL_VIVADO_BIN)("runs vivado against a real fixture module", async () => {
     const verilog = await loadFixture(verilatorFixtureRoot, "stream_passthrough.v");
-    const result = await run_yosys(verilog, "stream_passthrough", 20);
+    const result = await run_vivado(verilog, "stream_passthrough", 20);
     expect(result.success).toBe(true);
     expect(result.report.length).toBeGreaterThan(0);
     expect(result.lut_count).toBeGreaterThanOrEqual(0);

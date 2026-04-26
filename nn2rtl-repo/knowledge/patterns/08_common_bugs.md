@@ -68,22 +68,22 @@ simplest form of some of these before simulation even runs.
 - **Fix**: match the window declaration order exactly. Convention:
   `window [0:KH-1][0:KW-1][0:IC-1]`, read as `window[kh][kw][ic]`.
 
-## weights_packed OPT_MEM rejection
+## weights_packed BRAM/ROM inference rejection
 
-- **Symptom**: Yosys report contains `ERROR: opt_mem: Non-constant
-  initial value`. `status: fail, failure_class: synthesis_failed`.
+- **Symptom**: Vivado synthesis fails or infers a huge LUT mux around the
+  weight memory. `status: fail, failure_class: synthesis_failed`.
 - **Diagnosis**: Someone — usually Surgeon responding to a synth timeout —
   introduced a `weights_packed` memory that packs multiple weights into a
-  wide word via `for ... weights_packed[i] = {weights[i*4+3], ...}`. The
-  packing expression is not a constant, so OPT_MEM refuses it.
-- **Fix**: revert to the flat `reg signed [7:0] weights [0:OC*K_TOTAL-1]`
-  form and read weights via a `lane_counter`-rotated single-read pattern
-  (see `02_conv1x1.md § Serialized weight reads`). Now enforced by the
-  `weights_packed_forbidden` structural preflight rule.
+  wide word via `for ... weights_packed[i] = {weights[i*4+3], ...}`.
+  Vivado cannot infer a clean ROM/BRAM from this dynamic initializer.
+- **Fix**: use `$readmemh`-initialized ROMs and read them through registered
+  addresses. For parallel lanes, use `LayerIR.weight_bank_paths` so each lane
+  has its own legal read port. The `weights_packed_forbidden` structural
+  preflight rule catches the bad packed forms.
 
 ## non-constant $readmemh initialization (missing initial block)
 
-- **Symptom**: Yosys synth fails with "non-constant memory initializer" or
+- **Symptom**: Vivado synth fails with "non-constant memory initializer" or
   Verilator fails with "syntax error near weights[...]".
 - **Diagnosis**: `$readmemh` call is outside an `initial` block, or the
   weights are being assigned through continuous `assign`.

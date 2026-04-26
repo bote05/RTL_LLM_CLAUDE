@@ -33,11 +33,11 @@ agnostic):
 fill_rows = max(KH - 1 - PH, 0) = max(6 - 3, 0) = 3
 fill_cols = max(KW - PW,   1) = max(7 - 3, 1) = 4
 latency   = 3 * (IW + PW) + 4 + OC_PASSES * pass_cycles
-          = 3 * (224 + 3) + 4 + OC_PASSES * (MP * 3*IC*3 + 3)
+          = 3 * (224 + 3) + 4 + OC_PASSES * (MP * 7*IC*7 + 4)
 ```
 
 For the stem (IC=3, OC=64, IW=224, MP=8): `OC_PASSES=8, K_TOTAL=147`,
-`pass_cycles = 8*147 + 3 = 1179`, `latency = 3*227 + 4 + 8*1179 = 10117`.
+`pass_cycles = 8*147 + 4 = 1180`, `latency = 3*227 + 4 + 8*1180 = 10125`.
 
 ## Required FSM, registers, coordinate logic
 
@@ -63,9 +63,9 @@ below are reproduced here in full so Foundry does not have to cross-open
   `k_counter` advances. Per output pixel: `MP * K_TOTAL * OC_PASSES`
   MAC cycles. For the 7×7 stem (IC=3, OC=64, MP=8) this is
   `8 * 147 * 8 = 9408` MAC cycles per pixel. `MP` parallel reads from
-  the Sky130 register-array weight memory become `MP` independent ~9k-to-1
-  mux trees — ABC cannot map that. Serialization removes the synth
-  blocker permanently.
+  one flat async weight array become illegal BRAM port pressure and wide LUT
+  mux trees in Vivado. Serialization or explicit `weight_bank_paths` removes
+  the synth blocker.
 
 - **Window-freeze during OC group iteration (MANDATORY).** While
   iterating the `OC_PASSES` groups for one output pixel, input capture
@@ -75,8 +75,9 @@ below are reproduced here in full so Foundry does not have to cross-open
   contents across all `OC_PASSES` passes. If later groups run against a
   shifted window, their accumulations corrupt later OC channels.
 
-- **[INVARIANT:WEIGHT_ARRAY]** on the `weights` / `biases` declarations
-  and their `$readmemh` lines. See `01_context.md` for the full rule.
+- **No `WEIGHT_ARRAY` invariant markers.** Weight memories may need Vivado
+  BRAM banking or synchronous ROM rewrites; protect behavior with preflight
+  rules and tests, not invariant comments.
 
 ## Use coord_scheduler — MANDATORY
 

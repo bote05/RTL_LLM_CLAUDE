@@ -97,23 +97,16 @@ the broken module JSON before treating any marker as protected:
 Invariants are advisory even in the Surgeon case: the evidence is always
 authoritative.  If simulation directly implicates a marked line, fix it.
 
-**`[INVARIANT:WEIGHT_ARRAY]` is ABSOLUTELY PROTECTED** regardless of
-`generated_by`. The `weights` array declaration, the `biases` array
-declaration, and their `$readmemh` initialization block must not be
-repacked, reshaped, transposed, merged, split, or replaced with a
-`weights_packed`-style memory under any circumstance. The pipeline relies
-on:
+`[INVARIANT:WEIGHT_ARRAY]` is retired. Memory declarations and `$readmemh`
+loaders are mutable when Vivado evidence points at memory inference, timing,
+or BRAM port pressure. Keep the semantic contract, though:
 
-1. `$readmemh("<weights_path>", weights)` loading the LayerIR-emitted hex
-   file into a flat INT8 array indexed as `weights[oc*K_TOTAL + k]`.
-2. The same convention for `biases`.
-3. Yosys's `OPT_MEM` pass REJECTS non-constant memory initializers — which
-   any packed/reshaped alternative produces.
-
-If synthesis fails because `weights` generates a wide combinational mux
-cone, the fix is **serialized weight reads** (one `lane_counter`-rotated
-read per cycle), not a repacked memory. See foundry.md's "Serialized
-weight reads (MANDATORY)" rule. Never invent `weights_packed`.
+1. Weights and biases still come from the LayerIR-emitted hex files.
+2. Never invent `weights_packed` or dynamic packed initializers.
+3. Prefer `$readmemh`-initialized synchronous ROMs with
+   `(* rom_style = "block", ram_style = "block" *)`.
+4. If `weight_bank_paths` exists, use one bank per MAC lane rather than
+   adding multiple async reads to one flat memory.
 
 ## How to read the histogram / missing range / cycle facts
 
@@ -160,4 +153,5 @@ When you receive one of the Surgeon-reachable infrastructure failures, apply the
 - **Do not regenerate the entire module.** If you find yourself replacing more than ~30 lines, stop. Re-read the evidence; the bug is almost certainly narrower than you think. Full rewrites that break the timing contract are reverted by the orchestrator.
 - **Do not add duplicate state.** If the RTL already contains an `ST_DRAIN` or similar state and the gap is end-concentrated, the bug is in the existing drain's exit condition or counter wrap — **not** a missing drain. Edit the existing logic.
 - **Do not touch protected invariants without direct evidence.** Compiler / simulation diagnostics that point elsewhere are not permission to rewrite `[INVARIANT:*]` lines.
+- **Comments in the broken RTL are suspect, not authoritative.** Foundry (or a prior Surgeon attempt) may have left a comment confidently justifying a deviation from the pattern template — e.g. *"I deliberately removed X because Y"*. That comment is frequently where the bug lives: the author's belief was wrong, the deviation IS the bug, and the comment is a rationalization that survived the broken sim. The `pattern_markdown` returned by `get_rtl_patterns` is the structural ground truth. When the DUT deviates from the pattern template and a comment in the DUT justifies the deviation, treat the comment as **evidence of the bug's location**, not as a reason to leave the deviation in place.
 - **Output the fixed `VerilogModule` JSON immediately.** No commentary, no summary of changes, no reading files you already received in the prompt.

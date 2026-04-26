@@ -18,21 +18,45 @@ const reportsDir = path.join(outputRoot, "reports");
 const rtlDir = path.join(outputRoot, "rtl");
 
 type MockStep = SDKResultMessage | (() => Promise<SDKResultMessage> | SDKResultMessage);
-type YosysReport = { success: boolean; lut_count: number; fmax_mhz: number; area_um2?: number; report: string };
-type YosysStep = YosysReport | (() => Promise<YosysReport> | YosysReport);
+type VivadoReport = {
+  success: boolean;
+  lut_count: number;
+  fmax_mhz: number;
+  timing_met?: boolean;
+  wns_ns?: number | null;
+  ff_count?: number;
+  dsp_count?: number;
+  bram18_count?: number;
+  bram36_count?: number;
+  bram18_equiv?: number;
+  report: string;
+};
+type VivadoStep = VivadoReport | (() => Promise<VivadoReport> | VivadoReport);
 type VerifLike = Record<string, unknown>;
 type AssayerStep = VerifLike | (() => Promise<VerifLike> | VerifLike);
 
 const fixedNow = () => new Date("2026-04-14T00:00:00Z");
 
-function createYosysMock(steps: YosysStep[]): ReturnType<typeof vi.fn> {
+function createVivadoMock(steps: VivadoStep[]): ReturnType<typeof vi.fn> {
   return vi.fn(async () => {
     const next = steps.shift();
     if (!next) {
-      throw new Error("No mock result queued for yosysFn.");
+      throw new Error("No mock result queued for synthesisFn.");
     }
     const report = typeof next === "function" ? await next() : next;
-    return { area_um2: 0, ...report };
+    return {
+      tool: "vivado",
+      part: "xc7a100tcsg324-1",
+      stage: "synth",
+      ff_count: 0,
+      dsp_count: 0,
+      bram18_count: 0,
+      bram36_count: 0,
+      bram18_equiv: 0,
+      wns_ns: report.fmax_mhz > 0 ? 1 : null,
+      timing_met: report.fmax_mhz >= 50,
+      ...report,
+    };
   });
 }
 
@@ -143,10 +167,10 @@ describe("runPipeline", () => {
       foundry: [successResult(module)],
     });
     const assayerFn = createAssayerMock([verifPass]);
-    const yosysFn = createYosysMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     expect(queryFn.mock.calls.some(([call]) => (call as { prompt: string }).prompt.includes("cartographer"))).toBe(false);
@@ -183,10 +207,10 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([verifPass]);
-    const yosysFn = createYosysMock([{ success: true, lut_count: 2, fmax_mhz: 75, report: "fixture" }]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 2, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     expect(queryFn.mock.calls.some(([call]) => (call as { prompt: string }).prompt.includes("cartographer"))).toBe(true);
@@ -221,10 +245,10 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([verifFail, verifPass]);
-    const yosysFn = createYosysMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
@@ -282,11 +306,11 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([foundryVerif, surgeonVerif]);
-    const yosysFn = createYosysMock([]);
+    const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
       maxRetries: 1,
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
@@ -324,14 +348,14 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({});
     const assayerFn = createAssayerMock([]);
-    const yosysFn = createYosysMock([]);
+    const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     expect(queryFn).not.toHaveBeenCalled();
-    expect(yosysFn).not.toHaveBeenCalled();
+    expect(synthesisFn).not.toHaveBeenCalled();
     expect(assayerFn).not.toHaveBeenCalled();
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
@@ -368,15 +392,15 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([tbSetupFail]);
-    const yosysFn = createYosysMock([]);
+    const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(false);
-    expect(yosysFn).not.toHaveBeenCalled();
+    expect(synthesisFn).not.toHaveBeenCalled();
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("fail_abort");
@@ -418,10 +442,10 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([timeoutVerif, verifPass]);
-    const yosysFn = createYosysMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     // Surgeon was invoked (not fail_abort like tb_setup_error).
@@ -435,7 +459,7 @@ describe("runPipeline", () => {
     expect(state.modules.unit_module).toBe("pass");
   });
 
-  it("runs the Surgeon repair path after a failed yosys synthesis report", async () => {
+  it("runs the Surgeon repair path after a failed vivado synthesis report", async () => {
     await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
@@ -460,26 +484,26 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([verifPass, verifPass]);
-    const yosysFn = createYosysMock([
+    const synthesisFn = createVivadoMock([
       { success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" },
       { success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" },
     ]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(yosysFn).toHaveBeenCalledTimes(2);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
     expect(state.attempts.unit_module).toBe(1);
-    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');
+    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"vivado_synthesis_failed"');
   });
 
-  it("routes missing Sky130 timing measurement to Surgeon as synthesis_failed", async () => {
+  it("routes missing Vivado timing measurement to Surgeon as synthesis_failed", async () => {
     await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
@@ -500,36 +524,35 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([verifPass, verifPass]);
-    const yosysFn = createYosysMock([
+    const synthesisFn = createVivadoMock([
       {
         success: true,
-        lut_count: 147911,
+        lut_count: 1479,
         fmax_mhz: 0,
-        area_um2: 1112938.6464,
-        report: "147911 1.11E+006 cells\nChip area for module '\\unit_module': 1112938.646400",
+        wns_ns: null,
+        timing_met: false,
+        report: "| Slice LUTs* | 1479 |",
       },
       {
         success: true,
-        lut_count: 147911,
+        lut_count: 1479,
         fmax_mhz: 75,
-        area_um2: 1112938.6464,
-        report:
-          "ABC: WireLoad = \"none\"  Delay = 13333.33 ps\n" +
-          "147911 1.11E+006 cells\n" +
-          "Chip area for module '\\unit_module': 1112938.646400",
+        wns_ns: 1,
+        timing_met: true,
+        report: "WNS(ns): 1.000\n| Slice LUTs* | 1479 |",
       },
     ]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(yosysFn).toHaveBeenCalledTimes(2);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_synthesis_failed"');
+    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"vivado_synthesis_failed"');
   });
 
   it("routes Fmax-below-target to Surgeon with missing_pipeline_register failure class", async () => {
@@ -553,19 +576,19 @@ describe("runPipeline", () => {
       }],
     });
     const assayerFn = createAssayerMock([verifPass, verifPass]);
-    const yosysFn = createYosysMock([
-      { success: true, lut_count: 4, fmax_mhz: 35, report: "ABC: Delay = 28571 ps" },
-      { success: true, lut_count: 4, fmax_mhz: 75, report: "ABC: Delay = 13333 ps" },
+    const synthesisFn = createVivadoMock([
+      { success: true, lut_count: 4, fmax_mhz: 35, timing_met: false, wns_ns: -8.571, report: "WNS(ns): -8.571" },
+      { success: true, lut_count: 4, fmax_mhz: 75, timing_met: true, wns_ns: 6.667, report: "WNS(ns): 6.667" },
     ]);
 
     await runPipeline("checkpoint.pth", {
-      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, yosysFn, assayerFn }),
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
-    expect(yosysFn).toHaveBeenCalledTimes(2);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"yosys_missing_pipeline_register"');
+    expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"vivado_missing_pipeline_register"');
   });
 
   it("blocks resume when fail_retry has no prior verification result", async () => {

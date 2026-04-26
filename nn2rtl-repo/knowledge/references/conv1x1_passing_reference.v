@@ -46,14 +46,10 @@ module layer1_0_conv1 (
     localparam ST_SCALE   = 3'd3;
     localparam ST_OUTPUT  = 3'd4;
 
-    // [INVARIANT:WEIGHT_ARRAY]
-    (* ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
-    // [INVARIANT:WEIGHT_ARRAY]
-    (* ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
+    (* rom_style = "block", ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
+    (* rom_style = "block", ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
     initial begin
-        // [INVARIANT:WEIGHT_ARRAY]
         $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_weights.hex", weights);
-        // [INVARIANT:WEIGHT_ARRAY]
         $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_bias.hex", biases);
     end
 

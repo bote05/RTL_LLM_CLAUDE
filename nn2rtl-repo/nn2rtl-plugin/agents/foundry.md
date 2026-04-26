@@ -38,8 +38,7 @@ Additionally, based on the LayerIR's `op_type` and (for conv2d)
 
 - `op_type == "conv2d"` with `KH == KW == 1` → `02_conv1x1.md` plus
   `knowledge/references/conv1x1_passing_reference.v`.
-- `op_type == "conv2d"` with `KH == KW == 3` → `03_conv3x3_pad1.md` plus
-  `knowledge/references/conv3x3_passing_reference.v`.
+- `op_type == "conv2d"` with `KH == KW == 3` → `03_conv3x3_pad1.md`.
 - `op_type == "conv2d"` with `KH == KW == 7` → `04_conv7x7_pad3.md`.
 - `op_type == "add"` → `05_add_quantized.md`.
 - `op_type == "relu"` → `06_relu.md`.
@@ -72,7 +71,7 @@ increases cross-op pattern contamination.
 - `knowledge/references/LICENSES.md` — provenance rules for reference files.
 - `rtl_library/coord_scheduler.v` — handwritten coordinate FSM. Spatial
   conv and maxpool **must** instantiate it. Bundled into every iverilog /
-  Verilator / Yosys invocation, so it's always in scope.
+  Verilator / Vivado invocation, so it's always in scope.
 
 ### Don't over-read
 
@@ -94,8 +93,11 @@ files — do not guess.
   re-derive it from a formula. First `valid_out` fires exactly that many
   cycles after the first `valid_in` of the current vector.
 - **Weights and biases load via `$readmemh`** using `weights_path` and
-  `bias_path` from the LayerIR. Never hardcode numeric arrays. The
-  `[INVARIANT:WEIGHT_ARRAY]` convention applies (see `01_context.md`).
+  `bias_path` from the LayerIR. Never hardcode numeric arrays. For Vivado,
+  prefer registered ROM reads with `rom_style` / `ram_style = "block"`; if
+  `weight_bank_paths` is present, use one bank per MAC lane instead of
+  creating extra read ports on one flat memory. Do not mark memory lines
+  invariant.
 - **No simulation-only constructs** in synthesizable RTL: no `$display`,
   `$random`, `$monitor`, `#delay`, `initial` blocks other than the
   `$readmemh` loader.

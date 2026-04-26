@@ -93,6 +93,7 @@ from scripts.golden_impl import (
     write_golden_vector_file,
     write_signed_int8_hex,
     write_signed_int32_hex,
+    write_weight_bank_hex_files,
 )
 
 
@@ -1158,7 +1159,18 @@ def build_pipeline_ir_from_onnx(
         if spec.op_type == "conv2d":
             layer_payload["stride"] = list(spec.stride)
             layer_payload["padding"] = list(spec.padding)
-            layer_payload["mac_parallelism"] = _conv_mac_parallelism(spec)
+            mac_parallelism = _conv_mac_parallelism(spec)
+            weight_bank_paths = write_weight_bank_hex_files(
+                weight_values,
+                weight_shape,
+                mac_parallelism,
+                repo_root,
+                spec.module_id,
+            )
+            layer_payload["mac_parallelism"] = mac_parallelism
+            layer_payload["weight_bank_paths"] = [
+                bank_path.resolve().as_posix() for bank_path in weight_bank_paths
+            ]
 
         if spec.op_type == "maxpool":
             layer_payload["kernel_size"] = spec.pool_kernel

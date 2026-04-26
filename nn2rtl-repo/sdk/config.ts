@@ -39,13 +39,14 @@ export const PIPELINE_CONFIG = {
   // Cap on the number of parallel MAC lanes Foundry instantiates per conv
   // layer. Per-layer mac_parallelism = min(OC, MAX_PARALLEL_MACS). The FSM
   // iterates OC in groups of mac_parallelism — this keeps the combinational
-  // cone small enough for Sky130 / ABC to map inside YOSYS_TIMEOUT_MS. 8 is
-  // the current sweet spot: 8×8-bit INT8 multipliers feeding a 3-level adder
-  // tree maps in seconds on Sky130. Raising it trades synth time for
-  // throughput; dropping it trades throughput for synth time. Python
+  // cone small enough for Artix-7/Vivado timing and BRAM banking. 4 is
+  // the current frontend value and keeps the weight-memory read structure
+  // easy to bank into legal block RAM ports. Raising it trades synth time
+  // and BRAM banking complexity for throughput; dropping it trades
+  // throughput for synth time. Python
   // frontends must read this same value when computing mac_parallelism and
   // pipeline_latency_cycles.
-  MAX_PARALLEL_MACS: 8,
+  MAX_PARALLEL_MACS: 4,
   // Hard capability ceiling on per-layer bus width. Foundry's ability to emit
   // correct bit-slicing scales poorly past a few thousand bits; burning Foundry
   // + Surgeon attempts on a layer beyond that point is pure waste. 4096 bits

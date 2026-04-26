@@ -1,7 +1,8 @@
 # 02 — Pointwise (1×1) conv2d
 
-Canonical proven-passing reference: `knowledge/references/conv1x1_passing_reference.v`
-(Foundry first-shot, 0 Surgeon retries, fmax 116 MHz on Sky130).
+Canonical legacy reference: `knowledge/references/conv1x1_passing_reference.v`
+(Foundry first-shot, 0 Surgeon retries in the older flow). For new Vivado
+work, preserve the FSM shape but use synchronous ROM reads and BRAM attributes.
 
 ## When to use
 
@@ -15,7 +16,7 @@ From `scripts/golden_impl.py::compute_conv2d_latency_cycles`:
 IC = weight_shape[1]
 MP = mac_parallelism
 OC_PASSES = ceil(OC / MP)
-pass_cycles = MP * K_TOTAL + 3        # K_TOTAL = IC * 1 * 1 = IC
+pass_cycles = MP * K_TOTAL + 4        # +1 sync ROM read, then bias/scale/output
 latency = 1 + OC_PASSES * pass_cycles
 ```
 
@@ -56,8 +57,8 @@ ONE read from `weights[]` per cycle. The `lane_counter` rotates through
 weights[global_oc * K_TOTAL + k_counter]   // single memory read
 ```
 
-Never read MP weights per cycle — that produces MP parallel ~9k-to-1 mux
-trees that Sky130 ABC cannot map.
+Never read MP weights per cycle from one flat async array — that produces MP
+parallel mux trees that Vivado cannot map into legal BRAM ports.
 
 ## Known failure modes
 
@@ -90,14 +91,12 @@ module <module_id> (
     localparam SCALE_MULT  = <from scale_factor>;
     localparam SCALE_SHIFT = <from scale_factor>;
 
-    // [INVARIANT:WEIGHT_ARRAY]
+    (* rom_style = "block", ram_style = "block" *)
     reg signed [7:0]  weights [0:OC*K_TOTAL-1];
-    // [INVARIANT:WEIGHT_ARRAY]
+    (* rom_style = "block", ram_style = "block" *)
     reg signed [31:0] biases  [0:OC-1];
     initial begin
-        // [INVARIANT:WEIGHT_ARRAY]
         $readmemh("<weights_path>", weights);
-        // [INVARIANT:WEIGHT_ARRAY]
         $readmemh("<bias_path>",   biases);
     end
 
@@ -170,7 +169,7 @@ LayerIR — do not regenerate the surrounding FSM from scratch.
 ## Reference to adapt
 
 `knowledge/references/conv1x1_passing_reference.v` — proven-passing 1×1
-RTL from this repo (Fmax 116 MHz on Sky130 for `layer1_0_conv1`). Adapt
+RTL from this repo (historical first-shot pass for `layer1_0_conv1`). Adapt
 its parameter block (IC / OC / IH / IW / MP / SCALE_MULT / SCALE_SHIFT /
 `$readmemh` paths) to the current LayerIR; do not regenerate the FSM from
 scratch.

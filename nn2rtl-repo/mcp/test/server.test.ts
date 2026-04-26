@@ -8,7 +8,22 @@ function createToolImpls(): ToolImplementations {
     read_weights: vi.fn(async () => ({ model_name: "fixture", quantization: "int8_symmetric_per_tensor", generated_at: "now", layers: [] })),
     run_iverilog: vi.fn(async () => ({ success: true, stderr: "" })),
     run_verilator: vi.fn(async () => ({ module_id: "m1", status: "pass" })),
-    run_yosys: vi.fn(async () => ({ success: true, lut_count: 1, fmax_mhz: 10, report: "fixture" })),
+    run_vivado: vi.fn(async () => ({
+      success: true,
+      tool: "vivado",
+      part: "xc7a100tcsg324-1",
+      stage: "synth",
+      lut_count: 1,
+      ff_count: 1,
+      dsp_count: 0,
+      bram18_count: 0,
+      bram36_count: 0,
+      bram18_equiv: 0,
+      wns_ns: 1,
+      timing_met: true,
+      fmax_mhz: 10,
+      report: "fixture",
+    })),
     write_verilog: vi.fn(async () => "/tmp/module.v"),
   };
 }
@@ -18,7 +33,7 @@ describe("mcp server", () => {
     expect(toolDefinitions.map((tool) => tool.name)).toEqual([
       "run_iverilog",
       "run_verilator",
-      "run_yosys",
+      "run_vivado",
       "read_weights",
       "write_verilog",
       "get_rtl_patterns",
@@ -30,14 +45,14 @@ describe("mcp server", () => {
 
     await handleToolCall("run_iverilog", { verilog_source: "module m; endmodule", module_name: "m" }, impls);
     await handleToolCall("run_verilator", { verilog_source: "module m; endmodule", module_name: "m", sidecar_path: "/tmp/sidecar.json" }, impls);
-    await handleToolCall("run_yosys", { verilog_source: "module m; endmodule", module_name: "m", clock_period_ns: 20 }, impls);
+    await handleToolCall("run_vivado", { verilog_source: "module m; endmodule", module_name: "m", clock_period_ns: 20, part: "xc7a100tcsg324-1", threads: 8 }, impls);
     await handleToolCall("read_weights", { checkpoint_path: "checkpoint.pth", quantization_config: {} }, impls);
     await handleToolCall("write_verilog", { module: { module_id: "m", spec_hash: "h", verilog_source: "module m; endmodule", generated_by: "Foundry", attempt: 1 }, output_dir: "/tmp" }, impls);
     await handleToolCall("get_rtl_patterns", { op_type: "conv2d", kernel_h: 1, kernel_w: 1 }, impls);
 
     expect(impls.run_iverilog).toHaveBeenCalledOnce();
     expect(impls.run_verilator).toHaveBeenCalledOnce();
-    expect(impls.run_yosys).toHaveBeenCalledWith("module m; endmodule", "m", 20);
+    expect(impls.run_vivado).toHaveBeenCalledWith("module m; endmodule", "m", 20, "xc7a100tcsg324-1", 8);
     expect(impls.read_weights).toHaveBeenCalledOnce();
     expect(impls.write_verilog).toHaveBeenCalledOnce();
     expect(impls.get_rtl_patterns).toHaveBeenCalledWith("conv2d", 1, 1);

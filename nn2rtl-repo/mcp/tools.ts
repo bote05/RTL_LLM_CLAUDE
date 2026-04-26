@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -22,26 +22,18 @@ export const TB_SOURCE_PATH = path.resolve(repoRoot, "tb", "static_verilator_tb.
 export const TB_JSON_HPP_PATH = path.resolve(repoRoot, "tb", "third_party", "json.hpp");
 
 // Handwritten library modules that generated RTL may instantiate. Each of
-// run_iverilog / run_verilator / run_yosys copies these into its temp build
+// run_iverilog / run_verilator / run_vivado copies these into its temp build
 // dir and passes them as additional source files so "unknown module" errors
 // don't appear at elaboration time. Add to this list when a new handwritten
 // library module lands in rtl_library/.
 export const RTL_LIBRARY_SOURCES: readonly string[] = [
   path.resolve(repoRoot, "rtl_library", "coord_scheduler.v"),
+  path.resolve(repoRoot, "rtl_library", "line_buf_window.v"),
+  path.resolve(repoRoot, "rtl_library", "conv_datapath.v"),
 ];
-export const SKY130_LIB_PATH = path.resolve(
-  repoRoot,
-  "vendor",
-  "sky130",
-  "sky130_fd_sc_hd__tt_025C_1v80.lib",
-);
-
-// Hard wall-clock cap for Yosys synthesis. Set to 25 minutes — the manual
-// run that proved synthesizability completed in ~16 min, so 25 min gives
-// a ~55% margin above the proven baseline. Designs that can't hit that
-// budget get capped; raise per-run if you know you're exercising a
-// pathological layer.
-export const YOSYS_TIMEOUT_MS = 1_500_000;
+export const VIVADO_DEFAULT_PART = "xc7a100tcsg324-1";
+export const VIVADO_TIMEOUT_MS = 30 * 60 * 1000;
+export const VIVADO_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 // Hard wall-clock cap for the Verilator simulation binary (after build).
 // Motivation: a partially-functioning FSM that fires valid_out intermittently
@@ -50,20 +42,9 @@ export const YOSYS_TIMEOUT_MS = 1_500_000;
 // the module to Surgeon with failure_class=verilator_timeout instead of
 // burning wall-clock. Covers every layer; not ResNet-specific.
 export const VERILATOR_SIM_TIMEOUT_MS = 10 * 60 * 1000;
-// Deprecated — kept exported for callers that may reference it. Size control
-// is now done via rolling head/tail buffers inside the yosys spawn path, not
-// via execFile maxBuffer.
-export const YOSYS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-// Per-stream rolling buffer caps for yosys stdout/stderr. Yosys can emit
-// tens of MB of repetitive dead-port / no-latch warnings on large designs.
-// We keep the first N bytes ("head") verbatim and the last M bytes ("tail")
-// as a ring, dropping the middle. That way the orchestrator-side capYosysReport
-// head+ERRORS+tail extraction still has real content to work with, and the
-// MCP side can't blow memory on a runaway print.
-const YOSYS_STREAM_HEAD_CAP_BYTES = 512 * 1024;
-const YOSYS_STREAM_TAIL_CAP_BYTES = 1024 * 1024;
-const SKY130_ABC_DRIVING_CELL = "sky130_fd_sc_hd__buf_1";
-const SKY130_ABC_OUTPUT_LOAD_FF = 10.0;
+export function resolveVivadoCommand(env: NodeJS.ProcessEnv = process.env): string {
+  return env.NN2RTL_VIVADO_BIN ?? "vivado";
+}
 
 // On Windows, the `verilator` entry point is a Perl script that OSS CAD Suite
 // does not ship Perl for; `verilator_bin.exe` is the native Windows binary and
@@ -95,14 +76,14 @@ function resolveTmpDirRoot(): string {
   return os.tmpdir();
 }
 
-// On Windows, OSS CAD Suite binaries (yosys, verilator, iverilog, abc, ...)
+// On Windows, OSS CAD Suite binaries (Verilator, iverilog, and legacy yosys)
 // need YOSYSHQ_ROOT set + both `bin/` and `lib/` prepended to PATH or they
 // spawn silently and exit non-zero with no stderr (DLLs not found). The
 // shipped `environment.bat` does this setup; Node's execFile inherits the
 // parent process env, which usually does *not* have these set unless the
 // user launched their shell from that batch file.
 //
-// Detect the suite root by walking up from the first `yosys`/`yosys.exe` on
+// Detect the suite root by walking up from the first known OSS CAD binary on
 // PATH. If found, return an env object with YOSYSHQ_ROOT populated and
 // bin/lib prepended to PATH. The env override NN2RTL_YOSYSHQ_ROOT lets
 // callers force a specific location.
@@ -117,7 +98,9 @@ function resolveOssCadSuiteRoot(env: NodeJS.ProcessEnv): string | null {
   const pathVar = env.PATH ?? env.Path ?? "";
   const sep = process.platform === "win32" ? ";" : ":";
   const candidates = pathVar.split(sep).filter(Boolean);
-  const binaries = process.platform === "win32" ? ["yosys.exe", "yosys"] : ["yosys"];
+  const binaries = process.platform === "win32"
+    ? ["verilator.exe", "iverilog.exe", "yosys.exe", "yosys"]
+    : ["verilator", "iverilog", "yosys"];
   for (const dir of candidates) {
     for (const bin of binaries) {
       if (existsSync(path.join(dir, bin))) {
@@ -213,7 +196,7 @@ export function augmentEnvForOssCadSuite(env: NodeJS.ProcessEnv): NodeJS.Process
   // Strip any existing copies of binDir/libDir and prepend them — Windows
   // DLL resolution walks PATH in order, and if another toolchain (e.g.
   // git's mingw64) appears earlier it can load an incompatible
-  // libstdc++/libgcc before yosys's own DLLs are seen. Force oss-cad-suite
+  // libstdc++/libgcc before oss-cad-suite's own DLLs are seen. Force the suite
   // to win by putting it at position 0.
   const norm = (dir: string) => path.resolve(dir).toLowerCase();
   const targets = new Set([norm(binDir), norm(libDir)]);
@@ -283,7 +266,7 @@ export function createToolsRuntime(
 
 /**
  * Copy every handwritten `rtl_library/*.v` source into `tempDir` so that
- * iverilog / Verilator / Yosys see them alongside the candidate module
+ * iverilog / Verilator / Vivado see them alongside the candidate module
  * file at elaboration time. Returns the list of copied paths (absolute,
  * inside tempDir) so callers can include them as additional source args.
  * Silently skips any library file that does not exist on disk — the
@@ -317,7 +300,7 @@ export async function withTempDir<T>(
 // System-level spawn errors (ENOENT, EACCES, timeout, OOM) must not be
 // laundered into Verilog syntax/synthesis failures: Surgeon would then try to
 // "fix" an out-of-memory error by rewriting correct code. A genuine tool exit
-// from iverilog/yosys has a numeric exit code on the Error object; a Node
+// from an external tool has a numeric exit code on the Error object; a Node
 // spawn failure surfaces `code` as a string like "ENOENT" and typically has no
 // `signal` or `stdout`.
 export function isSystemSpawnError(error: unknown): boolean {
@@ -363,96 +346,123 @@ export function stderrFromUnknown(error: unknown): string {
   return String(error);
 }
 
-export function parseYosysReport(
-  report: string,
-): { fmax_mhz: number; lut_count: number; area_um2: number } {
-  // Yosys cell-naming varies by backend (and by version): synth_ice40 emits
-  // `SB_LUT4`, other targets emit bare `LUT`, `LUT4`, `LUT5`, `LUT6`, and some
-  // paths emit `ICESTORM_LC`. Sum any cell row whose name contains a LUT-ish
-  // token so a non-iCE40 target does not silently report `lut_count: 0`.
-  let lut_count = 0;
-  const lutLineRe = /^\s*(?:\$?[A-Z0-9_]*(?:LUT|ICESTORM_LC)[A-Z0-9_]*)\s+(\d+)\s*$/gim;
-  for (const m of report.matchAll(lutLineRe)) {
-    lut_count += Number(m[1]);
+function outputFieldFromUnknown(error: unknown, field: "stdout" | "stderr"): string {
+  if (typeof error === "object" && error !== null && field in error) {
+    const value = (error as { stdout?: string | Buffer; stderr?: string | Buffer })[field];
+    if (typeof value === "string") return value;
+    if (value instanceof Buffer) return value.toString("utf8");
   }
-
-  // Sky130 / standard-cell flow: `stat -liberty ...` prints a line like
-  //   Chip area for module '\layer1_0_conv1': 12345.678900
-  // in um^2. When a .lib is used, fall back to total cell count as a proxy
-  // "complexity" metric if no LUT-style lines were found.
-  let area_um2 = 0;
-  const areaMatch = report.match(/Chip\s+area\s+for\s+module[^:]*:\s*([0-9]+(?:\.[0-9]+)?)/i);
-  if (areaMatch) {
-    area_um2 = Number(areaMatch[1]);
-  }
-  if (lut_count === 0) {
-    // `stat -liberty` on standard-cell flows prints summary lines like either:
-    //   147911 1.11E+006 cells
-    // or the older:
-    //   Number of cells: 147911
-    // Reports often contain multiple stats blocks (pre/post mapping), so take
-    // the last total-cells line to capture the mapped netlist.
-    let totalCells: number | null = null;
-    const cellsLineRe = /^\s*(\d+)(?:\s+[0-9]+(?:\.[0-9]+)?(?:E[+-]?\d+)?)?\s+cells\s*$/gim;
-    for (const m of report.matchAll(cellsLineRe)) {
-      totalCells = Number(m[1]);
-    }
-    if (totalCells === null) {
-      const cellsMatch = report.match(/Number\s+of\s+cells:\s*(\d+)/i);
-      if (cellsMatch) {
-        totalCells = Number(cellsMatch[1]);
-      }
-    }
-    if (totalCells !== null) {
-      lut_count = totalCells;
-    }
-  }
-
-  // Fmax extraction order — most specific first:
-  // 1. Explicit "X MHz" (nextpnr-style report or test mocks)
-  // 2. ABC/abc9 "Delay = X.XX ns" (Yosys sta/abc9 output)
-  // 3. ABC/abc9 "Delay = X.XX ps"
-  // 4. ABC "Current delay (X.XX ps/ns)" fallback
-  // With Sky130 timing enabled via `abc -constr ... -D ...`, the `stime -p`
-  // summary line is the primary production signal; the "Current delay (...)"
-  // line is a useful fallback if that summary is absent.
-  const mhzMatch = report.match(/([0-9]+(?:\.[0-9]+)?)\s*MHz/i);
-  if (mhzMatch) {
-    return { lut_count, fmax_mhz: Number(mhzMatch[1]), area_um2 };
-  }
-
-  const nsMatch = report.match(/Delay\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*ns/i);
-  if (nsMatch) {
-    const ns = Number(nsMatch[1]);
-    return { lut_count, fmax_mhz: ns > 0 ? 1_000 / ns : 0, area_um2 };
-  }
-
-  const psMatch = report.match(/Delay\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*ps/i);
-  if (psMatch) {
-    const ps = Number(psMatch[1]);
-    return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0, area_um2 };
-  }
-
-  const currentNsMatch = report.match(/Current\s+delay\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*ns\s*\)/i);
-  if (currentNsMatch) {
-    const ns = Number(currentNsMatch[1]);
-    return { lut_count, fmax_mhz: ns > 0 ? 1_000 / ns : 0, area_um2 };
-  }
-
-  const currentPsMatch = report.match(/Current\s+delay\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*ps\s*\)/i);
-  if (currentPsMatch) {
-    const ps = Number(currentPsMatch[1]);
-    return { lut_count, fmax_mhz: ps > 0 ? 1_000_000 / ps : 0, area_um2 };
-  }
-
-  return { lut_count, fmax_mhz: 0, area_um2 };
+  return "";
 }
 
-function yosysTimingTargetPs(clock_period_ns: number): number | null {
-  if (!Number.isFinite(clock_period_ns) || clock_period_ns <= 0) {
-    return null;
+export type VivadoSynthesisReport = {
+  success: boolean;
+  tool: "vivado";
+  part: string;
+  stage: "synth";
+  lut_count: number;
+  ff_count: number;
+  dsp_count: number;
+  bram18_count: number;
+  bram36_count: number;
+  bram18_equiv: number;
+  wns_ns: number | null;
+  timing_met: boolean;
+  fmax_mhz: number;
+  report: string;
+};
+
+function parseNumber(value: string | undefined): number {
+  if (!value) return 0;
+  const cleaned = value.replace(/,/g, "").trim();
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function firstVivadoTableValue(report: string, labels: RegExp[]): number {
+  for (const label of labels) {
+    const row = report.match(new RegExp(`\\|\\s*${label.source}\\s*\\|\\s*([0-9,.]+)`, "i"));
+    if (row) return parseNumber(row[1]);
   }
-  return Math.max(1, Math.round(clock_period_ns * 1_000));
+  return 0;
+}
+
+function parseVivadoWns(report: string): number | null {
+  const inline = report.match(/\bWNS(?:\(ns\))?\s*[:=]\s*(-?[0-9]+(?:\.[0-9]+)?)/i);
+  if (inline) return Number(inline[1]);
+
+  // Vivado's report_timing_summary "Design Timing Summary" looks like:
+  //
+  //     WNS(ns)      TNS(ns)  TNS Failing Endpoints  ...
+  //     -------      -------  ---------------------  ...
+  //      13.679        0.000                      0  ...
+  //
+  // i.e. column-oriented, separated by whitespace (no `|`). Match the
+  // WNS(ns) header, skip the dashed separator row, then read the first
+  // numeric token on the next non-empty line.
+  const headerWithDashes = report.match(
+    /WNS\(ns\)[^\n]*\n[^\n]*-{2,}[^\n]*\n\s+(-?[0-9]+(?:\.[0-9]+)?)/i,
+  );
+  if (headerWithDashes) return Number(headerWithDashes[1]);
+
+  // Older / project-mode tables sometimes use a `|`-bordered grid.
+  const headerPiped = report.match(/WNS\(ns\)[\s\S]{0,400}?\n\s*\|\s*(-?[0-9]+(?:\.[0-9]+)?)/i);
+  if (headerPiped) return Number(headerPiped[1]);
+
+  return null;
+}
+
+export function parseVivadoReport(
+  report: string,
+  clock_period_ns: number,
+  part: string = VIVADO_DEFAULT_PART,
+): VivadoSynthesisReport {
+  const lut_count = firstVivadoTableValue(report, [/Slice LUTs\*?/, /CLB LUTs/]);
+  const ff_count = firstVivadoTableValue(report, [/Slice Registers/, /CLB Registers/, /Register as Flip Flop/]);
+  const dsp_count = firstVivadoTableValue(report, [/DSPs/, /DSP48E1/]);
+  const bram36_count = firstVivadoTableValue(report, [/RAMB36\/FIFO\*?/, /RAMB36/]);
+  const bram18_count = firstVivadoTableValue(report, [/RAMB18/, /RAMB18E1/]);
+  const block_ram_tiles = firstVivadoTableValue(report, [/Block RAM Tile/]);
+  const bram18_equiv =
+    bram18_count > 0 || bram36_count > 0
+      ? bram18_count + bram36_count * 2
+      : block_ram_tiles * 2;
+  const wns_ns = parseVivadoWns(report);
+  const hasTimingViolation =
+    /timing constraints are not met|timing constraints are not satisfied|VIOLATED/i.test(report);
+  const timing_met = wns_ns !== null ? wns_ns >= 0 && !hasTimingViolation : false;
+  const critical_path_ns =
+    wns_ns !== null && clock_period_ns > 0 ? clock_period_ns - wns_ns : 0;
+  const fmax_mhz =
+    critical_path_ns > 0 ? 1_000 / critical_path_ns : 0;
+
+  return {
+    success: true,
+    tool: "vivado",
+    part,
+    stage: "synth",
+    lut_count,
+    ff_count,
+    dsp_count,
+    bram18_count,
+    bram36_count,
+    bram18_equiv,
+    wns_ns,
+    timing_met,
+    fmax_mhz,
+    report,
+  };
+}
+
+export function toVivadoPath(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, "/");
+  const wslDrive = normalized.match(/^\/mnt\/([a-zA-Z])(?:\/(.*))?$/);
+  if (wslDrive) {
+    const drive = wslDrive[1].toUpperCase();
+    const rest = wslDrive[2] ?? "";
+    return rest ? `${drive}:/${rest}` : `${drive}:/`;
+  }
+  return normalized;
 }
 
 export function resolveOutputRoot(outputDir: string): string {
@@ -575,6 +585,19 @@ export async function run_verilator(
     const libraryBasenames = libraryPaths.map((p) => path.basename(p));
 
     try {
+      // Simulation-speed flags. Measured on layer1_0_conv2 (3×3 spatial conv,
+      // IC=OC=64, 112×112, MP=4): default build crawls at ~0.7 MHz and can't
+      // clear one 463M-cycle frame inside VERILATOR_SIM_TIMEOUT_MS. With these
+      // flags the same DUT runs ~1.4 MHz and completes frame 1 + hits the TB's
+      // hang_budget cleanly in ~5.5 min, letting Surgeon see real evidence
+      // instead of a synthesised timeout result.
+      //   -O3                   Verilator-level opts (also forces OPT_FAST=-O3)
+      //   --x-assign/x-initial  skip X-propagation bookkeeping
+      //   -march=native         let g++ vectorize with the host's AVX2 (+AVX-512
+      //                         on SKUs that have it) — safe because the binary
+      //                         is only ever executed on the machine that built
+      //                         it (temp dir, single shot).
+      //   -DNDEBUG              kill Verilator runtime asserts.
       await runtime.commandRunner(
         VERILATOR_COMMAND,
         [
@@ -583,12 +606,17 @@ export async function run_verilator(
           "--build",
           "--Mdir",
           "obj_dir",
+          "-O3",
+          "--x-assign",
+          "fast",
+          "--x-initial",
+          "fast",
           "-Wall",
           "-Wno-fatal",
           "--top-module",
           module_name,
           "-CFLAGS",
-          `-std=c++17 -DVMODEL_HEADER="\\\"V${module_name}.h\\\"" -DVMODEL_CLASS=V${module_name}`,
+          `-std=c++17 -O3 -march=native -DNDEBUG -DVMODEL_HEADER="\\\"V${module_name}.h\\\"" -DVMODEL_CLASS=V${module_name}`,
           "static_verilator_tb.cpp",
           `${module_name}.v`,
           ...libraryBasenames,
@@ -685,253 +713,206 @@ export async function run_verilator(
   }, runtime);
 }
 
-// Rolling-buffer stdout/stderr capture for yosys. Head is kept verbatim up
-// to HEAD_CAP; after that, further output accumulates into a ring-limited
-// tail capped at TAIL_CAP. Middle bytes are elided but their count is
-// reported so capYosysReport downstream can reconstruct the structure.
-type RollingBuffer = {
-  head: string[];
-  headBytes: number;
-  tail: string[];
-  tailBytes: number;
-  elided: number;
-};
-
-function createRollingBuffer(): RollingBuffer {
-  return { head: [], headBytes: 0, tail: [], tailBytes: 0, elided: 0 };
+function tclQuote(value: string): string {
+  return `"${toVivadoPath(value).replace(/(["$[\]])/g, "\\$1")}"`;
 }
 
-function appendRolling(buf: RollingBuffer, chunk: string): void {
-  if (!chunk) return;
-  let remaining = chunk;
-  if (buf.headBytes < YOSYS_STREAM_HEAD_CAP_BYTES) {
-    const room = YOSYS_STREAM_HEAD_CAP_BYTES - buf.headBytes;
-    const take = remaining.length <= room ? remaining : remaining.slice(0, room);
-    buf.head.push(take);
-    buf.headBytes += take.length;
-    remaining = remaining.length <= room ? "" : remaining.slice(room);
-    if (!remaining) return;
+function resolveVivadoThreads(
+  explicitThreads: number | undefined,
+  env: NodeJS.ProcessEnv,
+): number {
+  if (explicitThreads && Number.isInteger(explicitThreads) && explicitThreads > 0) {
+    return explicitThreads;
   }
-  buf.tail.push(remaining);
-  buf.tailBytes += remaining.length;
-  while (buf.tailBytes > YOSYS_STREAM_TAIL_CAP_BYTES && buf.tail.length > 1) {
-    const drop = buf.tail.shift()!;
-    buf.tailBytes -= drop.length;
-    buf.elided += drop.length;
+  const envThreads = Number(env.NN2RTL_VIVADO_THREADS ?? "");
+  if (Number.isInteger(envThreads) && envThreads > 0) {
+    return envThreads;
+  }
+  return Math.max(1, os.cpus().length);
+}
+
+function convertReadmemhPathsForVivado(verilogSource: string): string {
+  return verilogSource.replace(
+    /(\$readmemh\s*\(\s*)"([^"]+)"/g,
+    (_match, prefix: string, filePath: string) => `${prefix}"${toVivadoPath(filePath)}"`,
+  );
+}
+
+function buildVivadoTcl(input: {
+  module_name: string;
+  part: string;
+  clock_period_ns: number;
+  threads: number;
+  verilog_paths: string[];
+  util_report_path: string;
+  ram_report_path: string;
+  timing_report_path: string;
+  checkpoint_path: string;
+}): string {
+  const clockPeriod = input.clock_period_ns > 0 ? input.clock_period_ns : 20;
+  // Order matters in Vivado batch / non-project mode:
+  //   1. read_verilog              -- load source(s)
+  //   2. synth_design              -- creates the in-memory design (without
+  //                                   this, every command that touches the
+  //                                   design — create_clock, report_timing —
+  //                                   fails with "No open design").
+  //   3. create_clock              -- now the `clk` port exists in the design
+  //                                   and can be constrained.
+  //   4. report_* / write_checkpoint
+  return [
+    `set_param general.maxThreads ${input.threads}`,
+    // Echo the value Vivado actually accepted so the report carries proof
+    // of the parallelism setting. Vivado clamps `general.maxThreads` to a
+    // version-specific cap (historically 8 on Windows; 32 on Linux and on
+    // Vivado 2024+ Windows) — log both the requested and effective value.
+    `puts "NN2RTL_INFO: requested general.maxThreads=${input.threads}, effective=[get_param general.maxThreads]"`,
+    `read_verilog -sv ${input.verilog_paths.map(tclQuote).join(" ")}`,
+    `synth_design -top ${input.module_name} -part ${input.part} -flatten_hierarchy rebuilt`,
+    `create_clock -name clk -period ${clockPeriod} [get_ports clk]`,
+    // Plain `report_utilization` (no `-hierarchical`) emits the row-oriented
+    // summary table that `parseVivadoReport` consumes:
+    //   | Site Type            | Used | ... |
+    //   | Slice LUTs*          |   12 | ... |
+    //   | Slice Registers      |   32 | ... |
+    // The `-hierarchical` form is column-oriented per-instance and breaks the
+    // parser. Use the summary form here; per-module designs don't need
+    // hierarchy info anyway.
+    `report_utilization -file ${tclQuote(input.util_report_path)}`,
+    `if {[catch {report_ram_utilization -file ${tclQuote(input.ram_report_path)}} ram_err]} { puts "NN2RTL_WARN: report_ram_utilization failed: $ram_err" }`,
+    `report_timing_summary -check_timing_verbose -max_paths 20 -file ${tclQuote(input.timing_report_path)}`,
+    `write_checkpoint -force ${tclQuote(input.checkpoint_path)}`,
+  ].join("\n") + "\n";
+}
+
+async function readTextIfPresent(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+    ) {
+      return "";
+    }
+    throw error;
   }
 }
 
-function materializeRolling(buf: RollingBuffer): string {
-  const head = buf.head.join("");
-  const tail = buf.tail.join("");
-  if (!buf.elided) return head + tail;
-  return `${head}\n...[${buf.elided} bytes of middle output elided]...\n${tail}`;
-}
-
-type YosysSpawnResult = {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  timedOut: boolean;
-  spawnError?: NodeJS.ErrnoException;
-};
-
-async function runYosysViaSpawn(
-  args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
-): Promise<YosysSpawnResult> {
-  return new Promise((resolve) => {
-    const stdoutBuf = createRollingBuffer();
-    const stderrBuf = createRollingBuffer();
-    let timedOut = false;
-    let spawnError: NodeJS.ErrnoException | undefined;
-    let settled = false;
-
-    const child = spawn("yosys", args, {
-      cwd: options.cwd,
-      env: options.env,
-      windowsHide: true,
-      // stdio default: pipes for stdout/stderr, no stdin
-    });
-
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => appendRolling(stdoutBuf, chunk));
-    child.stderr?.on("data", (chunk: string) => appendRolling(stderrBuf, chunk));
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      // SIGTERM first; on Windows spawn translates this to TerminateProcess.
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // already exited
-      }
-    }, options.timeoutMs);
-
-    const settle = (result: YosysSpawnResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
-    child.on("error", (err: NodeJS.ErrnoException) => {
-      spawnError = err;
-      settle({
-        stdout: materializeRolling(stdoutBuf),
-        stderr: materializeRolling(stderrBuf),
-        exitCode: null,
-        signal: null,
-        timedOut: false,
-        spawnError,
-      });
-    });
-
-    child.on("close", (code, signal) => {
-      settle({
-        stdout: materializeRolling(stdoutBuf),
-        stderr: materializeRolling(stderrBuf),
-        exitCode: code,
-        signal,
-        timedOut,
-        spawnError,
-      });
-    });
-  });
-}
-
-export async function run_yosys(
+export async function run_vivado(
   verilog_source: string,
   module_name: string,
   clockPeriodNsOrRuntimeOverrides: number | Partial<ToolsRuntime> = 0,
+  partOrRuntimeOverrides: string | Partial<ToolsRuntime> | undefined = VIVADO_DEFAULT_PART,
+  threadsOrRuntimeOverrides: number | Partial<ToolsRuntime> | undefined = undefined,
   runtimeOverrides: Partial<ToolsRuntime> = {},
-): Promise<{
-  success: boolean;
-  lut_count: number;
-  fmax_mhz: number;
-  area_um2: number;
-  report: string;
-}> {
+): Promise<VivadoSynthesisReport> {
   const clock_period_ns =
     typeof clockPeriodNsOrRuntimeOverrides === "number" ? clockPeriodNsOrRuntimeOverrides : 0;
-  const runtime = createToolsRuntime(
-    typeof clockPeriodNsOrRuntimeOverrides === "number"
-      ? runtimeOverrides
-      : clockPeriodNsOrRuntimeOverrides,
-  );
-  return withTempDir("nn2rtl-yosys-", async (tempDir) => {
+  const part =
+    typeof partOrRuntimeOverrides === "string" ? partOrRuntimeOverrides : VIVADO_DEFAULT_PART;
+  const explicitThreads =
+    typeof threadsOrRuntimeOverrides === "number" ? threadsOrRuntimeOverrides : undefined;
+  const overrides =
+    typeof clockPeriodNsOrRuntimeOverrides !== "number"
+      ? clockPeriodNsOrRuntimeOverrides
+      : typeof partOrRuntimeOverrides !== "string"
+        ? partOrRuntimeOverrides
+        : typeof threadsOrRuntimeOverrides === "object" && threadsOrRuntimeOverrides !== null
+          ? threadsOrRuntimeOverrides
+          : runtimeOverrides;
+  const runtime = createToolsRuntime(overrides);
+  const vivadoTmpRoot = path.join(resolveRepoRootFromEnv(runtime.env), "output", "tmp");
+  await mkdir(vivadoTmpRoot, { recursive: true });
+  return withTempDir("nn2rtl-vivado-", async (tempDir) => {
+    const threads = resolveVivadoThreads(explicitThreads, runtime.env);
     const verilogPath = path.join(tempDir, `${module_name}.v`);
-    await writeFile(verilogPath, verilog_source, "utf8");
+    await writeFile(verilogPath, convertReadmemhPathsForVivado(verilog_source), "utf8");
     const libraryPaths = await copyRtlLibrarySources(tempDir);
-
-    // Sky130 standard-cell flow. Previously targeted iCE40 with synth_ice40
-    // -abc9; that path hung indefinitely on deep combinational blobs because
-    // abc9 delay-aware mapping does unbounded search on large LUT cones.
-    // Sky130 (free Google/SkyWater standard-cell library) gives real area
-    // (um^2), mapped standard-cell counts, and constrained timing when ABC is
-    // given a load/driving-cell constraint file plus a target delay derived
-    // from the LayerIR clock period. See vendor/sky130/.
-    const sky130Lib = SKY130_LIB_PATH.replace(/\\/g, "/");
-    const targetDelayPs = yosysTimingTargetPs(clock_period_ns);
-    let abcCommand = `abc -liberty ${sky130Lib}`;
-    if (targetDelayPs !== null) {
-      const constrPath = path.join(tempDir, "sky130.abc.constr");
-      await writeFile(
-        constrPath,
-        [
-          `set_driving_cell ${SKY130_ABC_DRIVING_CELL}`,
-          `set_load ${SKY130_ABC_OUTPUT_LOAD_FF.toFixed(1)}`,
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      // `abc -constr` switches Yosys to ABC's timing-aware default script,
-      // which ends in `stime -p` and prints the critical-path delay.
-      abcCommand =
-        `abc -liberty ${sky130Lib} ` +
-        `-constr ${constrPath.replace(/\\/g, "/")} -D ${targetDelayPs}`;
-    }
-    // memory_share merges structurally equivalent read ports across memory
-    // arrays (e.g. the same weight index read by multiple MAC lanes in a
-    // generate loop). This reduces cell count without requiring BRAM macros
-    // and is safe to run before synth. The Verilog file is loaded via the
-    // positional command-line argument so no read_verilog is needed here.
-    const yosysScript = [
-      `memory_share`,
-      `synth -top ${module_name}`,
-      `dfflibmap -liberty ${sky130Lib}`,
-      abcCommand,
-      `stat -liberty ${sky130Lib}`,
-    ].join("; ");
-    // Use spawn directly (not runtime.commandRunner / execFileAsync) because
-    // execFile only returns stdout/stderr on the rejection object AFTER the
-    // child has exited; on kill-by-timeout, Node on Windows can drop buffered
-    // output. Streaming with spawn and rolling buffers preserves whatever the
-    // child managed to print right up to the kill signal — critical for
-    // Surgeon repairs, which used to get empty "Command failed: ..." messages
-    // and repair blind.
-    const spawnResult = await runYosysViaSpawn(
-      ["-p", yosysScript, verilogPath, ...libraryPaths],
-      {
-        cwd: tempDir,
-        env: augmentEnvForOssCadSuite(runtime.env),
-        timeoutMs: YOSYS_TIMEOUT_MS,
-      },
+    const utilReportPath = path.join(tempDir, "post_synth_utilization.rpt");
+    const ramReportPath = path.join(tempDir, "post_synth_ram_utilization.rpt");
+    const timingReportPath = path.join(tempDir, "post_synth_timing_summary.rpt");
+    const checkpointPath = path.join(tempDir, "post_synth.dcp");
+    const tclPath = path.join(tempDir, "synth.tcl");
+    await writeFile(
+      tclPath,
+      buildVivadoTcl({
+        module_name,
+        part,
+        clock_period_ns,
+        threads,
+        verilog_paths: [verilogPath, ...libraryPaths],
+        util_report_path: utilReportPath,
+        ram_report_path: ramReportPath,
+        timing_report_path: timingReportPath,
+        checkpoint_path: checkpointPath,
+      }),
+      "utf8",
     );
 
-    if (spawnResult.spawnError) {
-      // ENOENT / EACCES / etc. — propagate as a system error so the caller
-      // doesn't route it to Surgeon as a synthesis failure.
-      if (isSystemSpawnError(spawnResult.spawnError)) {
-        throw spawnResult.spawnError;
+    let commandResult: { stdout: string; stderr: string };
+    try {
+      // Vivado on Windows ships as `vivado.bat`. Modern Node refuses to
+      // `execFile` a `.bat` / `.cmd` without going through a shell (EINVAL
+      // for security reasons), so route those through `cmd.exe /c` here.
+      // POSIX builds of Vivado are real ELF binaries and execute directly.
+      const vivadoBin = resolveVivadoCommand(runtime.env);
+      const vivadoArgs = ["-mode", "batch", "-source", toVivadoPath(tclPath), "-notrace"];
+      const isWindowsBatch =
+        process.platform === "win32" && /\.(bat|cmd)$/i.test(vivadoBin);
+      const spawnFile = isWindowsBatch ? "cmd.exe" : vivadoBin;
+      const spawnArgs = isWindowsBatch ? ["/c", vivadoBin, ...vivadoArgs] : vivadoArgs;
+      commandResult = await runtime.commandRunner(
+        spawnFile,
+        spawnArgs,
+        {
+          cwd: tempDir,
+          env: runtime.env,
+          timeout: VIVADO_TIMEOUT_MS,
+          maxBuffer: VIVADO_MAX_BUFFER_BYTES,
+        },
+      );
+    } catch (error: unknown) {
+      if (isSystemSpawnError(error)) {
+        throw error;
       }
-      // Unusual spawn failure without a classifiable errno. Surface the
-      // captured output plus the error message.
-      const captured = [spawnResult.stdout, spawnResult.stderr].filter(Boolean).join("\n");
+      const stdout = outputFieldFromUnknown(error, "stdout");
+      const stderr = stderrFromUnknown(error);
       return {
         success: false,
+        tool: "vivado",
+        part,
+        stage: "synth",
         lut_count: 0,
+        ff_count: 0,
+        dsp_count: 0,
+        bram18_count: 0,
+        bram36_count: 0,
+        bram18_equiv: 0,
+        wns_ns: null,
+        timing_met: false,
         fmax_mhz: 0,
-        area_um2: 0,
-        report: [
-          `Yosys spawn error: ${spawnResult.spawnError.message}`,
-          captured,
-        ].filter(Boolean).join("\n"),
+        report: [stdout, stderr].filter(Boolean).join("\n"),
       };
     }
 
-    const captured = [spawnResult.stdout, spawnResult.stderr].filter(Boolean).join("\n");
-    const cleanExit = spawnResult.exitCode === 0 && !spawnResult.timedOut && !spawnResult.signal;
+    const utilReport = await readTextIfPresent(utilReportPath);
+    const ramReport = await readTextIfPresent(ramReportPath);
+    const timingReport = await readTextIfPresent(timingReportPath);
+    const combinedReport = [
+      commandResult.stdout,
+      commandResult.stderr,
+      "--- post_synth_utilization.rpt ---",
+      utilReport,
+      "--- post_synth_ram_utilization.rpt ---",
+      ramReport,
+      "--- post_synth_timing_summary.rpt ---",
+      timingReport,
+    ].filter(Boolean).join("\n");
 
-    if (cleanExit) {
-      return {
-        success: true,
-        report: captured,
-        ...parseYosysReport(captured),
-      };
-    }
-
-    const prefix = spawnResult.timedOut
-      ? `Yosys synthesis timed out after ${YOSYS_TIMEOUT_MS / 1000}s. ` +
-        `Likely cause: the design is a single very deep/wide combinational blob ` +
-        `(e.g. all MACs of a conv unrolled into one always block) that abc cannot ` +
-        `map quickly. Rewrite the module to use the intended registered ` +
-        `output-stationary MAC-array structure so the combinational cone ` +
-        `between any two registers stays small.`
-      : spawnResult.signal
-        ? `Yosys was killed by signal ${spawnResult.signal}.`
-        : `Yosys exited with code ${spawnResult.exitCode}.`;
-    const report = [prefix, "---", captured].filter(Boolean).join("\n");
-    return {
-      success: false,
-      lut_count: 0,
-      fmax_mhz: 0,
-      area_um2: 0,
-      report,
-    };
-  }, runtime);
+    return parseVivadoReport(combinedReport, clock_period_ns, part);
+  }, { ...runtime, tmpDirRoot: vivadoTmpRoot });
 }
 
 export async function read_weights(

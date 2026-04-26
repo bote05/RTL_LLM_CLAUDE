@@ -1,161 +1,226 @@
-# 03 — Spatial 3×3 conv, padding=1
+# 03 — Spatial 3×3 conv, padding=1 (instantiation-only pattern)
 
 ## When to use
 
 `op_type == "conv2d"` with `weight_shape[2] == 3 && weight_shape[3] == 3`.
 
-## Latency contract
+## Architecture
 
-From `scripts/golden_impl.py::compute_conv2d_latency_cycles` spatial branch:
+Spatial convs do NOT have a monolithic Foundry-generated FSM. They use the
+split-module architecture in `rtl_library/SPLIT_ARCHITECTURE.md`:
 
 ```
-IW = input_shape[3]
-PH = padding[0], PW = padding[1]
-K_TOTAL = IC * KH * KW = IC * 9
-MP = mac_parallelism
-OC_PASSES = ceil(OC / MP)
-pass_cycles = MP * K_TOTAL + 3
-
-fill_rows = max(KH - 1 - PH, 0)        # = max(2 - PH, 0)
-fill_cols = max(KW - PW,   1)          # = max(3 - PW, 1)
-latency   = fill_rows * (IW + PW) + fill_cols + OC_PASSES * pass_cycles
+                   ┌──────────────────┐
+  valid_in ───────▶│                  │
+  data_in  ───────▶│ line_buf_window  │────▶ window_flat ┐
+                   │                  │                    │
+                   └─▲────────────────┘                    ▼
+                     │                          ┌──────────────────┐
+                     │ in_row/in_col/advance    │                  │
+                     │ needs_real/output_fires  │  conv_datapath   │──▶ data_out
+                     │                          │                  │──▶ valid_out
+                   ┌─┴────────────────┐         └──────▲───────────┘
+                   │                  │ start_mac      │
+                   │ coord_scheduler  │──────────────── (= output_fires)
+                   │                  │◀── stall_in (= mac_busy)
+                   │                  │
+                   └──────────────────┘
+                      ▲
+                      │
+            start ────┘
 ```
 
-Critical: the fill-row step is `(IW + PW)`, not `IW`. `ST_STREAM` wraps
-`in_col` at `IW - 1 + PW` so the right-edge padding outputs are produced
-inline during the stream, not in a separate drain state. If your formula
-uses `IW` you will undershoot latency and the testbench will report a
-timing mismatch.
+All three library modules are bundled into every iverilog / Verilator /
+Vivado invocation (see `RTL_LIBRARY_SOURCES` in `mcp/tools.ts`), so they
+are always in scope — just instantiate them.
 
-## Required FSM states
+Foundry's job for a 3×3 layer is **~60 lines of structural wiring**: set
+the localparams from LayerIR, instantiate the three modules, connect the
+canonical 7-signal top-level interface, generate a one-cycle `start_pulse`
+on first `valid_in`. No FSM. No window management. No MAC pipeline.
 
-- `ST_STREAM` — accept input; increment `in_row, in_col` with the
-  `IW-1+PW` wrap; fire `output_fires` whenever the receptive-field window
-  is valid.
-- `ST_RUNNING`, `ST_BIAS`, `ST_SCALE`, `ST_OUTPUT` — same as pointwise.
+## Scheduler contract (pixel-delivery-safe)
 
-**No `ST_DRAIN` state.** The historically buggy "drain-row" design checked
-`in_row > IH-1+PH` as an exit condition and broke on every iteration. The
-correct design terminates on `outputs_emitted == OH*OW`, as enforced by the
-output-counter preflight and the handwritten `coord_scheduler` component
-(see below).
+`coord_scheduler` emits `output_fires` as a REGISTERED one-cycle pulse
+the cycle AFTER it advances past a firing coord. In that same advance
+cycle, the pixel at the firing coord is handshaked into `line_buf_window`
+via `valid_in && ready_in`, so the window has the correct rightmost
+column *before* the MAC sees `output_fires`. `stall_in` is simply
+`mac_busy` — no `output_fires` or `mac_done` plumbing.
 
-## Required registers
+`coord_scheduler` exposes its internal `advance` wire as an output
+signal; `line_buf_window` consumes it directly to know when to shift
+the window and write `line_buf`. No manual `sched_advance` replication
+is needed.
 
-- All registers from `02_conv1x1.md` (acc/biased/scaled/k_counter/lane_counter/
-  oc_group/state).
-- `reg signed [7:0] line_buf [0:LB_ROWS-1][0:IW-1][0:IC-1];` — 2D line buffer
-  holding the last `LB_ROWS = KH` input rows. The structural preflight
-  rule `line_buffer_missing` fires if this declaration is absent.
-- `reg signed [7:0] window [0:KH-1][0:KW-1][0:IC-1];` — the receptive-field
-  window. Must be declared as `reg` and updated via `<=` inside an
-  `always @(posedge clk)` block. The structural preflight rule
-  `window_not_registered` fires otherwise.
-- `reg cur_row [$clog2(LB_ROWS+1)-1:0];` — which line_buf row is the
-  newest.
-- `reg [$clog2(OH*OW+1)-1:0] outputs_emitted;` — bounded output counter.
-
-## Window update rule
-
-On every input cycle, shift the window and load the new column from the
-line buffer:
+## Top-level wiring template
 
 ```verilog
-always @(posedge clk) begin
-  // shift window columns left
-  for (i = 0; i < KH; i = i + 1)
-    for (j = 0; j < KW-1; j = j + 1)
-      window[i][j] <= window[i][j+1];
-  // load rightmost column from line_buf
-  for (i = 0; i < KH; i = i + 1)
-    window[i][KW-1] <= line_buf[wrap(cur_row + 1 + i)][in_col];
-end
+module <module_id> (
+    input  wire                       clk,
+    input  wire                       rst_n,
+    input  wire                       valid_in,
+    output wire                       ready_in,
+    input  wire [<IC*8 - 1>:0]        data_in,
+    output wire                       valid_out,
+    output wire [<OC*8 - 1>:0]        data_out
+);
+    // --- Parameters from LayerIR ---
+    localparam integer IC        = <input_shape[1]>;
+    localparam integer OC        = <output_shape[1]>;
+    localparam integer IH        = <input_shape[2]>;
+    localparam integer IW        = <input_shape[3]>;
+    localparam integer OH        = <output_shape[2]>;
+    localparam integer OW        = <output_shape[3]>;
+    localparam integer KH        = 3;
+    localparam integer KW        = 3;
+    localparam integer SH        = <stride[0]>;
+    localparam integer SW        = <stride[1]>;
+    localparam integer PH        = <padding[0]>;
+    localparam integer PW        = <padding[1]>;
+    localparam integer K_TOTAL   = IC * KH * KW;
+    localparam integer MP        = <mac_parallelism>;
+    localparam integer SCALE_MULT  = <derived from scale_factor>;
+    localparam integer SCALE_SHIFT = <derived from scale_factor>;
+
+    // --- One-cycle start pulse on reset deassertion; re-arms on
+    //     sched_out_frame_done. Critically, start does NOT wait on
+    //     valid_in: the static TB waits for ready_in before asserting
+    //     valid_in, and ready_in stays low until the scheduler is
+    //     running, which requires start. Pulsing start on !started
+    //     breaks that circular wait.
+    reg started, start_pulse;
+    wire sched_out_frame_done;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            started     <= 1'b0;
+            start_pulse <= 1'b0;
+        end else begin
+            start_pulse <= 1'b0;
+            if (!started) begin
+                started     <= 1'b1;
+                start_pulse <= 1'b1;
+            end else if (sched_out_frame_done) begin
+                started <= 1'b0;
+            end
+        end
+    end
+
+    // --- Scheduler ↔ datapath wires ---
+    wire                              sched_needs_real_input;
+    wire                              sched_ready_in;
+    wire                              sched_output_fires;
+    wire                              sched_advance;
+    wire [$clog2(IH + PH + 1)-1:0]    sched_in_row;
+    wire [$clog2(IW + PW + 1)-1:0]    sched_in_col;
+    wire [$clog2(OH * OW + 1)-1:0]    sched_outputs_emitted;
+
+    wire [KH*KW*IC*8-1:0]             window_flat;
+    wire                              mac_busy;
+
+    // stall_in is just mac_busy. No output_fires or mac_done needed —
+    // scheduler's registered output_fires pulse + internal eff_stall
+    // handle the firing-coord freeze on its own.
+    wire stall_in = mac_busy;
+
+    // --- Coord scheduler ---
+    coord_scheduler #(
+        .IH(IH), .IW(IW), .OH(OH), .OW(OW),
+        .KH(KH), .KW(KW), .SH(SH), .SW(SW),
+        .PH(PH), .PW(PW)
+    ) scheduler (
+        .clk(clk), .rst_n(rst_n),
+        .start(start_pulse),
+        .stall_in(stall_in),
+        .valid_in(valid_in),
+        .ready_in(sched_ready_in),
+        .needs_real_input(sched_needs_real_input),
+        .in_row(sched_in_row),
+        .in_col(sched_in_col),
+        .output_fires(sched_output_fires),
+        .advance(sched_advance),
+        .in_frame_done(),
+        .out_frame_done(sched_out_frame_done),
+        .outputs_emitted(sched_outputs_emitted)
+    );
+
+    // --- Line buffer + shift-register window ---
+    line_buf_window #(
+        .IC(IC), .IW(IW), .IH(IH),
+        .KH(KH), .KW(KW), .PW(PW), .PH(PH)
+    ) lbw (
+        .clk(clk), .rst_n(rst_n),
+        .frame_start(start_pulse),              // clears line_buf + window
+                                                 // between input frames
+        .sched_in_row(sched_in_row),
+        .sched_in_col(sched_in_col),
+        .sched_needs_real_input(sched_needs_real_input),
+        .sched_advance(sched_advance),
+        .sched_output_fires(sched_output_fires),
+        .valid_in(valid_in),
+        .data_in(data_in),
+        .window_flat(window_flat)
+    );
+
+    // --- Datapath: MAC / bias / scale / output packing ---
+    conv_datapath #(
+        .IC(IC), .OC(OC), .KH(KH), .KW(KW),
+        .K_TOTAL(K_TOTAL), .MP(MP),
+        .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT),
+        .WEIGHTS_PATH("<absolute path from LayerIR.weights_path>"),
+        .BIAS_PATH("<absolute path from LayerIR.bias_path>")
+    ) dp (
+        .clk(clk), .rst_n(rst_n),
+        .window_flat(window_flat),
+        .start_mac(sched_output_fires),
+        .valid_out(valid_out),
+        .data_out(data_out),
+        .mac_busy(mac_busy)
+    );
+
+    // --- Top-level ready_in passes through the scheduler's handshake. ---
+    assign ready_in = sched_ready_in;
+
+endmodule
 ```
 
-Do not rebuild `window` combinationally from `line_buf` — that blows up
-synth cones and loses the per-cycle invariant.
+## What Foundry must get right
 
-## Padding drain
+- Every `<placeholder>` replaced with the exact value from the LayerIR or
+  computed deterministically (`K_TOTAL = IC * KH * KW`, etc.).
+- `SCALE_MULT`/`SCALE_SHIFT` derived via the algorithm in
+  `01_context.md § Scale factor derivation`.
+- `$readmemh` paths from LayerIR's `weights_path` / `bias_path` passed as
+  `WEIGHTS_PATH`/`BIAS_PATH` parameters to `conv_datapath`. Absolute paths
+  only.
+- The 7 canonical top-level ports exactly. No extra signals, no renames.
+- Bus widths: `data_in` is `IC*8` bits, `data_out` is `OC*8` bits.
 
-Padded pixels are produced by the wrap-at-IW-1+PW behaviour in ST_STREAM:
-when `in_col >= IW`, the "column" is the right padding region and the
-window rightmost column is 0. No separate drain state.
+## What Foundry must NOT do
 
-## output_fires condition
+- Do **not** write a line buffer, window, or MAC FSM. Those live in
+  `rtl_library/`.
+- Do **not** add `always @(posedge clk)` blocks except the single one for
+  `start_pulse` shown above.
+- Do **not** regenerate the coord_scheduler / line_buf_window /
+  conv_datapath source files — they are fixed library infrastructure.
+- Do **not** add a "preflight shim" with dummy `line_buf` / `window` /
+  `weights` / `biases` regs to satisfy the structural preflight. The
+  preflight recognizes the split architecture: when the top-level
+  instantiates `line_buf_window` and `conv_datapath`, the rules for
+  `line_buf` / `window` / `$readmemh` declarations are skipped.
 
-```
-row_num = in_row + PH - (KH - 1)
-col_num = in_col + PW - (KW - 1)
-fires   = (row_num >= 0) && (row_num < OH * SH) && (row_num % SH == 0)
-       && (col_num >= 0) && (col_num < OW * SW) && (col_num % SW == 0)
-       && outputs_emitted < OH * OW
-```
+## Latency
 
-This coordinate logic is the most bug-prone part of the design, which is
-why `rtl_library/coord_scheduler.v` owns it. **Instantiate coord_scheduler;
-do not roll your own row/col/wrap/stride/drain logic.** The full contract
-(region handshake, `stall_in` derivation, instantiation form) lives in
-`01_context.md § coord_scheduler contract`. Consume the scheduler's
-`output_fires`, `outputs_emitted`, `in_row`, `in_col`, `ready_in`,
-`needs_real_input`, and `out_frame_done` signals.
+`pipeline_latency_cycles` from the LayerIR is authoritative. The exact
+formula is in `scripts/golden_impl.py::compute_conv2d_latency_cycles` and
+is derived from the scheduler's fill-row / fill-col startup plus
+`OC_PASSES * (MP * K_TOTAL + 4)` cycles per firing coord (synchronous ROM
+read prime, MAC loop, bias, scale, output). Do not re-derive; trust LayerIR.
 
 ## Known failure modes
 
-See `08_common_bugs.md`. Spatially-specific bugs:
-
-- `output_counter_missing` — infinite output stream → Verilator timeout.
-- `window_not_registered` — window rebuilt combinationally → synth cone.
-- `loop_bounds_incorrect` — off-by-one in the `fill_rows / fill_cols`
-  comparison; first_mismatch_index=0 or sample_count too small.
-- `array_indexing_error` — window accessed as `window[ic][kh][kw]` instead
-  of `window[kh][kw][ic]`.
-
-## Reference skeleton
-
-A canonical 3×3 spatial conv is ~350 lines. Adapt `02_conv1x1.md`'s skeleton
-and add:
-
-```verilog
-    localparam KH = 3;
-    localparam KW = 3;
-    localparam PH = <padding[0]>;
-    localparam PW = <padding[1]>;
-    localparam LB_ROWS = KH;  // 3
-
-    reg signed [7:0] line_buf [0:LB_ROWS-1][0:IW-1][0:IC-1];
-    reg signed [7:0] window   [0:KH-1][0:KW-1][0:IC-1];
-    reg [$clog2(LB_ROWS)-1:0] cur_row;
-    reg [$clog2(IH+PH+1)-1:0] in_row;
-    reg [$clog2(IW+PW+1)-1:0] in_col;
-    reg [$clog2(OH*OW+1)-1:0] outputs_emitted;
-
-    // ... ST_STREAM reads IC channels from data_in into
-    //     line_buf[cur_row][in_col], then shifts the window, then advances
-    //     in_col (wrapping at IW-1+PW) and in_row on col wrap.
-    // ... output_fires gate triggers ST_RUNNING with the window frozen
-    //     for all OC_PASSES (window-freeze rule).
-```
-
-Termination is bounded by `sched_outputs_emitted == OH*OW` (equivalently,
-by pulsing on `sched_out_frame_done`). Never terminate on row-counter
-comparisons like `in_row > IH-1+PH` — that's the drain-exit bug.
-
-## Reference to adapt
-
-`knowledge/references/conv3x3_passing_reference.v` — handwritten 3×3 s1 p1
-reference. Written for `layer1_0_conv2` (IC=OC=64, IH=IW=112, MP=4). Adapt
-the localparams (IC / OC / IH / IW / OH / OW / MP / SCALE_MULT / SCALE_SHIFT
-/ `$readmemh` paths) to the current LayerIR; keep the FSM, the line-buffer
-and window structure, the coord_scheduler instantiation, and the
-serialized-MAC loop exactly as shown. It already satisfies:
-
-- structural preflight (line_buf + registered window + coord_scheduler)
-- the region handshake and combinational `stall_in` contract
-- window-freeze across `OC_PASSES`
-- round-to-nearest with `SCALE_ROUND_BIAS`
-- multi-frame re-arm (scheduler re-starts on `sched_out_frame_done`)
-
-Do not regenerate the FSM from scratch from this markdown if the reference
-is available — that path historically produces multi-frame-reset bugs and
-off-by-one window indexing. Copy the reference's structure, change the
-parameters.
+See `08_common_bugs.md` for the general catalog. With the split
+architecture, the previously most-bug-prone classes (drain-exit, window
+rotation, multi-frame reset, pixel-loss at firing coord) are owned by
+the library modules and are not accessible to the generated top-level.

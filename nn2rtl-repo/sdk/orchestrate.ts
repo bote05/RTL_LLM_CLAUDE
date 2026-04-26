@@ -79,7 +79,7 @@ type ParsedTopPort = {
   width_bits: number | null;
 };
 
-export type YosysFn = (module: VerilogModule, layer: LayerIR) => Promise<SynthesisReport>;
+export type SynthesisFn = (module: VerilogModule, layer: LayerIR) => Promise<SynthesisReport>;
 export type AssayerFn = (
   module: VerilogModule,
   layer: LayerIR,
@@ -88,7 +88,7 @@ export type AssayerFn = (
 export type OrchestratorRuntime = {
   now: () => Date;
   queryFn: typeof query;
-  yosysFn: YosysFn;
+  synthesisFn: SynthesisFn;
   assayerFn: AssayerFn;
 };
 
@@ -109,7 +109,7 @@ export type RunPipelineOptions = {
 const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
   now: () => new Date(),
   queryFn: query,
-  yosysFn: (module, layer) => invokeYosys(module, layer),
+  synthesisFn: (module, layer) => invokeVivado(module, layer),
   assayerFn: (module, layer) => runAssayerDeterministic(module, layer),
 };
 
@@ -141,34 +141,31 @@ export function resolveFromSdk(relativePath: string): string {
 // is treated as a real hardware failure and routed back to Surgeon via a
 // synthesized VerifResult. Thresholds come from the README's FPGA targets.
 const FMAX_TARGET_MHZ = 50;
-const MAX_LUT_COUNT_PER_MODULE = 5000;
 
-// Maps a Yosys outcome to either a pass (null) or a synthesized VerifResult
+// Maps a Vivado outcome to either a pass (null) or a synthesized VerifResult
 // with the correct failure_class. The classification matters because Surgeon
 // uses it to pick the repair strategy — "add a pipeline register" is very
 // different from "remove a non-synthesizable construct."
-// Yosys reports on large residual blocks can be tens of MB (mostly
-// repetitive warnings like "No latch inferred"). Tail-only truncation hid
-// the real fatal error in the head — Surgeon was repairing blindly on a
-// diet of warning spam. Summarize as head + ERROR/error lines + tail so
-// every fatal diagnostic survives even when the middle is huge noise.
-const YOSYS_REPORT_HEAD_BYTES = 2_500;
-const YOSYS_REPORT_TAIL_BYTES = 3_500;
-const YOSYS_REPORT_ERRORS_BYTES = 4_000;
-function capYosysReport(report: string): string {
-  if (report.length <= YOSYS_REPORT_HEAD_BYTES + YOSYS_REPORT_TAIL_BYTES) {
+// Vivado reports can be large; summarize as head + ERROR/CRITICAL/WARNING
+// lines + tail so Surgeon sees root-cause diagnostics without megabytes of
+// table noise.
+const SYNTH_REPORT_HEAD_BYTES = 2_500;
+const SYNTH_REPORT_TAIL_BYTES = 3_500;
+const SYNTH_REPORT_ERRORS_BYTES = 4_000;
+function capSynthesisReport(report: string): string {
+  if (report.length <= SYNTH_REPORT_HEAD_BYTES + SYNTH_REPORT_TAIL_BYTES) {
     return report;
   }
-  const head = report.slice(0, YOSYS_REPORT_HEAD_BYTES);
-  const tail = report.slice(-YOSYS_REPORT_TAIL_BYTES);
+  const head = report.slice(0, SYNTH_REPORT_HEAD_BYTES);
+  const tail = report.slice(-SYNTH_REPORT_TAIL_BYTES);
   const errorLines = report
     .split(/\r?\n/)
-    .filter((line) => /ERROR|error:|Error:/.test(line))
+    .filter((line) => /CRITICAL WARNING|ERROR|error:|Error:|VIOLATED/.test(line))
     .join("\n");
   const errorBlock =
-    errorLines.length > YOSYS_REPORT_ERRORS_BYTES
-      ? errorLines.slice(0, YOSYS_REPORT_ERRORS_BYTES) +
-        `\n...[${errorLines.length - YOSYS_REPORT_ERRORS_BYTES} more error-line bytes elided]...`
+    errorLines.length > SYNTH_REPORT_ERRORS_BYTES
+      ? errorLines.slice(0, SYNTH_REPORT_ERRORS_BYTES) +
+        `\n...[${errorLines.length - SYNTH_REPORT_ERRORS_BYTES} more diagnostic-line bytes elided]...`
       : errorLines;
   const elided = report.length - head.length - tail.length;
   return [
@@ -190,40 +187,39 @@ function evaluateSynthesis(
   report: SynthesisReport,
 ): VerifResult | null {
   if (!report.success) {
-    // Yosys crashed, emitted a syntax/elaboration error, or hit a construct
-    // iverilog's linter accepted but Yosys refuses. Fix strategy: rewrite
-    // the offending construct so the Sky130 synth flow accepts it.
+    // Vivado emitted a syntax/elaboration/synthesis error after simulation
+    // had already passed. Fix strategy: rewrite only the synth-hostile RTL.
     return {
       ...verifiedResult,
       module_id: moduleId,
       status: "fail",
       failure_class: "synthesis_failed",
       fix_hint: [
-        "Yosys synthesis failed after functional verification passed.",
-        "Repair the RTL so `synth; dfflibmap -liberty sky130.lib; abc -liberty sky130.lib; stat -liberty sky130.lib` succeeds.",
-        "Look at the HEAD and ERRORS sections below for the root cause; the TAIL is usually noise (e.g. repeated 'No latch inferred' warnings).",
-        "Yosys output summary (head + errors + tail):",
-        capYosysReport(report.report),
+        "Vivado synthesis failed after functional verification passed.",
+        "Repair the RTL so Nexys A7 Artix-7 synth_design succeeds.",
+        "Look at the HEAD and DIAGNOSTICS sections below for the root cause; the TAIL is usually table/log noise.",
+        "Vivado output summary (head + diagnostics + tail):",
+        capSynthesisReport(report.report),
       ].join("\n\n"),
     };
   }
 
-  if (report.fmax_mhz <= 0) {
+  if (report.fmax_mhz <= 0 || report.wns_ns === null) {
     return {
       ...verifiedResult,
       module_id: moduleId,
       status: "fail",
       failure_class: "synthesis_failed",
       fix_hint: [
-        "Yosys synthesis succeeded but did not emit a measurable Sky130 timing result.",
-        "Repair the RTL or synthesis flow so constrained `abc -constr ... -D ...` reports a critical-path delay.",
-        "Yosys output summary (head + errors + tail):",
-        capYosysReport(report.report),
+        "Vivado synthesis succeeded but did not emit a measurable timing result.",
+        "Repair the RTL or synthesis flow so report_timing_summary reports WNS.",
+        "Vivado output summary (head + diagnostics + tail):",
+        capSynthesisReport(report.report),
       ].join("\n\n"),
     };
   }
 
-  if (report.fmax_mhz < FMAX_TARGET_MHZ) {
+  if (!report.timing_met || report.fmax_mhz < FMAX_TARGET_MHZ) {
     // Synthesis succeeded but critical path is too long. Fix strategy:
     // insert a pipeline register in the longest combinational path.
     // Note the latency-contract implication — adding a register changes
@@ -235,31 +231,10 @@ function evaluateSynthesis(
       failure_class: "missing_pipeline_register",
       fix_hint: [
         `Synthesis passed but Fmax ${report.fmax_mhz.toFixed(2)} MHz is below the ${FMAX_TARGET_MHZ} MHz target.`,
+        `Vivado WNS: ${report.wns_ns.toFixed(3)} ns.`,
         "Insert a pipeline register to break the critical path, and update pipeline_latency_cycles to match.",
-        "Yosys output summary (head + errors + tail):",
-        capYosysReport(report.report),
-      ].join("\n\n"),
-    };
-  }
-
-  // `lut_count` is a real LUT count only on the old FPGA/iCE40 flow. Under
-  // the current Sky130 `stat -liberty` flow it is a total standard-cell count
-  // proxy, so the old 5k LUT ceiling is not comparable. Keep reporting it for
-  // observability, but only enforce the LUT gate when no standard-cell area
-  // metric is present.
-  if (report.area_um2 === 0 && report.lut_count > MAX_LUT_COUNT_PER_MODULE) {
-    // Design synthesizes but burns absurd area. Fix strategy: simplify /
-    // factor shared terms; this is not the same bug as a timing failure.
-    return {
-      ...verifiedResult,
-      module_id: moduleId,
-      status: "fail",
-      failure_class: "synthesis_failed",
-      fix_hint: [
-        `Synthesis passed but LUT count ${report.lut_count} exceeds the ${MAX_LUT_COUNT_PER_MODULE} per-module ceiling.`,
-        "Rewrite the module to share arithmetic or collapse redundant logic.",
-        "Yosys output summary (head + errors + tail):",
-        capYosysReport(report.report),
+        "Vivado output summary (head + diagnostics + tail):",
+        capSynthesisReport(report.report),
       ].join("\n\n"),
     };
   }
@@ -673,7 +648,7 @@ function buildFoundryGenerationBrief(payload: unknown): string | null {
   }
 
   lines.push(
-    "- invariant markers: when the mechanism exists, annotate ROUNDING, DRAIN_EXIT, INTER_VECTOR_RESET, READY_IN_GATING, and VALID_OUT_LATENCY with [INVARIANT:*] comments.",
+    "- invariant markers: only ROUNDING, READY_IN_GATING, and VALID_OUT_LATENCY may use [INVARIANT:*] comments. Do not mark drain, reset, counter, or memory lines invariant.",
   );
   return lines.join("\n");
 }
@@ -688,7 +663,7 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   // Distinguish the sim-passed / synth-only failure from a full functional
   // failure. When sim passed, the datapath is already correct by evidence —
   // Surgeon must NOT rewrite the numerical logic, only the constructs that
-  // upset Yosys (wide unrolled blocks, non-synthesizable $signed patterns,
+  // upset Vivado (wide unrolled blocks, non-synthesizable $signed patterns,
   // deep combinational cones, etc.). Framing this narrowly prevents Surgeon
   // from regressing sim in the process of "fixing" synth.
   const isSynthOnlyFailure =
@@ -726,10 +701,10 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
       " The datapath is proven correct — DO NOT rewrite numerical logic, MAC ordering," +
       " requantisation, ready/valid handshaking, or state transitions." +
       " Your ONLY job is to make the existing logic synthesizable." +
-      " Typical synth-hostile patterns to target: deep combinational cones that abc can't map," +
+      " Typical synth-hostile patterns to target: deep combinational cones that Vivado can't meet timing on," +
       " unsynthesizable constructs (non-constant array indices into large regs, dynamic $signed," +
       " latch inference from incomplete case statements), or register/wire width issues." +
-      " Read the Yosys error output below carefully and make the minimum change that addresses it.",
+      " Read the Vivado error output below carefully and make the minimum change that addresses it.",
     );
   } else {
     // Any non-synth-only failure means the module has not yet been proven to
@@ -1205,7 +1180,7 @@ function expectedTopPortWidthBits(
  * Structural preflight checks — run AFTER the ANSI port preflight. These
  * rules derive purely from LayerIR fields (op_type, weight_shape) plus
  * generic RTL safety. They catch classes of bugs that parse cleanly but
- * are known to wedge downstream tools (yosys OPT_MEM, Verilator hang from
+ * are known to wedge downstream tools (Vivado synth, Verilator hang from
  * missing output bounds, etc.).
  *
  * Each violation is returned as {rule, detail}. `rule` is one of a small
@@ -1274,32 +1249,44 @@ export function structuralPreflightViolations(
     layer.weight_shape.length >= 4 &&
     layer.weight_shape[2] * layer.weight_shape[3] > 1;
 
+  // Split-architecture detection. When the top-level instantiates the
+  // handwritten library modules, the invariants those modules own (line
+  // buffer, registered window, $readmemh weight/bias loading, output
+  // counter) are guaranteed by the library source and don't need to be
+  // textually present in the top-level file. Skip the corresponding
+  // checks when the library modules are instantiated.
+  const usesLineBufWindow  = /\bline_buf_window\b/.test(source);
+  const usesConvDatapath   = /\bconv_datapath\b/.test(source);
+  const usesCoordScheduler = /\bcoord_scheduler\b/.test(source);
+
   // Rule 1: spatial conv requires a `line_buf` array-of-arrays / memory decl.
-  if (isSpatialConv) {
+  // Skipped when the top-level instantiates `line_buf_window` (the library
+  // module owns the line buffer).
+  if (isSpatialConv && !usesLineBufWindow) {
     const lineBufRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?line_buf\s*\[/;
     if (!lineBufRe.test(source)) {
       violations.push({
         rule: "line_buffer_missing",
         detail:
           `Spatial conv2d (kernel=${layer.weight_shape[2]}x${layer.weight_shape[3]}) must ` +
-          `declare a line buffer 'line_buf' as a multi-dimensional reg memory. ` +
-          `No 'reg [...] line_buf [...]' declaration was found.`,
+          `either instantiate line_buf_window or declare a line buffer 'line_buf' ` +
+          `as a multi-dimensional reg memory. Neither was found.`,
       });
     }
   }
 
-  // Rule 2: spatial conv requires a registered window — `window` declared as
-  // `reg` AND assigned with `<=` inside an `always @(posedge clk)` block.
-  if (isSpatialConv) {
+  // Rule 2: spatial conv requires a registered window. Skipped when
+  // line_buf_window is instantiated (the library owns the window).
+  if (isSpatialConv && !usesLineBufWindow) {
     const windowDeclRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?window\b/;
     if (!windowDeclRe.test(source)) {
       violations.push({
         rule: "window_not_registered",
         detail:
-          "Spatial conv must declare a shift-register window as " +
-          "'reg [...] window [...]'. No such reg was found — if 'window' is " +
-          "a wire/assign, it is rebuilt combinationally every cycle, which " +
-          "blows up synth cones and loses the sliding-window invariant.",
+          "Spatial conv must either instantiate line_buf_window or declare a " +
+          "shift-register window as 'reg [...] window [...]'. No such reg was " +
+          "found — a wire/assign 'window' is rebuilt combinationally every " +
+          "cycle, which blows up synth cones and loses the sliding-window invariant.",
       });
     } else {
       const clocked = extractClockedAlwaysBlocks(source);
@@ -1322,7 +1309,7 @@ export function structuralPreflightViolations(
       rule: "weights_packed_forbidden",
       detail:
         "Identifier 'weights_packed' is forbidden: packed weight arrays " +
-        "trigger yosys OPT_MEM rejection. Use a flat 'reg signed [7:0] " +
+        "block BRAM inference. Use a flat 'reg signed [7:0] " +
         "weights [0:OC*K_TOTAL-1]' array initialized via $readmemh, and " +
         "serialize reads via a lane_counter if the combinational mux is too wide.",
     });
@@ -1335,7 +1322,7 @@ export function structuralPreflightViolations(
       detail:
         "Explicit 'initial weights[...] = ...' assignment is forbidden. " +
         "Initialize 'weights' only via $readmemh to keep the initializer " +
-        "constant and compatible with yosys OPT_MEM.",
+        "constant and compatible with Vivado memory inference.",
     });
   }
   // assign weights[...] = ... (continuous assign on the memory)
@@ -1344,20 +1331,23 @@ export function structuralPreflightViolations(
       rule: "weights_packed_forbidden",
       detail:
         "Continuous assignment 'assign weights[...] = ...' is forbidden — " +
-        "it produces a non-constant memory initializer that yosys OPT_MEM rejects.",
+        "it produces a non-constant memory initializer that Vivado cannot infer as ROM.",
     });
   }
 
-  // Rule 4: weights and biases must use $readmemh.
-  // Only conv2d layers have weights/biases. Add/relu/maxpool have none.
-  if (layer.op_type === "conv2d") {
+  // Rule 4: weights and biases must use $readmemh. Skipped when the
+  // top-level instantiates `conv_datapath`: that library module owns the
+  // weight/bias arrays and their $readmemh loaders, driven by the
+  // WEIGHTS_PATH / BIAS_PATH module parameters.
+  if (layer.op_type === "conv2d" && !usesConvDatapath) {
     const readmemhWeightsRe = /\$readmemh\s*\(\s*"[^"]*"\s*,\s*weights\s*\)/;
     if (!readmemhWeightsRe.test(source)) {
       violations.push({
         rule: "readmemh_missing",
         detail:
           "Weights must be loaded via $readmemh(\"<weights_path>\", weights) " +
-          "inside an initial block. No such call was found.",
+          "inside an initial block, OR the top-level must instantiate " +
+          "conv_datapath with a WEIGHTS_PATH parameter. Neither was found.",
       });
     }
     if (layer.bias_path) {
@@ -1367,7 +1357,7 @@ export function structuralPreflightViolations(
           rule: "readmemh_missing",
           detail:
             "Biases must be loaded via $readmemh(\"<bias_path>\", biases) " +
-            "inside an initial block. No such call was found.",
+            "or via conv_datapath's BIAS_PATH parameter. Neither was found.",
         });
       }
     }
@@ -1574,11 +1564,11 @@ export async function ensureLayerIr(
   };
 }
 
-// Deterministic, LLM-free Yosys invocation. The previous design routed this
-// through query() with an allowedTool of run_yosys and let Claude mediate
+// Deterministic, LLM-free Vivado invocation. The previous design routed synth
+// through query() with an allowedTool and let Claude mediate
 // the tool call; that mediator could refuse for content-filter reasons and
 // produced "I cannot comply" responses on modules with absolute host paths
-// in $readmemh. Yosys is pure infrastructure — no reasoning needed — so it
+// in $readmemh. Vivado is pure infrastructure — no reasoning needed — so it
 // goes through the MCP tool impl directly, validated against the same
 // synthesisReportSchema the SDK path used.
 // Resolved as a runtime string so tsc does not analyze the target module
@@ -1589,15 +1579,15 @@ const MCP_TOOLS_MODULE_PATH = path.basename(__dirname) === "dist"
   ? pathToFileURL(path.resolve(repoRoot, "mcp", "dist", "tools.js")).href
   : pathToFileURL(path.resolve(repoRoot, "mcp", "tools.ts")).href;
 
-async function invokeYosys(module: VerilogModule, layer: LayerIR): Promise<SynthesisReport> {
+async function invokeVivado(module: VerilogModule, layer: LayerIR): Promise<SynthesisReport> {
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
-    run_yosys: (
+    run_vivado: (
       verilog_source: string,
       module_name: string,
       clock_period_ns: number,
     ) => Promise<SynthesisReport>;
   };
-  const raw = await mcpTools.run_yosys(
+  const raw = await mcpTools.run_vivado(
     module.verilog_source,
     module.module_id,
     layer.clock_period_ns,
@@ -1605,13 +1595,13 @@ async function invokeYosys(module: VerilogModule, layer: LayerIR): Promise<Synth
   const parsed = synthesisReportZod.safeParse(raw);
   if (!parsed.success) {
     throw new Error(
-      `run_yosys returned invalid output:\n${JSON.stringify(parsed.error.issues, null, 2)}`,
+      `run_vivado returned invalid output:\n${JSON.stringify(parsed.error.issues, null, 2)}`,
     );
   }
   return parsed.data;
 }
 
-async function processYosysOutcome(
+async function processSynthesisOutcome(
   manager: PipelineStateManager,
   moduleId: string,
   module: VerilogModule,
@@ -1622,30 +1612,42 @@ async function processYosysOutcome(
 ): Promise<void> {
   let report: SynthesisReport;
   try {
-    report = await runtime.yosysFn(module, layer);
+    report = await runtime.synthesisFn(module, layer);
   } catch (error: unknown) {
-    // Tool itself crashed before producing a structured report. Treat as a
-    // synthesis failure so Surgeon gets a chance to repair; the fix_hint
-    // carries whatever error message the runner surfaced.
-    report = {
-      success: false,
-      lut_count: 0,
-      fmax_mhz: 0,
-      area_um2: 0,
-      report: error instanceof Error ? error.message : String(error),
+    // Tool itself crashed before producing a structured report. This is
+    // infrastructure, not an RTL repair task, so fail-abort via tb_setup_error.
+    const setupFailure: VerifResult = {
+      ...verifiedResult,
+      module_id: moduleId,
+      status: "fail",
+      status_class: "tb_setup_error",
+      failure_class: null,
+      fix_hint: [
+        "Vivado failed before producing a structured synthesis report.",
+        "This is infrastructure, not a module-local RTL bug. Check NN2RTL_VIVADO_BIN, PATH, and Windows/WSL path access.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n\n"),
     };
+    const before = manager.getState().modules[moduleId];
+    manager.applyVerifResult(moduleId, setupFailure);
+    await logStateTransition(manager, moduleId, before, manager.getState().modules[moduleId], "vivado_tool_error", runtime);
+    await manager.saveState(statePath);
+    return;
   }
 
-  await writeJsonFile(reportPath(`${moduleId}.yosys.json`), report);
+  await writeJsonFile(reportPath(`${moduleId}.vivado.json`), report);
 
   const synthesisFailure = evaluateSynthesis(moduleId, verifiedResult, report);
   if (!synthesisFailure) {
     // Genuine pass — RTL simulates correctly, synthesizes, and hits the PPA gates.
     await appendRunLog(
       {
-        event: "yosys_pass",
+        event: "vivado_pass",
         module_id: moduleId,
         lut_count: report.lut_count,
+        ff_count: report.ff_count,
+        dsp_count: report.dsp_count,
+        bram18_equiv: report.bram18_equiv,
         fmax_mhz: report.fmax_mhz,
       },
       runtime,
@@ -1662,7 +1664,7 @@ async function processYosysOutcome(
     moduleId,
     statusBeforeApply,
     statusAfterApply,
-    `yosys_${synthesisFailure.failure_class ?? "fail"}`,
+    `vivado_${synthesisFailure.failure_class ?? "fail"}`,
     runtime,
   );
   await manager.saveState(statePath);
@@ -2062,7 +2064,7 @@ async function invokeAssayer(
   } catch (error: unknown) {
     // Tool crashed before producing a structured VerifResult. Synthesize a
     // fail so Surgeon gets a chance to look at the broken RTL; the fix_hint
-    // carries whatever the runner surfaced. This mirrors processYosysOutcome.
+    // carries whatever the runner surfaced. This mirrors processSynthesisOutcome.
     payload = {
       module_id: module.module_id,
       status: "fail",
@@ -2684,7 +2686,7 @@ export async function runPipeline(
 
           if (statusAfterApply === "pass") {
             passedModules.set(nextAction.module_id, { module: cloned, layer });
-            await processYosysOutcome(manager, nextAction.module_id, cloned, layer, cloneVerif, statePath, runtime);
+            await processSynthesisOutcome(manager, nextAction.module_id, cloned, layer, cloneVerif, statePath, runtime);
           }
 
           if (statusAfterApply === "fail_abort") {
@@ -2730,7 +2732,7 @@ export async function runPipeline(
 
       if (statusAfterApply === "pass") {
         passedModules.set(nextAction.module_id, { module: foundryResult.payload, layer });
-        await processYosysOutcome(
+        await processSynthesisOutcome(
           manager,
           nextAction.module_id,
           foundryResult.payload,
@@ -2883,7 +2885,7 @@ export async function runPipeline(
       await manager.saveState(statePath);
 
       if (statusAfterApply === "pass") {
-        await processYosysOutcome(
+        await processSynthesisOutcome(
           manager,
           nextAction.module_id,
           surgeonResult.payload,
