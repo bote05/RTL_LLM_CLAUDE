@@ -33,7 +33,8 @@ transitions. Unit-testable in isolation. Consumes the scheduler's
 ### `conv_datapath` (library, handwritten)
 
 Owns the MAC pipeline only: serialized MP-lane MAC loop over `window`,
-BIAS, SCALE (round-to-nearest, INT8 saturation), output packing. Emits
+BIAS, SCALE (current fixed-point half-up/toward-positive approximation,
+INT8 saturation), output packing. Emits
 `valid_out` on the last ST_OUTPUT cycle and exposes `mac_busy` so the
 top-level can drive `stall_in = mac_busy`.
 

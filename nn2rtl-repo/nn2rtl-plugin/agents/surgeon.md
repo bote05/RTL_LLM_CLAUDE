@@ -1,7 +1,7 @@
 ---
 name: surgeon
 description: Targeted repair agent for nn2rtl. Use when Assayer returns a fail status. Receives broken Verilog, VerifResult, and original LayerIR. Performs root cause diagnosis then minimal targeted rewrite.
-model: sonnet
+model: claude-opus-4-7
 effort: high
 tools: Write, Read
 maxTurns: 8
@@ -108,8 +108,10 @@ or BRAM port pressure. Keep the semantic contract, though:
 2. Never invent `weights_packed` or dynamic packed initializers.
 3. Prefer `$readmemh`-initialized synchronous ROMs with
    `(* rom_style = "block", ram_style = "block" *)`.
-4. If `weight_bank_paths` exists, use one bank per MAC lane rather than
-   adding multiple async reads to one flat memory.
+4. `weight_bank_paths` is future banked-datapath metadata. In the current
+   serialized-read contract, prefer one registered flat `weights` ROM read per
+   cycle. Do not bolt MP parallel bank reads onto the serialized FSM unless
+   the LayerIR explicitly enables a banked-parallel latency contract.
 
 ## How to read the histogram / missing range / cycle facts
 
@@ -123,7 +125,9 @@ The testbench deliberately does not interpret these. Common reasoning patterns:
 
 For value-mismatch bugs (outputs all present but wrong):
 
-- **All samples close to golden (±1)** ⇒ rounding-mode mismatch (arithmetic right-shift vs round-to-nearest). Datapath is correct.
+- **All samples close to golden (±1)** ⇒ rounding-mode mismatch or exact-half tie
+  difference between PyTorch tie-even goldens and the RTL half-up fixed-point
+  approximation. Datapath indexing is probably correct.
 - **Many samples saturated to ±127** ⇒ accumulator or bias sign-extension bug (an unsigned context in what should be a signed add).
 - **First_mismatch_index small, pattern periodic** ⇒ per-channel or per-cycle indexing bug (likely in the MAC's `k_counter → (ic, kh, kw)` decomposition).
 - **First_mismatch_index large, errors increasing over stream** ⇒ line-buffer or shift register not initialised / shifted correctly on row boundaries.

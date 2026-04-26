@@ -77,9 +77,12 @@ simplest form of some of these before simulation even runs.
   wide word via `for ... weights_packed[i] = {weights[i*4+3], ...}`.
   Vivado cannot infer a clean ROM/BRAM from this dynamic initializer.
 - **Fix**: use `$readmemh`-initialized ROMs and read them through registered
-  addresses. For parallel lanes, use `LayerIR.weight_bank_paths` so each lane
-  has its own legal read port. The `weights_packed_forbidden` structural
-  preflight rule catches the bad packed forms.
+  addresses. The current verified conv contract serializes the lanes through
+  one read port. `LayerIR.weight_bank_paths` provides one bank file per lane
+  for the future banked datapath, but do not switch to MP parallel reads
+  unless the LayerIR latency contract was generated for that mode. The
+  `weights_packed_forbidden` structural preflight rule catches the bad packed
+  forms.
 
 ## non-constant $readmemh initialization (missing initial block)
 
@@ -101,7 +104,10 @@ simplest form of some of these before simulation even runs.
   keeps the sim alive.
 - **Fix**: add / fix `outputs_emitted`; ensure the FSM returns to a
   terminal state when `outputs_emitted == OH * OW`. The
-  `output_counter_missing` structural preflight rule catches the absence.
+  `output_counter_missing` structural preflight rule catches the absence
+  for spatial conv and maxpool. It intentionally does not fire for pointwise
+  1x1 conv, ReLU, or add, where each accepted input corresponds to one
+  output and a frame-level counter would break back-to-back frames.
 
 ## port direction mismatch on ready_in
 
@@ -129,7 +135,10 @@ simplest form of some of these before simulation even runs.
   and rolls back.
 - **Diagnosis**: Surgeon changed the rounding line from
   `(x + SCALE_ROUND_BIAS) >>> SCALE_SHIFT` to a bare `>>> SCALE_SHIFT`,
-  which truncates instead of rounds. Every pixel drifts by ~1 LSB.
+  which truncates instead of using the current RTL half-up/toward-positive
+  tie approximation. Many pixels drift by ~1 LSB.
 - **Fix**: restore the `+ SCALE_ROUND_BIAS` before the shift. Mark the
   rounding line `// [INVARIANT:ROUNDING]` to protect it from future
-  regressions.
+  regressions. This is not exact PyTorch tie-even rounding; do not chase a
+  remaining +/-1 exact-half tie as a datapath bug unless the project changes
+  the golden/RTL rounding contract together.

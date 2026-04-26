@@ -75,19 +75,19 @@ Plugin manifest. Declares name, version, and paths to agent, skill, and MCP conf
 MCP server registration. Points to `../mcp/dist/server.js` with `OUTPUT_DIR=../output` and registers the server as `nn2rtl-tools`. Every MCP tool name is therefore prefixed `mcp__nn2rtl-tools__` in `allowedTools`.
 
 ### `agents/cartographer.md`
-Model extractor. Model: `sonnet`. Runs once. The prompt tells Cartographer to invoke the `read_weights` MCP tool, and that tool delegates into the Python frontend (`scripts/generate_golden.py`) to load the quantized checkpoint, fold batch norm into convolutions, rebuild/trace the graph when available, write weight/bias `.hex` files to `output/weights/`, and emit a schema-valid `PipelineIR`. Cartographer then returns that `PipelineIR`, which the orchestrator persists to `output/layer_ir.json`. The JSON schema enforces that signal-name fields are emitted as the canonical literals (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`).
+Model extractor. Model: `claude-sonnet-4-6` via `sdk/config.ts`. Runs once. The prompt tells Cartographer to invoke the `read_weights` MCP tool, and that tool delegates into the Python frontend (`scripts/generate_golden.py`) to load the quantized checkpoint, fold batch norm into convolutions, rebuild/trace the graph when available, write weight/bias `.hex` files to `output/weights/`, and emit a schema-valid `PipelineIR`. Cartographer then returns that `PipelineIR`, which the orchestrator persists to `output/layer_ir.json`. The JSON schema enforces that signal-name fields are emitted as the canonical literals (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`).
 
 ### `agents/foundry.md`
-Primary Verilog generator. Model: `sonnet`. Receives one `LayerIR`, produces one synthesizable `VerilogModule`. Hard rules: INT8 fixed-point, `8×8 → 16-bit` multipliers, signed datapath, saturating residual adds, `$readmemh` for weights, exact `pipeline_latency_cycles` from first `valid_in` to first `valid_out`, no simulation-only constructs. Canonical port names are mandatory (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`); `ready_in` is a module **output** (upstream backpressure) that may be tied high if stalling is not needed. Must call `write_verilog` to persist.
+Primary Verilog generator. Model: `claude-opus-4-7` via `sdk/config.ts` (frontmatter model aliases are ignored by the orchestrator). Receives one `LayerIR`, produces one synthesizable `VerilogModule`. Hard rules: INT8 fixed-point, `8×8 → 16-bit` multipliers, signed datapath, saturating residual adds, `$readmemh` for weights, exact `pipeline_latency_cycles` from first `valid_in` to first `valid_out`, no simulation-only constructs. Canonical port names are mandatory (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`); `ready_in` is a module **output** (upstream backpressure) that may be tied high if stalling is not needed. Must call `write_verilog` to persist.
 
 **Wide-bus packed-channel interface.** `data_in` is a packed channel bus, not a scalar 8-bit port. For conv/relu, `data_in[i*8 +: 8]` is channel `i` of the current pixel and the port width must be `IC*8` bits. `data_out[i*8 +: 8]` is channel `i` of the emitted output and the port width must be `OC*8` bits. All channels of a pixel arrive in a single clock cycle. For `op_type=add`, `data_in[W-1:0] = lhs` and `data_in[2W-1:W] = rhs` where `W = input_width_bits / 2`.
 
-**Output-stationary MAC array mandate.** Conv modules must instantiate `OC` parallel signed 8x8 MAC lanes, one accumulator per output channel, reused across input-channel × kernel-position cycles. `pipeline_latency_cycles = IC * KH * KW + 3` (fetch, multiply, accumulate, output buffer). Single-MAC designs are explicitly rejected. `ready_in` must deassert while the MAC array is running.
+**Serialized output-stationary MAC group mandate.** Conv modules use `mac_parallelism` accumulator lanes per OC group and iterate `OC_PASSES = ceil(OC / mac_parallelism)`. In the current verified contract, `lane_counter` selects one lane per cycle, so the datapath performs one weight read / one multiply / one accumulate per cycle. A pass therefore costs `mac_parallelism * K_TOTAL + pipeline_overhead`, not `K_TOTAL + overhead`. Single-output-channel scalar designs are rejected, but MP is not currently cycle-parallel throughput. `ready_in` must deassert while the MAC group is running.
 
 **Disallowed tools**: `Agent`, `Task` (no implicit Opus subagent spawning). `maxTurns: 20`.
 
 ### `agents/surgeon.md`
-Targeted repair specialist. Model: `opus`. Activated on failure. Receives the broken module, the `VerifResult`, and the original `LayerIR`. Must classify the failure into one of the 17 taxonomy classes (the Verilator bench produces `status`, `timing_pass`, `expected`, `got`, `max_error`, and stderrs but does NOT emit `failure_class` — Surgeon owns that classification), locate the exact faulty lines, and rewrite only those lines while preserving the module's port interface. The prompt mandates terse output: "Output immediately. Do not explain." `maxTurns: 8`. Capped at 3 retries per module (via `PIPELINE_CONFIG.max_retries`).
+Targeted repair specialist. Model: `claude-opus-4-7` via `sdk/config.ts`. Activated on failure. Receives the broken module, the `VerifResult`, and the original `LayerIR`. Must classify the failure into one of the repair taxonomy classes (the Verilator bench produces `status`, `timing_pass`, `expected`, `got`, `max_error`, and stderrs but does NOT emit `failure_class` — Surgeon owns that classification), locate the exact faulty lines, and rewrite only those lines while preserving the module's port interface. The prompt mandates terse output: "Output immediately. Do not explain." Capped at 3 retries per module (via `PIPELINE_CONFIG.max_retries`).
 
 **Disallowed tools**: `Agent`, `Task`.
 
@@ -120,7 +120,7 @@ Tiny CLI wrapper. Calls `runCli()` and routes uncaught errors through `handlePip
 ### `types.ts`
 Canonical TypeScript interfaces for the pipeline data contracts:
 
-- `LayerIR` — master per-module spec. `module_id`, `op_type`, input/output shapes, `weights_path` / `bias_path` / `weight_shape` / `num_weights` (weights on disk, not inline), `scale_factor`, `zero_point`, timing contract (`pipeline_latency_cycles`, `clock_period_ns`), port widths (`input_width_bits = in_channels * 8` for conv/relu, `= in_channels * 16` for add; `output_width_bits = out_channels * 8`), **seven canonical signal names typed as string literals** (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`), and golden input/output vector file paths.
+- `LayerIR` — master per-module spec. `module_id`, `op_type`, input/output shapes, `weights_path` / `bias_path` / `weight_shape` / `num_weights` (weights on disk, not inline), `scale_factor`, `zero_point`, timing contract (`pipeline_latency_cycles`, `clock_period_ns`), port widths (`input_width_bits = in_channels * 8` for conv/relu/maxpool, `= output_channels * 16` for add because lhs+rhs are concatenated; `output_width_bits = out_channels * 8`), **seven canonical signal names typed as string literals** (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`), and golden input/output vector file paths.
 - `PipelineIR` — container for all LayerIRs plus model metadata.
 - `VerilogModule` — what Foundry and Surgeon produce.
 - `VerifResult` — what the deterministic Assayer function returns. Includes timing fields, numerical diagnostics, and optional `failure_class`.
@@ -146,15 +146,15 @@ Constraint highlights:
   - Every `results[id].module_id` must equal `id`.
 
 ### `config.ts`
-`AGENT_CONFIG` maps each of the three LLM subagents (Cartographer, Foundry, Surgeon) to its model tier, per-agent `maxTurns`, and description. There is no Assayer entry — the orchestrator plays both the Conductor and Assayer roles itself via deterministic code. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
+`AGENT_CONFIG` maps each of the three LLM subagents (Cartographer, Foundry, Surgeon) to its full model ID, per-agent `maxTurns`, and description. There is no Assayer entry — the orchestrator plays both the Conductor and Assayer roles itself via deterministic code. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
 
 Agent configuration:
-- **Cartographer**: model `sonnet`, maxTurns 30
-- **Foundry**: model `sonnet`, maxTurns 20
-- **Surgeon**: model `opus`, maxTurns 8
+- **Cartographer**: model `claude-sonnet-4-6`, maxTurns 30
+- **Foundry**: model `claude-opus-4-7`, maxTurns 20
+- **Surgeon**: model `claude-opus-4-7`, maxTurns 20
 
 ### `claude-agent-sdk-compat.ts`
-Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The published SDK's `AgentDefinition`, `SDKMessage`, and `query()` option types are large, include fields we do not use (`mcpServers`, `source`, `criticalSystemReminder_EXPERIMENTAL`, various policy-settings knobs), and `model` is typed as `string` so any model name compiles. This shim re-exports only the fields the orchestrator actually touches (`description`, `prompt`, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` on `AgentDefinition`; `cwd`, `tools`, `allowedTools`, `plugins`, `agents`, `outputFormat`, `maxTurns` on the `query()` options) and narrows `model` to the `"sonnet" | "opus" | "haiku" | "inherit"` union we support. The runtime `query` function is cast back to this narrower signature via `as unknown as ...` — since the SDK runtime accepts any superset of our shape, the cast is sound. Upside: adding a field to the SDK's types does not silently change our API, and unsupported fields fail at compile time instead of at runtime. The SDK itself is now fully typed, so the shim is no longer a declarations workaround; removing it would mean accepting the SDK's wider surface, which we do not want.
+Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The published SDK's `AgentDefinition`, `SDKMessage`, and `query()` option types are large and include fields we do not use (`mcpServers`, `source`, `criticalSystemReminder_EXPERIMENTAL`, various policy-settings knobs). This shim re-exports only the fields the orchestrator actually touches (`description`, `prompt`, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` on `AgentDefinition`; `cwd`, `tools`, `allowedTools`, `plugins`, `agents`, `outputFormat`, `maxTurns` on the `query()` options). `model` is kept as a string because the pipeline intentionally passes full model IDs such as `claude-opus-4-7`; tier aliases are avoided because global Claude settings can remap them. The runtime `query` function is cast back to this narrower signature via `as unknown as ...` — since the SDK runtime accepts any superset of our shape, the cast is sound. Upside: adding a field to the SDK's types does not silently change our API, and unsupported fields fail at compile time instead of at runtime. The SDK itself is now fully typed, so the shim is no longer a declarations workaround; removing it would mean accepting the SDK's wider surface, which we do not want.
 
 ### `pipeline.ts`
 `PipelineStateManager` — the state machine. Constructor seeds all modules as `pending` with zero attempts.
@@ -316,7 +316,7 @@ Importable helpers for the golden-vector / layer-IR extraction flow. Core pieces
 - `int8_to_hex(...)`, `int32_to_hex(...)`, `write_signed_int8_hex(...)`, `write_signed_int32_hex(...)` — `$readmemh`-compatible signed INT8/INT32 weight/bias serialization.
 - `write_golden_vector_file(...)`, `read_golden_vector_file(...)` — per-module binary activation streams in **NN2V v2 format**. File layout: 20-byte header — 4-byte ASCII magic `NN2V`, uint32 LE version (=2), uint32 LE `num_vectors`, uint32 LE `samples_per_vector`, uint32 LE `bytes_per_sample` — then `num_vectors × samples_per_vector × ceil(bytes_per_sample/4)` int32 LE words. Each logical sample is a packed bus value for one cycle; bytes are little-endian within each word. The C++ testbench's `loadVectorFile` reads the same format directly from disk.
 - `requantize_tensor_with_scale(tensor, scale_factor)` — applies the requantization multiplier and clamps to INT8 range: `clamp(round(tensor * scale_factor), -128, 127)`. Used by `Int8Conv2d` and `Int8FusedStemConv2d` for conv modules (multiply by `scale_factor`). `Int8Add` converts both operands to the real domain (`lhs * lhs_scale_factor + rhs * rhs_scale_factor`) then divides by `output_scale_factor` to get back to INT8.
-- `compute_conv2d_latency_cycles(weight_shape)` — returns `IC * KH * KW + CONV_PIPELINE_STAGES` (where `CONV_PIPELINE_STAGES = 3`) for the output-stationary MAC-array pipeline latency.
+- `compute_conv2d_latency_cycles(weight_shape, input_shape, stride, padding, mac_parallelism)` — returns the authoritative serialized MAC-group latency. For pointwise conv this is `1 + OC_PASSES * (mac_parallelism * K_TOTAL + 4)`. For spatial conv it adds scheduler/window fill time before the same serialized OC-pass term.
 - `fold_batch_norm_into_conv(...)` — folds BN parameters into convolution weights/bias.
 - `CheckpointResidualStack`, `ResidualStackTracer`, `ActivationCaptureInterpreter` — rebuild or load the residual stack, preserve module IDs through `torch.fx`, and capture per-node activations.
 - `build_deterministic_input_stream(...)`, `capture_golden_outputs(...)` — generate the required 8 seeded INT8 vectors and record golden inputs/outputs per traced node in topological order.
@@ -490,7 +490,7 @@ For the record, these items from earlier revisions are complete:
 - **Assayer agent removed**: there is no LLM "Assayer" anymore. The Haiku-based simulation runner repeatedly hallucinated `VerifResult` payloads instead of calling the MCP tools, and had zero real reasoning to do (run iverilog, run Verilator, parse JSON, return). Verification is now handled by `runAssayerDeterministic` in `sdk/orchestrate.ts`, which writes the sidecar from LayerIR fields, runs `run_iverilog` then `run_verilator` directly via MCP import, and returns a Zod-validated `VerifResult`. `nn2rtl-plugin/agents/assayer.md` and `nn2rtl-plugin/skills/assayer/` are deleted. `AGENT_CONFIG` and `AGENT_SLUGS` list only three agents: Cartographer, Foundry, Surgeon. The `assayerFn` runtime seam on `OrchestratorRuntime` allows tests to mock this path.
 - **Vivado Artix-7 replaces the Sky130/Yosys proxy flow**: `run_vivado` targets Nexys A7-100T (`xc7a100tcsg324-1`) by default. The batch Tcl uses `read_verilog -sv`, `create_clock`, `synth_design`, utilization/RAM/timing reports, and `write_checkpoint`. `toVivadoPath` converts WSL `/mnt/c/...` paths into Windows `C:/...` paths for native Vivado. `NN2RTL_VIVADO_BIN` overrides the binary and `NN2RTL_VIVADO_THREADS` overrides detected CPU threads.
 - **Wide-bus packed-channel interface**: `data_in` is `IC*8` bits wide (all channels of a pixel arrive in one clock), `data_out` is `OC*8` bits wide. LayerIR carries `input_width_bits = in_channels * 8` and `output_width_bits = out_channels * 8`. For add modules, `input_width_bits = in_channels * 16` (lhs + rhs packed). The golden model, Foundry prompt, deterministic verification path, and C++ testbench all implement this contract.
-- **Output-stationary MAC array**: Foundry prompt mandates OC parallel MAC lanes with one accumulator per output channel. `pipeline_latency_cycles = IC * KH * KW + 3` (from `compute_conv2d_latency_cycles`). Single-MAC designs are rejected. Foundry prompt includes a Verilog pseudo-template for the MAC-array state machine.
+- **Serialized output-stationary MAC group**: Foundry prompt mandates the pattern-file conv architecture: `mac_parallelism` accumulators per OC group, `OC_PASSES = ceil(OC / mac_parallelism)`, and one lane-counter-selected weight read / multiply / accumulate per cycle in the current verified datapath. Single-output-channel scalar designs are rejected. `pipeline_latency_cycles` comes from `compute_conv2d_latency_cycles` and is authoritative.
 - **Golden model applies scale_factor**: `requantize_tensor_with_scale(tensor, sf)` does `clamp(round(tensor * sf), -128, 127)` for conv (multiply). `Int8Add` divides by `output_scale_factor` (real → int domain).
 - **NN2V v2 binary format**: 20-byte header: magic "NN2V", version=2, num_vectors, samples_per_vector, bytes_per_sample. Each sample is `ceil(bytes_per_sample/4)` int32 LE words. Both the Python writer and C++ reader implement the same format.
 - **Testbench handles wide buses**: three-way template dispatch for IData/QData (up to 64b), VlWide<N>, WData[N]. `assignPackedWords`/`readPackedWords`/`unpackInt8Channels` handle pack/unpack. Per-channel INT8 sign-extension. Diagnostic cap: 1000 samples in results JSON.
@@ -501,6 +501,100 @@ For the record, these items from earlier revisions are complete:
 - **CLI knobs extended**: `parseCliArgs` accepts `--max-retries N` (with both `--max-retries N` and `--max-retries=N` forms) and rejects unknown `--flag` arguments with a clear error. `runPipeline` / `RunPipelineOptions` gained an optional `maxRetries` field that overrides `PIPELINE_CONFIG.max_retries`. Unknown flags now error instead of being silently ignored.
 - **`invokeVivado` compiled-path fix**: the dynamic import specifier for the MCP `run_vivado` helper is computed at module load via `pathToFileURL(path.resolve(repoRoot, "mcp", ...))` with a branch on whether `__dirname` is `dist` (→ `mcp/dist/tools.js`) or source (→ `mcp/tools.ts`).
 - **Proven historical end-to-end result**: `layer1_0_conv1` (1x1 conv, IC=64, OC=64) passed the earlier end-to-end flow first-shot. The current Vivado migration keeps that as a functional reference while replacing the synthesis backend and moving weight memory toward synchronous ROM / BRAM inference.
+
+### Session 2026-04-26 — Vivado migration validated end-to-end
+
+The Vivado/Artix-7 backend (committed earlier as `f6349f7`) was put through
+two real LLM pipeline runs against `layer1_0_conv1` and produced a clean
+PASS in run #2 after a hardening pass. Concrete deltas from this session:
+
+- **Pipeline run #1 (broken)**: 4 LLM attempts, $7.50, fail-abort. Two
+  attempts were burned on **phantom failures** — `run_iverilog` on
+  Windows occasionally exited non-zero with empty stderr (DLL/PATH
+  glitches), and the orchestrator misclassified that as
+  `status: "syntax_error"` with no diagnostic. Surgeon then "repaired"
+  RTL that was actually fine, twice. The remaining two attempts produced
+  RTL with `integer bias_oc;` declared inside named procedural blocks —
+  iverilog/Verilator tolerated it, Vivado/Verilog-2001 strict mode would
+  reject.
+- **Pipeline run #2 (after hardening, committed as `decea66`)**:
+  1 Foundry attempt (failed assayer), 1 Surgeon repair (passed),
+  Vivado synth success. **Total: $1.36, ≈5.5× cheaper.** Numbers:
+  `LUT=1790, FF=1431, DSP=0, BRAM18=0, WNS=9.71 ns, Fmax=97.15 MHz`,
+  `general.maxThreads = 32 (i9-13gen)` — well above the 50 MHz target.
+- **Hardening fixes** (commit `decea66`):
+  - `mcp/tools.ts::run_iverilog` now preserves stdout / process metadata
+    when stderr is empty, and emits a structured "iverilog exited
+    non-zero without diagnostic output" message instead of an empty
+    string.
+  - `sdk/orchestrate.ts::runAssayerDeterministic` treats the empty-
+    diagnostic iverilog failure as `status_class: "tb_setup_error"`
+    (infrastructure failure → fail-abort), not as a Surgeon-repairable
+    syntax error. Saves 1–2 wasted Opus attempts in the worst case.
+  - New structural-preflight rule
+    `procedural_declaration_forbidden`: any `reg|wire|logic|integer`
+    declaration inside a clocked always block fails preflight before
+    iverilog/Verilator/Vivado run. Catches the bias-oc / out-oc class
+    of bugs deterministically.
+  - `nn2rtl-plugin/agents/foundry.md` and `surgeon.md` now document
+    the empty-diagnostic = setup-failure rule so future agents do not
+    invent RTL fixes for missing tool output.
+- **Smoke-test bug fixes caught in dry-runs against the proven 1×1
+  reference** (in `f6349f7`): Windows `.bat` `EINVAL` (route via
+  `cmd.exe /c`); Tcl ordering (`synth_design` must run before
+  `create_clock` in batch mode); `report_utilization -hierarchical` is
+  column-oriented and broke the row-oriented parser (use the summary
+  form); WNS regex needed a column-oriented branch for the dashed-header
+  table 7-series Vivado emits.
+- **`use_dsp = "yes"` on the registered `mul_q`**: applied to both
+  `knowledge/references/conv1x1_passing_reference.v` and
+  `rtl_library/conv_datapath.v` so Vivado infers a DSP48E1 for the 8×8
+  signed multiply instead of leaving it in LUTs. The current serialized
+  lane datapath only uses one multiply per cycle, so this surfaces as 1
+  DSP per layer; full per-lane parallelisation would surface MP DSPs and
+  is a separate, deferred refactor (latency formula + RTL +
+  patterns + goldens must change atomically).
+- **Architecture honesty pass**: docs no longer claim "MP parallel MAC
+  lanes" because the verified RTL serializes lanes (`lane_counter`
+  rotates 0..MP-1 inside each `k_counter` step). `MP` is an
+  accumulator-group size, not parallel BRAM throughput; pass cycles =
+  `MP*K_TOTAL + 4`. `weight_bank_paths` is documented as future banked-
+  parallel datapath metadata, not active behaviour.
+- **Bus-width capability gate fixed for `op_type == "add"`**:
+  `checkBusWidthCapability` previously used `input_width_bits` directly,
+  which for residual adds is `2 × output_width_bits` (lhs+rhs packed).
+  That spuriously rejected layer2 residual adds. Now per-operand for add
+  ops, with a regression test in `sdk/test/orchestrate.test.ts`.
+- **Round-half-up alignment + bit-exact requantize**: `golden_impl.py`
+  now provides `compute_scale_approx` (Python mirror of
+  `computeScaleApprox` in `sdk/orchestrate.ts`) and
+  `requantize_fixed_point_int`. `requantize_tensor_with_scale` does the
+  same vectorised integer multiply-add-shift the RTL does, instead of
+  `round(value * scale_factor)` in float. The result on
+  `layer1_0_conv1`: `max_error` drops from 1 to **0** across all
+  6,422,528 samples; `first_mismatch_index = -1`. Goldens are now bit-
+  identical to RTL outputs, not merely within the testbench's
+  `≤3` tolerance. Four regression tests in `scripts/test_golden_impl.py`
+  pin the tie behaviour, the SDK-vs-Python `(SCALE_MULT, SCALE_SHIFT)`
+  agreement, and the fixed-point arithmetic.
+- **Path environment**: source tree is exclusively native-Windows
+  (`C:/...`). `toVivadoPath` is the only place WSL `/mnt/c/...` is
+  expected, and only as a conversion-direction test fixture in
+  `mcp/test/tools.test.ts`. The Python frontend, RTL `$readmemh`
+  literals, sidecars, and LayerIR paths must stay `C:/...` because the
+  primary dev environment is native Windows; emitting POSIX-WSL paths
+  breaks Verilator and Vivado simulation/elaboration on Windows. This
+  rule is in `~/.claude/.../memory/feedback_atomic_arch_changes.md`.
+- **Tooling helpers added**:
+  `scripts/verilator_smoke.ts` (replay current `output/rtl/<id>.v`
+  through real `run_verilator`, no LLM, no orchestrator),
+  `scripts/preflight_check.ts` (run `preflightVerilogModule` +
+  `structuralPreflightViolations` against the on-disk RTL),
+  `scripts/rebuild_sidecar.mjs` (regenerate
+  `output/tb/<id>.sidecar.json` from LayerIR when test hygiene wipes
+  it), `scripts/vivado_smoke.ts` (one-shot Vivado synth on the 1×1
+  reference for PPA-only data points). All four are in
+  `scripts/` and committed.
 
 ---
 
@@ -521,13 +615,13 @@ current Artix-7 PPA.
 
 1. **Original OC-parallel design (MP = OC = 64).** Each ST_RUNNING cycle fired 64 parallel MACs and 64 parallel reads from a flat `weights[0..OC*K_TOTAL-1]` register array. Synth correct in principle, but the combinational cone became huge and did not close in the historical flow. Pipeline reported `fail_abort: synthesis_failed`. Tried across ~5 runs, each ~$6–$9.
 
-2. **Introduced `mac_parallelism` (MP=8).** Replaced OC-parallel with OC-group iteration: 8 MAC lanes, `OC_PASSES = ceil(OC/MP)` passes per output pixel, each pass doing `K_TOTAL` MAC cycles across 8 lanes. Cell count dropped sharply, but the new hot spot was multiple reads from a large weight array. Ran ~4 pipeline attempts, $5–$9 each.
+2. **Introduced `mac_parallelism` (MP=8).** Replaced OC-parallel with OC-group iteration: 8 accumulators per group, `OC_PASSES = ceil(OC/MP)` passes per output pixel. The first version tried to do `K_TOTAL` cycles per pass by reading MP weights in parallel; cell count dropped sharply, but the new hot spot was multiple reads from a large weight array. Ran ~4 pipeline attempts, $5–$9 each.
 
 3. **Raised synthesis timeout to 25 min.** One pipeline run came within the budget, but Surgeon output varied. Surgeon also began introducing "clever" memory-packing optimizations (`weights_packed`) to fight the cone, which synthesis rejected as non-constant memory initialization. 3 runs, $6–$10 each.
 
 4. **Introduced registered shift-register `window`.** Foundry had been rebuilding `window[kh][kw][ic]` combinationally every cycle from `line_buf` + `cur_row` + `data_in` with per-tap bounds checks. Replaced with a shift-left + single-column load pattern. Moved line-buffer promotion from start-of-next-row to end-of-current-row to keep window loads ordered correctly. Fixed the combinational-window cone specifically. 2 runs, $4–$6 each — sim started passing more often but synth still timed out on a different axis (parallel weight reads).
 
-5. **Serialized weight reads (MP=4, one read per cycle).** Added `lane_counter` register that rotates 0..MP-1 across cycles; per cycle: one weight read, one multiply, one accumulate into `acc[lane_counter]`. Under the current Vivado BRAM shape, synchronous ROM reads add one read-prime cycle, so each OC pass is `MP*K_TOTAL + 4`. The memory shape is now protected by structural preflight and banked weight files rather than `WEIGHT_ARRAY` invariant markers.
+5. **Serialized weight reads (MP=4, one read per cycle).** Added `lane_counter` register that rotates 0..MP-1 across cycles; per cycle: one weight read, one multiply, one accumulate into `acc[lane_counter]`. Under the current Vivado BRAM shape, synchronous ROM reads add one read-prime cycle, so each OC pass is `MP*K_TOTAL + 4`. MP is therefore an accumulator-group size, not cycle-parallel throughput. The memory shape is now protected by structural preflight and banked weight files rather than `WEIGHT_ARRAY` invariant markers.
 
 6. **Ran `layer1_0_conv2` (3×3 pad=1, smaller geometry) in isolation to see if the spatial-specific issue reproduces on a less-extreme shape.** It does. First Foundry output: `sim_stalled fmm=0`. Two Surgeon attempts ($2.22 + unknown second attempt) made no progress before the Verilator simulation itself hung (no timeout on Verilator) and had to be killed manually.
 
@@ -547,7 +641,7 @@ Each fix above is individually correct and measurable. The remaining failure mod
 
 ### What the current pipeline actually proves
 
-- **Architecture is correct**: verified latency formula matches TB measurement to the cycle; shift-register window + serialized MAC + OC-group iteration produce synthesizable, functionally-correct RTL when the LLM gets the FSM right.
+- **Current serialized architecture is internally consistent**: verified latency formula matches TB measurement to the cycle; shift-register window + serialized lane MAC + OC-group iteration produce synthesizable, functionally-correct RTL when the LLM gets the FSM right. It is not yet the faster MP-read-per-cycle banked architecture.
 - **1×1 pointwise convs work cleanly**: no window, no padding, no right-edge drain. `layer1_0_conv1` passes reproducibly, first-shot, under $1.
 - **Synth characterization needs refreshing**: the previous manual synth data was useful historically, but current PPA must come from Vivado reports on `xc7a100tcsg324-1`.
 - **Spec-hash template reuse is implemented** but never exercised end-to-end, because no two spatial convs have both passed in the same run.
@@ -573,8 +667,11 @@ in the pipeline (not yet re-measured against the 17-module run):
   timeouts classify as `failure_class: verilator_timeout` (routes to
   Surgeon with a timeout-specific rubric).
 - **Bus-width capability gate** (`sdk/config.ts::PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS = 4096`) —
-  layers above the cap fail-abort with `failure_class: architectural_unsupported`;
-  Surgeon is NOT invoked on these. Reports separately in the pipeline summary.
+  layers whose per-stream activation bus is above the cap fail-abort with
+  `failure_class: architectural_unsupported`; Surgeon is NOT invoked on these.
+  Add layers are checked by each operand width (`input_width_bits / 2`), not
+  by the concatenated lhs+rhs top-level `data_in` width. Reports separately in
+  the pipeline summary.
 - **Five structural preflight rules** (`structuralPreflightViolations` in
   `sdk/orchestrate.ts`): `line_buffer_missing`, `window_not_registered`,
   `weights_packed_forbidden`, `readmemh_missing`, `output_counter_missing`,

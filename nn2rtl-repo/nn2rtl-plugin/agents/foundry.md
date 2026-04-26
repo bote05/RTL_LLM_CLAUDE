@@ -1,7 +1,7 @@
 ---
 name: foundry
 description: Verilog codegen for nn2rtl. Use when a module needs to be generated from a LayerIR spec. Receives one LayerIR object, produces one VerilogModule object.
-model: sonnet
+model: claude-opus-4-7
 effort: high
 tools: Bash, Write
 maxTurns: 20
@@ -94,9 +94,11 @@ files — do not guess.
   cycles after the first `valid_in` of the current vector.
 - **Weights and biases load via `$readmemh`** using `weights_path` and
   `bias_path` from the LayerIR. Never hardcode numeric arrays. For Vivado,
-  prefer registered ROM reads with `rom_style` / `ram_style = "block"`; if
-  `weight_bank_paths` is present, use one bank per MAC lane instead of
-  creating extra read ports on one flat memory. Do not mark memory lines
+  prefer registered ROM reads with `rom_style` / `ram_style = "block"`.
+  `weight_bank_paths` may be present, but the current verified latency
+  contract is still the serialized one-read-per-cycle contract in the pattern
+  files. Do not convert to MP parallel bank reads unless the LayerIR latency
+  contract explicitly says that datapath is enabled. Do not mark memory lines
   invariant.
 - **No simulation-only constructs** in synthesizable RTL: no `$display`,
   `$random`, `$monitor`, `#delay`, `initial` blocks other than the
@@ -111,9 +113,11 @@ files — do not guess.
 - **If `stride` / `padding` are present in the LayerIR, use them exactly.**
   Do not infer them from input/output shapes.
 - **`mac_parallelism` is authoritative for conv.** Use the LayerIR value;
-  do not set it to `OC`. The FSM iterates OC in
-  `OC_PASSES = ceil(OC / mac_parallelism)` passes per output pixel.
-  Op-specific details live in `02_conv1x1.md` / `03_*` / `04_*`.
+  do not set it to `OC`. In the current patterns it is the number of
+  accumulator lanes in an OC group. The FSM iterates OC in
+  `OC_PASSES = ceil(OC / mac_parallelism)` passes per output pixel and
+  serializes those lanes with `lane_counter` unless an op-specific pattern
+  says otherwise.
 - **Spatial conv (KH*KW > 1) and maxpool must instantiate
   `rtl_library/coord_scheduler.v`.** Do not roll your own row/col counters,
   stride-divisibility gate, `IW-1+PW` wrap, or drain-row exit. The

@@ -27,19 +27,19 @@ Supported `op_type` values: `conv2d`, `relu`, `add`, `maxpool`.
 - For `op_type=add` modules, `data_in` is a packed wide bus: `data_in[W-1:0] = lhs`, `data_in[2W-1:W] = rhs`, where `W = input_width_bits / 2`. Unpack internally, apply the INT8 quantized-add formula using `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`, saturate to INT8, and drive the result on `data_out[W-1:0]`.
 - For conv2d layers, if `stride` / `padding` are present in the LayerIR, use them exactly. Do not infer them when explicit geometry is already available.
 - `layer0_0_conv1` must follow the current LayerIR / golden-vector contract. On the current legacy `.pth` path it is not a fused MaxPool stage; do not add extra fused stages unless the current LayerIR / goldens require them.
-- **Conv modules must use an output-stationary MAC array. Single-MAC designs are rejected.** Use `OC` parallel signed 8x8 MAC lanes that share the current packed input byte and update `acc[0:OC-1]` together every cycle while `k_counter` walks `ic*kh*kw`. Deassert `ready_in` while the state machine is busy and accept the next pixel only after `valid_out` fires.
+- **Conv modules must use the pattern-file conv architecture. Single-output-channel scalar designs are rejected.** In the current verified patterns, `mac_parallelism` is an accumulator-group size, not a promise of MP parallel memory reads: one `lane_counter`-selected lane issues one weight read / multiply / accumulate per cycle, and OC is covered by `OC_PASSES = ceil(OC / mac_parallelism)`. Deassert `ready_in` while the state machine is busy and accept the next pixel only after `valid_out` fires.
 
 Reference template:
 
 ```verilog
-// Output-stationary MAC array: OC parallel 8x8 MAC units share the input byte
-// each cycle. A k_counter walks (ic, kh, kw); after IC*KH*KW cycles the OC
-// accumulators hold full dot products and get scaled/clamped/packed to data_out.
+// Serialized output-stationary MAC group: lane_counter selects one accumulator
+// lane per cycle. A k_counter walks (ic, kh, kw); after MP*K_TOTAL issue cycles
+// the current OC group holds full dot products and gets scaled/clamped/packed.
 // Honour the exact pipeline_latency_cycles from LayerIR; do not recompute it here.
 input  wire [IC*8-1:0] data_in;
 output reg  [OC*8-1:0] data_out;
 localparam integer ACC_W = 16 + $clog2(K_TOTAL);
-reg signed [ACC_W-1:0] acc [0:OC-1];
+reg signed [ACC_W-1:0] acc [0:MP-1];
 ```
 
 ## Output Requirements

@@ -1,7 +1,7 @@
 ---
 name: cartographer
 description: Model extractor for nn2rtl. Use at pipeline start to extract layer IR from a PyTorch ResNet-50 checkpoint. Runs once, writes output/layer_ir.json.
-model: sonnet
+model: claude-sonnet-4-6
 effort: low
 tools: Bash, Write, Read
 maxTurns: 10

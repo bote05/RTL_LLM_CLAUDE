@@ -31,7 +31,7 @@ SIGNAL_LITERALS = {
 PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1, "maxpool": 1}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
-# Number of register stages wrapped around the output-stationary MAC-array
+# Number of register stages wrapped around the output-stationary conv
 # datapath. Foundry allocates four distinct registered stages after the input
 # latch and MAC loop:
 #   BIAS   — acc[oc] + bias[oc]          (32-bit add only)
@@ -41,7 +41,7 @@ SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 # combining them, which is the primary lever for Vivado timing on Artix-7.
 CONV_PIPELINE_STAGES = 4
 
-# Cap on the number of parallel MAC LANES (accumulator count) Foundry
+# Cap on the number of MAC accumulator lanes Foundry
 # instantiates per conv layer. Must stay in sync with PIPELINE_CONFIG.
 # MAX_PARALLEL_MACS in sdk/config.ts.
 #
@@ -67,8 +67,10 @@ def conv_mac_parallelism(output_channels: int) -> int:
     The rule is ``min(OC, MAX_PARALLEL_MACS)``. For very small-OC layers
     (OC < MAX_PARALLEL_MACS) we generate OC lanes, which keeps the existing
     trivial synthesis path for pointwise 1×1 with few channels. Above the cap
-    we serialize into ``ceil(OC / MAX_PARALLEL_MACS)`` passes so the
-    combinational cone stays small enough for Vivado to map and time.
+    we group output channels into ``ceil(OC / MAX_PARALLEL_MACS)`` passes.
+    In the current serialized-read datapath, lane_counter still issues only
+    one weight read / multiply per cycle; MP is an accumulator-group size,
+    not a promise of MP cycle-parallel BRAM reads.
     """
     if output_channels <= 0:
         return 1
@@ -87,7 +89,8 @@ def compute_conv2d_latency_cycles(
     Two latency shapes depending on the kernel size:
 
     * **Pointwise (KH = KW = 1)** — the RTL is a single-pixel output-stationary
-      MAC array. One output sample takes ``IC * 1 * 1`` MAC cycles plus the
+      MAC group. The current verified contract serializes the MP accumulator
+      lanes, so one OC pass issues ``MP * IC * 1 * 1`` MAC cycles plus the
       shared post-MAC pipeline. Vivado-friendly synchronous ROM reads add a
       read-prime cycle per OC pass.
       Formula: ``1 + OC_PASSES * (MP * IC * KH * KW + 4)``.
@@ -100,10 +103,9 @@ def compute_conv2d_latency_cycles(
       where ``IW = input_shape[3]`` and ``PH, PW`` come from the layer's
       padding. If the frontend passed ``input_shape`` and ``padding``, we use
       that formula; otherwise we fall back to the pointwise shape with a
-      conservative warning (the caller just gets ``IC*KH*KW + 4`` which is
-      always <= the true value and will not cause spurious timing failures
-      in the testbench, but will mismatch actual RTL — always pass the full
-      layer geometry).
+      conservative warning (the caller just gets the pointwise-shaped
+      ``OC_PASSES * (MP*K_TOTAL + 4)`` term, without window fill). That will
+      mismatch actual spatial RTL — always pass the full layer geometry.
     """
     if len(weight_shape) < 4:
         return PIPELINE_LATENCY_CYCLES["conv2d"]
@@ -111,14 +113,14 @@ def compute_conv2d_latency_cycles(
     oc_i, ic_i, kh_i, kw_i = int(oc), int(ic), int(kh), int(kw)
     k_total = ic_i * kh_i * kw_i
 
-    # OC-group iteration with SERIALIZED weight reads:
-    # Per OC pass, ST_RUNNING runs MP*K_TOTAL cycles (one weight read / one
-    # multiply / one accumulate per cycle; lane_counter rotates 0..MP-1).
-    # Vivado BRAM-style synchronous ROM adds one read-prime cycle before the
-    # first multiply. Then ST_BIAS (1) + ST_SCALE (1) + ST_OUTPUT (1), giving
+    # OC-group iteration with serialized accumulator lanes:
+    # Per OC pass, ST_RUNNING runs MP*K_TOTAL issue cycles. Each issue selects
+    # exactly one lane with lane_counter, reads one flat weight, and consumes
+    # that registered ROM output on the next cycle. After the last issue, one
+    # trailing-consume cycle drains the final weight_q, then ST_BIAS (1) +
+    # ST_SCALE (1) + ST_OUTPUT (1) wrap up the pass — giving
     # MP*K_TOTAL + 4 cycles per pass. The LAST pass's ST_OUTPUT asserts
-    # valid_out; the TB samples it the following cycle (already absorbed into
-    # the formula).
+    # valid_out; the TB sampling offset is already absorbed into the formula.
     mp = int(mac_parallelism) if mac_parallelism and mac_parallelism > 0 else oc_i
     mp = min(mp, oc_i) if oc_i > 0 else mp
     oc_passes = (oc_i + mp - 1) // mp if mp > 0 and oc_i > 0 else 1
@@ -279,9 +281,11 @@ class Int8Add(nn.Module):
             lhs.to(torch.float32) * self.lhs_scale_factor
             + rhs.to(torch.float32) * self.rhs_scale_factor
         )
-        return torch.clamp(
-            torch.round(summed / float(self.output_scale_factor)), -128, 127,
-        )
+        # Match the RTL requantize stage: round-half-toward-+infinity, not
+        # PyTorch's banker's rounding. See round_half_up_toward_pos_inf for
+        # the semantics and the asymmetry it fixes.
+        rescaled = round_half_up_toward_pos_inf(summed / float(self.output_scale_factor))
+        return torch.clamp(rescaled, -128, 127)
 
 
 class ResidualStackTracer(fx.Tracer):
@@ -795,23 +799,122 @@ def quantize_tensor_to_int8_range(tensor: torch.Tensor) -> torch.Tensor:
     return torch.clamp(working.to(torch.float32).round(), -128, 127)
 
 
-def requantize_tensor_with_scale(tensor: torch.Tensor, scale_factor: float) -> torch.Tensor:
-    """Apply the requantization multiplier and clamp to INT8 range.
+def compute_scale_approx(scale_factor: float) -> tuple[int, int]:
+    """Pick (SCALE_MULT, SCALE_SHIFT) that approximate ``scale_factor`` with
+    minimum relative error, identical to ``computeScaleApprox`` in
+    ``sdk/orchestrate.ts``. Both must agree because the SDK is the one that
+    embeds these constants into the generated Verilog's ``localparam``
+    block; the golden model must use the same approximation, not the true
+    float ``scale_factor``, to be bit-equivalent to RTL.
 
-    In our int8 pipeline the accumulator holds raw integer dot-products
-    (int8 × int8 summed over IC channels). ``scale_factor`` encodes the
-    composite requantization multiplier that maps this accumulator value
-    back into INT8 output range. The RTL implements this as a fixed-point
-    multiply-and-shift; the golden model must match by multiplying (not
-    dividing) by the same factor.
+    Search range ``shift ∈ [8, 23]`` and ``1 ≤ mult < 32768`` matches the
+    SDK exactly. Tie-break: the SDK keeps the FIRST shift that improves the
+    error (strict ``<``), so we replicate that ordering.
+    """
+    if scale_factor <= 0.0:
+        raise GoldenGenerationError(f"scale_factor must be positive, got {scale_factor}.")
+    best_mult, best_shift, best_err = 1, 8, float("inf")
+    for shift in range(8, 24):
+        mult = round(scale_factor * (2 ** shift))
+        if mult < 1 or mult >= 32768:
+            continue
+        err = abs(mult / (2 ** shift) - scale_factor) / scale_factor
+        if err < best_err:
+            best_mult, best_shift, best_err = mult, shift, err
+    return best_mult, best_shift
+
+
+def requantize_fixed_point_int(value: int, scale_factor: float) -> int:
+    """Bit-exact mirror of the RTL requantize stage:
+
+        scaled = (value * SCALE_MULT + (1 << (SCALE_SHIFT - 1))) >>> SCALE_SHIFT
+        out    = clamp(scaled, -128, 127)
+
+    Python's ``>>`` on negative ints already floors toward -inf, matching
+    Verilog's arithmetic ``>>>`` on a signed reg; combined with the
+    positive ROUND_BIAS this realises round-half-toward-+inf without ever
+    leaving integer arithmetic. The result is bit-identical to the RTL
+    output (subject to the same ``compute_scale_approx`` constants). Use
+    this in place of the float-domain ``round(x * scale_factor)`` whenever
+    bit-equivalence with RTL matters.
+    """
+    mult, shift = compute_scale_approx(scale_factor)
+    raw = int(value) * mult + (1 << (shift - 1))
+    scaled = raw >> shift  # arithmetic shift right on signed Python int
+    if scaled > 127:
+        return 127
+    if scaled < -128:
+        return -128
+    return scaled
+
+
+def round_half_up_toward_pos_inf(tensor: torch.Tensor) -> torch.Tensor:
+    """Round-half-toward-+infinity, matching the RTL requantize stage.
+
+    The RTL implements requantization as
+        v_tmp = (scaled + (1 << (SCALE_SHIFT - 1))) >>> SCALE_SHIFT;
+    an arithmetic right shift after adding a fixed positive half-LSB bias.
+    For a real value ``x``, this computes ``floor(x + 0.5)``. Crucially:
+
+      *  +N.5  ->  N+1   (rounds up)
+      *  -N.5  ->  -N    (rounds up — i.e. toward +inf, not away from 0)
+
+    PyTorch's ``torch.round`` uses banker's rounding (round-half-to-even),
+    so it disagrees with the RTL on every exact .5 tie. We reproduce the
+    RTL behavior here so the goldens are bit-equivalent rather than just
+    within tolerance. ``floor(x + 0.5)`` works in float32 for the value
+    ranges this pipeline produces (accumulator products fit comfortably in
+    float64; we keep float32 for speed and match Python's tensor-default
+    promotion).
+    """
+    return torch.floor(tensor.to(torch.float32) + 0.5)
+
+
+def requantize_tensor_with_scale(tensor: torch.Tensor, scale_factor: float) -> torch.Tensor:
+    """Bit-exact mirror of the RTL requantize stage.
+
+    In our INT8 pipeline the accumulator holds raw integer dot-products
+    (int8 × int8 summed over IC channels) plus the INT32 bias. The RTL
+    requantizes via integer multiply-and-shift using the same constants
+    ``computeScaleApprox`` (TS, in ``sdk/orchestrate.ts``) and
+    ``compute_scale_approx`` (Python, here) pick:
+
+        scaled = (acc_plus_bias * SCALE_MULT + ROUND_BIAS) >>> SCALE_SHIFT
+        out    = clamp(scaled, -128, 127)
+
+    To produce goldens that are BIT-IDENTICAL to RTL — not merely within
+    the testbench's ``max_error <= 3`` tolerance — we do the same integer
+    arithmetic here. Using the true float ``scale_factor`` would leave a
+    residual ±1 LSB on values where the fixed-point approximation rounds
+    differently from float multiplication. That residual is what the
+    earlier float-path implementations of this function produced.
+
+    The input ``tensor`` is the post-bias accumulator value (the
+    convolution sum + bias added in float domain). We round it back to an
+    integer first (the float input represents an integer value because
+    int8 weights × int8 inputs + int32 bias is an exact integer; we trust
+    it), then apply the fixed-point requantize per element.
     """
     if scale_factor <= 0.0:
         raise GoldenGenerationError(f"scale_factor must be positive, got {scale_factor}.")
     working = tensor.detach() if isinstance(tensor, torch.Tensor) else tensor
     if isinstance(working, torch.Tensor) and working.is_quantized:
         working = working.dequantize()
-    scaled = torch.round(working.to(torch.float32) * float(scale_factor))
-    return torch.clamp(scaled, -128, 127)
+    # Compute (mult, shift) ONCE per call — same constants the SDK embeds
+    # into the generated Verilog's localparams. Then do the fixed-point
+    # multiply-add-shift on the whole tensor in vectorised PyTorch (NOT
+    # a Python loop): for an int64 tensor, ``//`` is floor division which
+    # matches Verilog's arithmetic ``>>>`` on signed regs (both round
+    # toward -inf for negative values).
+    mult, shift = compute_scale_approx(float(scale_factor))
+    round_bias = 1 << (shift - 1)
+    divisor = 1 << shift
+    # Snap the float input back to its underlying integer (acc+bias is an
+    # exact integer; we trust the host computed it correctly).
+    integer_input = working.to(torch.float64).round().to(torch.int64)
+    raw = integer_input * mult + round_bias
+    scaled = torch.div(raw, divisor, rounding_mode="floor")
+    return torch.clamp(scaled.to(torch.float32), -128, 127)
 
 
 def tensor_to_int8_list(tensor: torch.Tensor) -> list[int]:

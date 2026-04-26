@@ -36,24 +36,27 @@ export type AgentName = keyof typeof AGENT_CONFIG;
 
 export const PIPELINE_CONFIG = {
   max_retries: 3,
-  // Cap on the number of parallel MAC lanes Foundry instantiates per conv
-  // layer. Per-layer mac_parallelism = min(OC, MAX_PARALLEL_MACS). The FSM
-  // iterates OC in groups of mac_parallelism — this keeps the combinational
-  // cone small enough for Artix-7/Vivado timing and BRAM banking. 4 is
-  // the current frontend value and keeps the weight-memory read structure
-  // easy to bank into legal block RAM ports. Raising it trades synth time
-  // and BRAM banking complexity for throughput; dropping it trades
-  // throughput for synth time. Python
+  // Cap on the number of accumulator lanes in each conv output-channel
+  // group. Per-layer mac_parallelism = min(OC, MAX_PARALLEL_MACS). The
+  // current verified FSM still issues one lane's weight read / MAC per
+  // cycle; MP controls OC grouping and amortizes bias/scale/output overhead,
+  // but it is not yet MP cycle-parallel throughput. 4 is the current
+  // frontend value and keeps the serialized weight-memory structure small
+  // enough for Artix-7/Vivado while leaving a clean migration path to future
+  // banked BRAM datapaths. Python
   // frontends must read this same value when computing mac_parallelism and
   // pipeline_latency_cycles.
   MAX_PARALLEL_MACS: 4,
-  // Hard capability ceiling on per-layer bus width. Foundry's ability to emit
-  // correct bit-slicing scales poorly past a few thousand bits; burning Foundry
-  // + Surgeon attempts on a layer beyond that point is pure waste. 4096 bits
-  // = 512 channels of INT8 — covers ResNet-50 up to and including L2. Wider
-  // layers (L3/L4 at 8192/16384-bit buses) need tiled channel streaming,
-  // which is not yet implemented: the orchestrator fast-fails those layers
-  // with failure_class=architectural_unsupported and routes them directly to
+  // Hard capability ceiling on each packed activation stream. Foundry's
+  // ability to emit correct bit-slicing scales poorly past a few thousand
+  // bits; burning Foundry + Surgeon attempts on a layer beyond that point is
+  // pure waste. 4096 bits = 512 INT8 channels, which covers ResNet-50
+  // through L2 for conv/relu outputs and for each side of an add. Add layers
+  // carry lhs+rhs concatenated on data_in, so the gate checks input_width_bits
+  // / 2 for add instead of the combined top-level port width. L3/L4 at
+  // 8192/16384-bit activation streams need tiled channel streaming, which is
+  // not yet implemented: the orchestrator fast-fails those layers with
+  // failure_class=architectural_unsupported and routes them directly to
   // fail_abort (NOT to Surgeon — Surgeon cannot fix a capability gap).
   // Change this when tiled streaming ships; until then, architectural_unsupported
   // layers are reported separately in the pipeline summary, not as RTL failures.

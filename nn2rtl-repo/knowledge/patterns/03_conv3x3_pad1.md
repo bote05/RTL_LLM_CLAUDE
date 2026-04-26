@@ -216,7 +216,9 @@ endmodule
 formula is in `scripts/golden_impl.py::compute_conv2d_latency_cycles` and
 is derived from the scheduler's fill-row / fill-col startup plus
 `OC_PASSES * (MP * K_TOTAL + 4)` cycles per firing coord (synchronous ROM
-read prime, MAC loop, bias, scale, output). Do not re-derive; trust LayerIR.
+read prime, serialized lane MAC loop, bias, scale, output). Here `MP` is the
+number of accumulator lanes in an OC group; the current contract still issues
+one weight read / one MAC per cycle. Do not re-derive; trust LayerIR.
 
 ## Known failure modes
 

@@ -36,8 +36,9 @@ latency   = 3 * (IW + PW) + 4 + OC_PASSES * pass_cycles
           = 3 * (224 + 3) + 4 + OC_PASSES * (MP * 7*IC*7 + 4)
 ```
 
-For the stem (IC=3, OC=64, IW=224, MP=8): `OC_PASSES=8, K_TOTAL=147`,
-`pass_cycles = 8*147 + 4 = 1180`, `latency = 3*227 + 4 + 8*1180 = 10125`.
+For the current stem contract (IC=3, OC=64, IW=224, MP=4):
+`OC_PASSES=16, K_TOTAL=147`, `pass_cycles = 4*147 + 4 = 592`,
+`latency = 3*227 + 4 + 16*592 = 10157`.
 
 ## Required FSM, registers, coordinate logic
 
@@ -61,11 +62,12 @@ below are reproduced here in full so Foundry does not have to cross-open
   one multiply, one accumulate into `acc[lane_counter]`. After `MP`
   cycles all lanes of the current `k_counter` step are done — then
   `k_counter` advances. Per output pixel: `MP * K_TOTAL * OC_PASSES`
-  MAC cycles. For the 7×7 stem (IC=3, OC=64, MP=8) this is
-  `8 * 147 * 8 = 9408` MAC cycles per pixel. `MP` parallel reads from
+  MAC cycles. For the current 7×7 stem contract (IC=3, OC=64, MP=4) this is
+  `4 * 147 * 16 = 9408` MAC cycles per pixel. `MP` parallel reads from
   one flat async weight array become illegal BRAM port pressure and wide LUT
-  mux trees in Vivado. Serialization or explicit `weight_bank_paths` removes
-  the synth blocker.
+  mux trees in Vivado. The current verified contract removes that blocker
+  by serialization; `weight_bank_paths` are emitted for the future banked
+  datapath and must not be used to change latency unless LayerIR changes too.
 
 - **Window-freeze during OC group iteration (MANDATORY).** While
   iterating the `OC_PASSES` groups for one output pixel, input capture

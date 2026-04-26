@@ -20,8 +20,17 @@ pass_cycles = MP * K_TOTAL + 4        # +1 sync ROM read, then bias/scale/output
 latency = 1 + OC_PASSES * pass_cycles
 ```
 
-No line buffer. No window fill. The first input cycle produces the first
-output immediately (after OC_PASSES).
+No line buffer. No window fill. The latency is the input-accept cycle plus
+the serialized OC-group passes.
+
+Important naming note: in the current verified 1x1 architecture, `MP` is
+the number of accumulator lanes in an OC group, not the number of
+cycle-parallel BRAM reads. `lane_counter` serializes those lanes, so a pass
+issues `MP * K_TOTAL` distinct weight reads: for each `k_counter`, it visits
+lane 0, lane 1, ..., lane MP-1. This is not redundant work; those reads are
+for different output channels in the current OC group. A future true
+MP-read-per-cycle banked datapath would need a different latency contract
+(`K_TOTAL + overhead` per pass) and updated LayerIR generation.
 
 ## Required FSM states
 
@@ -36,7 +45,8 @@ Allowed transitions: STREAM → RUNNING → BIAS → SCALE → OUTPUT → (RUNNI
 
 ## Required registers
 
-- `acc [0:MP-1]` — accumulator per lane, width `PROD_W + $clog2(K_TOTAL)`
+- `acc [0:MP-1]` — accumulator per lane in the current OC group, width
+  `PROD_W + $clog2(K_TOTAL)`
   where `PROD_W = 16`.
 - `biased [0:MP-1]` — width = max(ACC_W, 32) + 1.
 - `scaled [0:MP-1]` — width = BIASED_W + SCALE_CONST_W.
@@ -50,8 +60,9 @@ Allowed transitions: STREAM → RUNNING → BIAS → SCALE → OUTPUT → (RUNNI
 
 ## Serialized weight reads
 
-ONE read from `weights[]` per cycle. The `lane_counter` rotates through
-0..MP-1 before `k_counter` advances, so each ST_RUNNING cycle does exactly:
+ONE read from `weights[]` per cycle in the current verified contract. The
+`lane_counter` rotates through 0..MP-1 before `k_counter` advances, so each
+ST_RUNNING cycle does exactly:
 
 ```
 weights[global_oc * K_TOTAL + k_counter]   // single memory read
@@ -60,12 +71,21 @@ weights[global_oc * K_TOTAL + k_counter]   // single memory read
 Never read MP weights per cycle from one flat async array — that produces MP
 parallel mux trees that Vivado cannot map into legal BRAM ports.
 
+If `LayerIR.weight_bank_paths` is present, the frontend has emitted one bank
+file per lane. Bank `lane` contains, for each `oc_group`, the full
+`K_TOTAL` vector for output channel `oc_group*MP + lane`, zero-padded for
+the tail group. That layout is ready for a future true lane-parallel BRAM
+datapath, but the current reference below still uses the flat `weights_path`
+and serialized one-read-per-cycle latency. Do not switch to parallel bank
+reads unless the LayerIR latency contract has also been generated for that
+banked datapath.
+
 ## Known failure modes
 
 See `08_common_bugs.md`. The historically most common pointwise bugs:
 
-- `rounding_mode_wrong` — arithmetic right-shift without the round-half-up
-  bias term.
+- `rounding_mode_wrong` — arithmetic right-shift without the current
+  half-up/toward-positive fixed-point bias term.
 - `sign_extension_error` — the bias adder inferred unsigned context.
 - `weights_packed_forbidden` — Surgeon attempted to pack weights after synth
   timed out; the right fix is serialized reads, not packing.
@@ -123,7 +143,6 @@ module <module_id> (
             state <= ST_STREAM;
             ready_in <= 1'b1;  // [INVARIANT:READY_IN_GATING]
             valid_out <= 1'b0;
-            outputs_emitted <= 0;
             // ... reset lane/k/oc counters ...
         end else begin
             case (state)
@@ -141,7 +160,7 @@ module <module_id> (
                         state <= ST_BIAS;
                 end
                 ST_BIAS:   /* biased[i] <= acc[i] + biases[global_oc + i] */
-                ST_SCALE:  /* scaled[i] <= (biased[i]*SCALE_MULT + SCALE_ROUND_BIAS) >>> SCALE_SHIFT */
+                ST_SCALE:  /* scaled[i] <= biased[i] * SCALE_MULT_CONST */
                 ST_OUTPUT: begin
                     // [INVARIANT:VALID_OUT_LATENCY]
                     for (i = 0; i < MP; i = i + 1)

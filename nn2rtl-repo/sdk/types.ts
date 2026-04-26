@@ -29,13 +29,14 @@ export interface LayerIR {
   // Conv2d geometry — populated by the modern frontends when op_type == "conv2d"
   stride?: number[];
   padding?: number[];
-  // Number of MAC lanes Foundry must instantiate for this layer. The FSM
-  // iterates OC in groups of `mac_parallelism` (ceil(OC / mac_parallelism)
-  // passes per output pixel), keeping each Artix-7/Vivado timing cone small.
-  // Only set for op_type == "conv2d" — other ops ignore it.
+  // Number of accumulator lanes in each output-channel group. In the current
+  // serialized-read conv contract, only one lane issues a weight read / MAC
+  // per cycle, selected by lane_counter; MP still controls OC_PASSES and the
+  // number of acc/biased/scaled registers. Only set for op_type == "conv2d".
   mac_parallelism?: number;
   // Optional BRAM-bank artifact paths for Vivado-oriented conv generation.
-  // Legacy modules may continue to use the flat weights_path.
+  // Layout is one file per lane; current verified RTL may continue to use the
+  // flat weights_path until the banked datapath contract is enabled.
   weight_bank_paths?: string[];
   // Optional IO-mode hooks for the tiled-channel architecture. packed_full is
   // the current default when omitted; channel_tiled is for future deep layers.

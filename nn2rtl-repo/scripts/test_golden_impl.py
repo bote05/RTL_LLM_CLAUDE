@@ -10,10 +10,15 @@ import torch
 from scripts.golden_impl import (
     bank_weight_values_for_mac_lanes,
     build_pipeline_ir_payload,
+    compute_conv2d_latency_cycles,
+    compute_scale_approx,
     fold_batch_norm_into_conv,
     int8_to_hex,
     is_absolute_posix_path,
     read_golden_vector_file,
+    requantize_fixed_point_int,
+    requantize_tensor_with_scale,
+    round_half_up_toward_pos_inf,
     write_golden_vector_file,
     write_pipeline_ir,
     write_signed_int8_hex,
@@ -110,6 +115,80 @@ def pack_int8_pair(lhs: int, rhs: int) -> int:
     return packed
 
 
+def test_round_half_up_toward_pos_inf_matches_rtl_tie_behavior() -> None:
+    """Pin the rounding helper to round-half-toward-+inf — matches RTL's
+    `(x + 1<<(SHIFT-1)) >>> SHIFT` exactly. Banker's-rounding (torch.round)
+    would give 0/2/-2/2 on these ties; the RTL gives 1/2/0/2.
+    """
+    ties = torch.tensor([0.5, 1.5, -0.5, 2.5, -2.5, -1.5])
+    expected = torch.tensor([1.0, 2.0, 0.0, 3.0, -2.0, -1.0])
+    got = round_half_up_toward_pos_inf(ties)
+    assert torch.equal(got, expected), f"got={got.tolist()} expected={expected.tolist()}"
+
+    # Non-tie values should match floor(x + 0.5) === nearest-int.
+    non_ties = torch.tensor([0.4, 0.6, -0.4, -0.6, 1.49, 1.51])
+    got_nt = round_half_up_toward_pos_inf(non_ties)
+    expected_nt = torch.tensor([0.0, 1.0, 0.0, -1.0, 1.0, 2.0])
+    assert torch.equal(got_nt, expected_nt)
+
+
+def test_requantize_tensor_with_scale_uses_round_half_up_not_bankers() -> None:
+    """Verify requantize uses the RTL-equivalent tie rule. We pick a
+    scale_factor of 0.5 so integer inputs land exactly on .5 boundaries:
+
+      input   raw         expected (half-up)   torch.round (banker's)
+      ----    ----        ------------------   ----------------------
+      1       0.5    -->  1                    0
+      3       1.5    -->  2                    2  (also even)
+      -1     -0.5    -->  0                    0  (also even)
+      -3     -1.5    -->  -1                   -2
+
+    The negative-tie case (-1.5) is the canonical disagreement: half-up
+    rounds toward +inf (-1), banker's rounds to even (-2). The RTL does
+    half-up, so the golden must too.
+    """
+    raw = torch.tensor([1, 3, -1, -3], dtype=torch.float32)
+    out = requantize_tensor_with_scale(raw, 0.5)
+    expected = torch.tensor([1.0, 2.0, 0.0, -1.0])
+    assert torch.equal(out, expected), f"got={out.tolist()} expected={expected.tolist()}"
+
+
+def test_compute_scale_approx_matches_sdk_constants_for_known_layer() -> None:
+    """SCALE_MULT/SCALE_SHIFT must match what the SDK orchestrator's
+    computeScaleApprox would emit for the same scale_factor. The known-
+    passing layer1_0_conv1 reference uses SCALE_MULT=29009, SCALE_SHIFT=20
+    for its scale_factor; pin that.
+    """
+    # scale_factor that produces (29009, 20) — derived from the conv1x1 reference.
+    sf = 29009 / (2 ** 20)
+    mult, shift = compute_scale_approx(sf)
+    assert (mult, shift) == (29009, 20), f"got ({mult}, {shift})"
+
+
+def test_requantize_fixed_point_int_matches_rtl_arithmetic() -> None:
+    """Walk a few accumulator values through the fixed-point requantize
+    and check the result matches an explicit re-derivation of the RTL
+    formula `(value * MULT + (1 << (SHIFT-1))) >>> SHIFT` (Python `>>` is
+    arithmetic-right-shift on signed ints, same as Verilog `>>>` on signed
+    regs). Saturation to [-128, 127] is also exercised.
+    """
+    sf = 0.000125  # picks shift in the 8..23 range
+    mult, shift = compute_scale_approx(sf)
+    cases = [
+        0,
+        1, -1,
+        100, -100,
+        1000, -1000,
+        2 ** 16, -(2 ** 16),
+        2 ** 24, -(2 ** 24),  # large enough to saturate
+    ]
+    for v in cases:
+        expected_raw = (v * mult + (1 << (shift - 1))) >> shift
+        expected = max(-128, min(127, expected_raw))
+        got = requantize_fixed_point_int(v, sf)
+        assert got == expected, f"v={v}: got={got} expected={expected}"
+
+
 def test_int8_to_hex_serializes_signed_values() -> None:
     assert int8_to_hex(-128) == "80"
     assert int8_to_hex(-1) == "FF"
@@ -143,6 +222,19 @@ def test_weight_bank_files_partition_conv_weights_by_mac_lane(tmp_path: Path) ->
     assert [path.name for path in paths] == ["conv_weights_bank0.hex", "conv_weights_bank1.hex"]
     assert paths[0].read_text(encoding="utf8") == "00\n01\n04\n05\n08\n09\n"
     assert paths[1].read_text(encoding="utf8") == "02\n03\n06\n07\n00\n00\n"
+
+
+def test_conv_latency_uses_serialized_mac_lane_contract() -> None:
+    assert compute_conv2d_latency_cycles([64, 64, 1, 1], mac_parallelism=4) == 4161
+
+    stem_latency = compute_conv2d_latency_cycles(
+        [64, 3, 7, 7],
+        input_shape=[1, 3, 224, 224],
+        stride=[2, 2],
+        padding=[3, 3],
+        mac_parallelism=4,
+    )
+    assert stem_latency == 10157
 
 
 def test_golden_vector_files_store_bus_bytes_per_sample_in_v2_header(tmp_path: Path) -> None:

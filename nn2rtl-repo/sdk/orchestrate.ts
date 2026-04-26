@@ -248,16 +248,27 @@ function reportPath(fileName: string): string {
 
 /**
  * Bus-width capability gate. Returns a `fix_hint` string when a layer's
- * input or output bus exceeds `PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS`,
- * or null when the layer is within capability. Not network-specific.
+ * per-stream input or output bus exceeds
+ * `PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS`, or null when the layer is within
+ * capability. Add layers pack lhs and rhs into one top-level data_in port, so
+ * they are checked by each operand width rather than by the concatenated
+ * `input_width_bits`.
  */
 export function checkBusWidthCapability(layer: LayerIR): string | null {
   const cap = PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS;
-  const overIn = layer.input_width_bits > cap;
+  const effectiveInputWidthBits =
+    layer.op_type === "add" ? layer.input_width_bits / 2 : layer.input_width_bits;
+  const overIn = effectiveInputWidthBits > cap;
   const overOut = layer.output_width_bits > cap;
   if (!overIn && !overOut) return null;
   const which: string[] = [];
-  if (overIn) which.push(`input_width_bits=${layer.input_width_bits}`);
+  if (overIn) {
+    which.push(
+      layer.op_type === "add"
+        ? `per_operand_input_width_bits=${effectiveInputWidthBits} (packed input_width_bits=${layer.input_width_bits})`
+        : `input_width_bits=${layer.input_width_bits}`,
+    );
+  }
   if (overOut) which.push(`output_width_bits=${layer.output_width_bits}`);
   return (
     `Layer ${layer.module_id} requires tiled channel streaming which is not yet implemented. ` +
@@ -692,7 +703,8 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
     lines.push(
       "- STRUCTURAL PREFLIGHT FAILURE: the RTL parsed but violated a structural rule" +
       " before simulation. The fix_hint names the exact rule (e.g. line_buffer_missing," +
-      " window_not_registered, weights_packed_forbidden, readmemh_missing, output_counter_missing)." +
+      " window_not_registered, weights_packed_forbidden, readmemh_missing," +
+      " procedural_declaration_forbidden, output_counter_missing, coord_scheduler_missing)." +
       " Repair the indicted construct and do not touch unrelated logic.",
     );
   } else if (isSynthOnlyFailure) {
@@ -1355,17 +1367,20 @@ export function structuralPreflightViolations(
 
   // Rule 4: weights and biases must use $readmemh. Skipped when the
   // top-level instantiates `conv_datapath`: that library module owns the
-  // weight/bias arrays and their $readmemh loaders, driven by the
-  // WEIGHTS_PATH / BIAS_PATH module parameters.
+  // weight/bias arrays and their $readmemh loaders, driven by WEIGHTS_PATH /
+  // BIAS_PATH module parameters. Accept the current flat single-array form
+  // `$readmemh(..., weights)` and the future banked form
+  // `$readmemh(..., weights_bank<N>)`.
   if (layer.op_type === "conv2d" && !usesConvDatapath) {
-    const readmemhWeightsRe = /\$readmemh\s*\(\s*"[^"]*"\s*,\s*weights\s*\)/;
+    const readmemhWeightsRe = /\$readmemh\s*\(\s*"[^"]*"\s*,\s*weights(?:_bank\d+)?\s*\)/;
     if (!readmemhWeightsRe.test(source)) {
       violations.push({
         rule: "readmemh_missing",
         detail:
           "Weights must be loaded via $readmemh(\"<weights_path>\", weights) " +
-          "inside an initial block, OR the top-level must instantiate " +
-          "conv_datapath with a WEIGHTS_PATH parameter. Neither was found.",
+          "or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial " +
+          "block, OR the top-level must instantiate conv_datapath with " +
+          "WEIGHTS_PATH/BIAS_PATH parameters. None was found.",
       });
     }
     if (layer.bias_path) {
