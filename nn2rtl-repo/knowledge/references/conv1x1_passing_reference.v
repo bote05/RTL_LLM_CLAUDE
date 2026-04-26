@@ -1,18 +1,37 @@
-// Pointwise (1x1) conv2d reference - serialized, Vivado/Artix-7 friendly.
+// Pointwise (1x1) conv2d reference - serialized, Vivado/Artix-7 friendly,
+// DSP48E1-inferring.
 //
 // Current verified contract
 // =========================
 // MP is the number of accumulator lanes in one output-channel group. A
-// lane_counter selects exactly one lane per cycle, so each ST_RUNNING cycle
-// performs one synchronous ROM read, one multiply, and one accumulation into
-// acc[lane_counter]. A pass therefore costs MP*K_TOTAL issue cycles plus one
-// trailing consume, BIAS, SCALE, and OUTPUT: MP*K_TOTAL + 4 cycles.
+// lane_counter selects exactly one lane per cycle, so each ST_RUNNING
+// "issue" cycle performs one synchronous ROM read, one multiplier-input
+// register, and (one cycle later) one multiply, and (one more cycle
+// later) one accumulation into acc[lane_counter].
 //
-// LayerIR.weight_bank_paths may exist, but this reference intentionally uses
-// the flat weights_path because the banked-parallel datapath has a different
-// latency contract. Do not switch this file to MP parallel bank reads unless
-// compute_conv2d_latency_cycles() and the static testbench expectations are
-// updated at the same time.
+// Pipeline stages from issue to acc-write:
+//   stage 1 (1 cycle delay):  weight_q       <= weights[bank_addr]
+//                             tap stays as the registered in_latch read
+//                             mac_*_q1       <= captured issue metadata
+//   stage 2 (1 more cycle):   mul_q          <= weight_q * in_latch[mac_k_q1]
+//                             mac_*_q2       <= mac_*_q1
+//   stage 3 (1 more cycle):   acc[mac_lane_q2] <= acc + mul_q   (DSP P-reg)
+//
+// Per pass (one OC group): MP*K_TOTAL issue cycles + 2 trailing drain
+// cycles + ST_BIAS (1) + ST_SCALE (1) + ST_OUTPUT (1) = MP*K_TOTAL + 6.
+// (compute_conv2d_latency_cycles in scripts/golden_impl.py uses
+// CONV_PIPELINE_STAGES = 6 for this contract.)
+//
+// (* use_dsp = "yes" *) on the registered `mul_q` is the canonical Vivado
+// DSP-inference pattern: a registered multiplier output (MREG=1) feeding
+// an external accumulator. The MP-way mux on `acc[mac_lane_q2]` lives in
+// LUT fabric; the multiplier itself maps to one DSP48E1 block.
+//
+// LayerIR.weight_bank_paths may exist, but this reference intentionally
+// uses the flat weights_path because the banked-parallel datapath has a
+// different latency contract. Do not switch this file to MP parallel
+// bank reads unless compute_conv2d_latency_cycles() and the static
+// testbench expectations are updated at the same time.
 
 module layer1_0_conv1 (
     input  wire              clk,
@@ -94,11 +113,23 @@ module layer1_0_conv1 (
         weight_q <= weights[weight_read_addr];
     end
 
-    reg                            mac_valid_q;
-    reg [$clog2(MP+1)-1:0]         mac_lane_q;
-    reg [$clog2(K_TOTAL+1)-1:0]    mac_k_q;
-    reg [OC_INDEX_W-1:0]           mac_global_oc_q;
+    // Stage 1: capture issue metadata. Stage 2 propagates to _q2 alongside
+    // the registered multiplier output `mul_q`. The consume reads _q2.
+    reg                            mac_valid_q1;
+    reg [$clog2(MP+1)-1:0]         mac_lane_q1;
+    reg [$clog2(K_TOTAL+1)-1:0]    mac_k_q1;
+    reg [OC_INDEX_W-1:0]           mac_global_oc_q1;
     reg                            mac_done_issuing;
+
+    reg                            mac_valid_q2;
+    reg [$clog2(MP+1)-1:0]         mac_lane_q2;
+    reg [OC_INDEX_W-1:0]           mac_global_oc_q2;
+
+    // Registered multiplier output. `(* use_dsp = "yes" *)` on the reg
+    // declaration forces Vivado to map this multiply into a DSP48E1's
+    // M-register, instead of leaving the 8x8 signed multiply in LUT
+    // fabric (which is what happened with the prior wire-based form).
+    (* use_dsp = "yes" *) reg signed [PROD_W-1:0] mul_q;
 
     integer i, lane;
     integer bias_oc;
@@ -113,11 +144,15 @@ module layer1_0_conv1 (
             lane_counter     <= 0;
             oc_group         <= 0;
             data_out         <= {(OC*8){1'b0}};
-            mac_valid_q      <= 1'b0;
-            mac_lane_q       <= 0;
-            mac_k_q          <= 0;
-            mac_global_oc_q  <= 0;
+            mac_valid_q1     <= 1'b0;
+            mac_lane_q1      <= 0;
+            mac_k_q1         <= 0;
+            mac_global_oc_q1 <= 0;
+            mac_valid_q2     <= 1'b0;
+            mac_lane_q2      <= 0;
+            mac_global_oc_q2 <= 0;
             mac_done_issuing <= 1'b0;
+            mul_q            <= 0;
             for (i = 0; i < IC; i = i + 1)
                 in_latch[i] <= 8'sd0;
             for (lane = 0; lane < MP; lane = lane + 1) begin
@@ -126,16 +161,29 @@ module layer1_0_conv1 (
                 scaled[lane] <= 0;
             end
         end else begin
-            if (mac_valid_q && mac_global_oc_q < OC) begin
-                acc[mac_lane_q] <= acc[mac_lane_q] +
-                    $signed(weight_q) * $signed(in_latch[mac_k_q]);
+            // Stage 2: register the multiplier output. Use mac_k_q1 to
+            // index in_latch so the multiplier inputs are paired with the
+            // issue at the right cycle. mac_valid_q2 / mac_lane_q2 /
+            // mac_global_oc_q2 forward stage-1's metadata one cycle later
+            // so the consume sees the right targeting.
+            mul_q            <= $signed(weight_q) * $signed(in_latch[mac_k_q1]);
+            mac_valid_q2     <= mac_valid_q1;
+            mac_lane_q2      <= mac_lane_q1;
+            mac_global_oc_q2 <= mac_global_oc_q1;
+
+            // Stage 3: accumulate the registered product into the lane's
+            // accumulator. The MP-way mux on `acc[mac_lane_q2]` lives in
+            // LUT fabric; the DSP48E1 only owns the multiplier itself.
+            if (mac_valid_q2 && mac_global_oc_q2 < OC) begin
+                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(mul_q);
             end
 
             case (state)
 
             ST_STREAM: begin
-                valid_out   <= 1'b0;
-                mac_valid_q <= 1'b0;
+                valid_out    <= 1'b0;
+                mac_valid_q1 <= 1'b0;
+                mac_valid_q2 <= 1'b0;
                 if (valid_in) begin
                     for (i = 0; i < IC; i = i + 1)
                         in_latch[i] <= $signed(data_in[i*8 +: 8]);
@@ -152,14 +200,25 @@ module layer1_0_conv1 (
 
             ST_RUNNING: begin
                 if (mac_done_issuing) begin
-                    mac_valid_q      <= 1'b0;
-                    mac_done_issuing <= 1'b0;
-                    state            <= ST_BIAS;
+                    // Stop issuing. Wait two more cycles for stages 2 and
+                    // 3 to drain (mul_q forwards last issue's product;
+                    // consume processes it). State transitions to ST_BIAS
+                    // when mac_valid_q2 has gone to 0, which means the
+                    // last consume just landed.
+                    mac_valid_q1 <= 1'b0;
+                    if (!mac_valid_q1 && !mac_valid_q2) begin
+                        // Both stages drained. Last consume has landed.
+                        mac_done_issuing <= 1'b0;
+                        state            <= ST_BIAS;
+                    end
                 end else begin
-                    mac_lane_q       <= lane_counter;
-                    mac_k_q          <= k_counter;
-                    mac_global_oc_q  <= current_global_oc;
-                    mac_valid_q      <= 1'b1;
+                    // Issue cycle: stage 1 captures metadata for this
+                    // (lane, k). The address is already on `weight_q`'s
+                    // input; weight_q will register it next cycle.
+                    mac_lane_q1      <= lane_counter;
+                    mac_k_q1         <= k_counter;
+                    mac_global_oc_q1 <= current_global_oc;
+                    mac_valid_q1     <= 1'b1;
 
                     if (lane_counter == MP - 1) begin
                         lane_counter <= 0;

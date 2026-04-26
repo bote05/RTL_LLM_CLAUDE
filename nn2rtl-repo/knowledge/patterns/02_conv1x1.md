@@ -16,7 +16,8 @@ From `scripts/golden_impl.py::compute_conv2d_latency_cycles`:
 IC = weight_shape[1]
 MP = mac_parallelism
 OC_PASSES = ceil(OC / MP)
-pass_cycles = MP * K_TOTAL + 4        # +1 sync ROM read, then bias/scale/output
+pass_cycles = MP * K_TOTAL + 6        # 3-stage MAC pipeline (weight ROM, registered DSP mul, indexed acc)
+                                      #   + ST_BIAS + ST_SCALE + ST_OUTPUT
 latency = 1 + OC_PASSES * pass_cycles
 ```
 

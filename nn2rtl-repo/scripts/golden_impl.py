@@ -39,7 +39,7 @@ SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 #   OUTPUT — >>> SCALE_SHIFT, saturate, pack to data_out
 # Separating BIAS from SCALE halves the critical-path logic depth compared to
 # combining them, which is the primary lever for Vivado timing on Artix-7.
-CONV_PIPELINE_STAGES = 4
+CONV_PIPELINE_STAGES = 6
 
 # Cap on the number of MAC accumulator lanes Foundry
 # instantiates per conv layer. Must stay in sync with PIPELINE_CONFIG.
@@ -88,24 +88,29 @@ def compute_conv2d_latency_cycles(
 
     Two latency shapes depending on the kernel size:
 
-    * **Pointwise (KH = KW = 1)** — the RTL is a single-pixel output-stationary
-      MAC group. The current verified contract serializes the MP accumulator
-      lanes, so one OC pass issues ``MP * IC * 1 * 1`` MAC cycles plus the
-      shared post-MAC pipeline. Vivado-friendly synchronous ROM reads add a
-      read-prime cycle per OC pass.
-      Formula: ``1 + OC_PASSES * (MP * IC * KH * KW + 4)``.
+    * **Pointwise (KH = KW = 1)** — the RTL is a single-pixel output-
+      stationary MAC group. The current verified contract serializes the
+      MP accumulator lanes through a 3-stage MAC pipeline (synchronous
+      weight ROM read → registered DSP multiply → indexed accumulator
+      add). One OC pass issues ``MP * IC * 1 * 1`` MAC cycles, then 2
+      trailing drain cycles for stages 2 and 3, then BIAS / SCALE / OUTPUT.
+      Formula: ``1 + OC_PASSES * (MP * IC * KH * KW + CONV_PIPELINE_STAGES)``
+      with ``CONV_PIPELINE_STAGES = 6``.
 
-    * **Spatial (KH*KW > 1)** — the RTL uses a line buffer + sliding-window
-      datapath (see nn2rtl-plugin/agents/foundry.md § "Spatial conv datapath").
-      The first valid_out only fires once the first complete receptive-field
-      window has been streamed in, plus the MAC and the post-MAC pipeline:
-      ``max(KH - 1 - PH, 0) * (IW + PW) + max(KW - PW, 1) + OC_PASSES*(MP*K_TOTAL + 4)``
+    * **Spatial (KH*KW > 1)** — the RTL uses a line buffer + sliding-
+      window datapath (see ``nn2rtl-plugin/agents/foundry.md § Spatial
+      conv datapath``). The first valid_out only fires once the first
+      complete receptive-field window has been streamed in, plus the MAC
+      and the post-MAC pipeline:
+      ``max(KH - 1 - PH, 0) * (IW + PW) + max(KW - PW, 1) +
+       OC_PASSES * (MP*K_TOTAL + CONV_PIPELINE_STAGES)``
       where ``IW = input_shape[3]`` and ``PH, PW`` come from the layer's
-      padding. If the frontend passed ``input_shape`` and ``padding``, we use
-      that formula; otherwise we fall back to the pointwise shape with a
-      conservative warning (the caller just gets the pointwise-shaped
-      ``OC_PASSES * (MP*K_TOTAL + 4)`` term, without window fill). That will
-      mismatch actual spatial RTL — always pass the full layer geometry.
+      padding. If the frontend passed ``input_shape`` and ``padding``, we
+      use that formula; otherwise we fall back to the pointwise shape
+      with a conservative warning (the caller just gets the pointwise-
+      shaped ``OC_PASSES * (MP*K_TOTAL + CONV_PIPELINE_STAGES)`` term,
+      without window fill). That will mismatch actual spatial RTL —
+      always pass the full layer geometry.
     """
     if len(weight_shape) < 4:
         return PIPELINE_LATENCY_CYCLES["conv2d"]
@@ -113,18 +118,21 @@ def compute_conv2d_latency_cycles(
     oc_i, ic_i, kh_i, kw_i = int(oc), int(ic), int(kh), int(kw)
     k_total = ic_i * kh_i * kw_i
 
-    # OC-group iteration with serialized accumulator lanes:
-    # Per OC pass, ST_RUNNING runs MP*K_TOTAL issue cycles. Each issue selects
-    # exactly one lane with lane_counter, reads one flat weight, and consumes
-    # that registered ROM output on the next cycle. After the last issue, one
-    # trailing-consume cycle drains the final weight_q, then ST_BIAS (1) +
+    # OC-group iteration with serialized accumulator lanes and a registered
+    # multiplier output (DSP48E1 MREG=1, Vivado-inferred):
+    # Per OC pass, ST_RUNNING runs MP*K_TOTAL issue cycles. Each issue
+    # selects one lane with lane_counter and reads one flat weight; the
+    # MAC pipeline is then 3 stages deep (weight_q ROM read → mul_q
+    # registered product → acc accumulate). After the last issue, TWO
+    # trailing-consume cycles drain stages 2 and 3, then ST_BIAS (1) +
     # ST_SCALE (1) + ST_OUTPUT (1) wrap up the pass — giving
-    # MP*K_TOTAL + 4 cycles per pass. The LAST pass's ST_OUTPUT asserts
-    # valid_out; the TB sampling offset is already absorbed into the formula.
+    # MP*K_TOTAL + 6 cycles per pass (CONV_PIPELINE_STAGES = 6). The
+    # LAST pass's ST_OUTPUT asserts valid_out; the TB sampling offset is
+    # absorbed into the formula.
     mp = int(mac_parallelism) if mac_parallelism and mac_parallelism > 0 else oc_i
     mp = min(mp, oc_i) if oc_i > 0 else mp
     oc_passes = (oc_i + mp - 1) // mp if mp > 0 and oc_i > 0 else 1
-    pass_cycles = mp * k_total + 4
+    pass_cycles = mp * k_total + CONV_PIPELINE_STAGES
 
     if kh_i * kw_i <= 1:
         # Pointwise — no window fill. First input triggers output_fires

@@ -558,8 +558,10 @@ PASS in run #2 after a hardening pass. Concrete deltas from this session:
   lanes" because the verified RTL serializes lanes (`lane_counter`
   rotates 0..MP-1 inside each `k_counter` step). `MP` is an
   accumulator-group size, not parallel BRAM throughput; pass cycles =
-  `MP*K_TOTAL + 4`. `weight_bank_paths` is documented as future banked-
-  parallel datapath metadata, not active behaviour.
+  `MP*K_TOTAL + 6` after the registered-`mul_q` DSP refactor (was `+4`
+  pre-refactor; see the 2026-04-26 DSP-inference entry below).
+  `weight_bank_paths` is documented as future banked-parallel datapath
+  metadata, not active behaviour.
 - **Bus-width capability gate fixed for `op_type == "add"`**:
   `checkBusWidthCapability` previously used `input_width_bits` directly,
   which for residual adds is `2 × output_width_bits` (lhs+rhs packed).
@@ -595,6 +597,34 @@ PASS in run #2 after a hardening pass. Concrete deltas from this session:
   it), `scripts/vivado_smoke.ts` (one-shot Vivado synth on the 1×1
   reference for PPA-only data points). All four are in
   `scripts/` and committed.
+- **Pipeline run #3 (after bit-exact + use_dsp + doc honesty)**:
+  **first-shot pass**, no Surgeon retry. Total cost **$0.62** —
+  56% cheaper than run #2's $1.36, 12× cheaper than the broken run #1.
+  `max_error = 0` across all 6,422,528 output samples; `first_mismatch_index = -1`;
+  bit-identical to RTL. `LUT=1790, FF=1431, DSP=0, BRAM18=0,
+  WNS=9.71 ns, Fmax=97.15 MHz`. **Honest finding flagged**: the
+  `(* use_dsp = "yes" *)` attribute on the `wire`-form `mul_q`
+  did NOT trigger Vivado DSP inference (DSP=0 was the same as run #2
+  without the attribute). Root cause: a wire-attribute on a
+  combinational signal whose consumer is a multiplexed array-write
+  (`acc[mac_lane_q] <= acc + mul_q`) doesn't match Vivado's DSP-
+  inference pattern. The fix is the registered-`mul_q` MAC pipeline
+  (next entry).
+- **Registered-`mul_q` DSP-inference refactor**: `mul_q` becomes a
+  `(* use_dsp = "yes" *) reg signed [PROD_W-1:0]` driven inside an
+  `always @(posedge clk)` block. This is the canonical Vivado DSP48E1
+  MREG=1 pattern: registered multiplier output feeding an external
+  accumulator. Adds one pipeline stage (`mac_valid_q1` → `mac_valid_q2`,
+  `mac_lane_q1` → `mac_lane_q2`, etc.), so per OC pass costs
+  `MP*K_TOTAL + 6` cycles instead of `+4` — two extra trailing drain
+  cycles for the deeper pipeline. `compute_conv2d_latency_cycles`,
+  `knowledge/patterns/02_conv1x1.md`, `03_conv3x3_pad1.md`, and the
+  `test_conv_latency_uses_serialized_mac_lane_contract` test all
+  updated atomically (per the saved memory rule). Layer1_0_conv1
+  latency goes from 4161 to **4193** cycles — 0.77% slower per pixel,
+  in exchange for proper DSP usage on the multiplier (1 DSP per layer,
+  vs 0 before). For thesis-defensibility this is the right trade: real
+  DSPs in the report, real Artix-7-idiomatic RTL.
 
 ---
 
