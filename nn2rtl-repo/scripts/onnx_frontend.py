@@ -912,7 +912,7 @@ def _spec_output_width_bits(spec: OnnxLayerSpec) -> int:
 # ---------------------------------------------------------------------------
 
 def _conv_mac_parallelism(spec: OnnxLayerSpec) -> int:
-    """mac_parallelism for an ONNX conv layer — min(OC, MAX_PARALLEL_MACS)."""
+    """Accumulator-group size for an ONNX conv layer: min(OC, MAX_PARALLEL_MACS)."""
     if spec.weight is None or len(spec.weight.shape) < 1:
         return 1
     return conv_mac_parallelism(int(spec.weight.shape[0]))

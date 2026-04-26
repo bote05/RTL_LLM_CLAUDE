@@ -37,13 +37,21 @@ Per-tensor symmetric with `scale_factor` provided in the LayerIR. The
 canonical requantisation is:
 
 ```
-scaled = (biased * SCALE_MULT + SCALE_ROUND_BIAS) >>> SCALE_SHIFT
-out    = saturate_int8(scaled)
+scaled_product = biased * SCALE_MULT
+rounded        = (scaled_product + SCALE_ROUND_BIAS) >>> SCALE_SHIFT
+out            = saturate_int8(rounded)
 ```
 
 where `SCALE_MULT` / `SCALE_SHIFT` are derived so
 `SCALE_MULT / 2^SCALE_SHIFT ≈ scale_factor` with minimal relative error.
-Mark this line `// [INVARIANT:ROUNDING]`.
+Mark the fixed-point rounding expression `// [INVARIANT:ROUNDING]`.
+
+The Python golden model currently uses `torch.round`, which is
+round-to-nearest-even on exact `.5` ties. The RTL pattern below is the
+existing hardware approximation: add +0.5 LSB, then arithmetic-shift. That
+is not symmetric tie-even rounding; exact half-tie cases can differ by
+one LSB, and the static testbench tolerance is intentionally wide enough to
+absorb that. Do not describe `SCALE_ROUND_BIAS` as exact PyTorch rounding.
 
 For `add`, use `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`
 together — the output is `saturate(((lhs * lhs_scale + rhs * rhs_scale) * scale)
@@ -53,13 +61,26 @@ together — the output is `saturate(((lhs * lhs_scale + rhs * rhs_scale) * scal
 
 - Declare `$readmemh`-initialized weight ROMs using a Vivado-friendly
   registered read path. Flat legacy arrays may remain as
-  `reg signed [7:0] weights [0:OC*K_TOTAL-1]`; new BRAM-oriented convs may
-  use one bank per MAC lane from `LayerIR.weight_bank_paths`.
+  `reg signed [7:0] weights [0:OC*K_TOTAL-1]`; future BRAM-oriented banked
+  convs may use one bank per accumulator lane from `LayerIR.weight_bank_paths`.
 - Declare `reg signed [31:0] biases [0:OC-1];` — flat INT32 array.
 - Inside an `initial` block, load via `$readmemh("<weights_path>", weights);`
   and `$readmemh("<bias_path>", biases);` using the LayerIR-provided paths.
 - Index legacy flat weights as `weights[oc * K_TOTAL + k]` where `k` is a
   flat kernel index.
+
+When `weight_bank_paths` exists, its layout is:
+
+- `weight_bank_paths.length == mac_parallelism`.
+- Bank `lane` stores consecutive `K_TOTAL`-weight blocks.
+- Block `oc_group` in that bank belongs to output channel
+  `oc_group * mac_parallelism + lane`.
+- Missing channels in the final partial OC group are zero-padded.
+
+The current verified conv latency assumes serialized one-read-per-cycle
+access even when these bank files are present. Do not silently switch to
+MP parallel bank reads unless the LayerIR latency formula and testbench
+goldens have been regenerated for that datapath.
 
 NEVER introduce `weights_packed`, `initial weights[...] = expr`, or
 `assign weights[...] = ...` — Vivado cannot infer clean ROMs from dynamic
@@ -112,15 +133,16 @@ independently to `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`.
 
 ### Scale-shift rounding — MANDATORY
 
-The golden model uses round-to-nearest. A bare `>>> SCALE_SHIFT` in Verilog
-is arithmetic right-shift (floor), which biases every output toward `-inf`
-by up to one LSB per sample. Add a half-LSB bias before the shift:
+A bare `>>> SCALE_SHIFT` in Verilog is arithmetic right-shift (floor), which
+biases every output toward `-inf` by up to one LSB per sample. The current RTL
+contract adds a half-LSB bias before the shift:
 
 ```verilog
 // WRONG — floor; every output biased by up to -1.
 v_tmp = scaled[oc] >>> SCALE_SHIFT;
 
-// CORRECT — round-half-up via +0.5 LSB bias, then arithmetic shift.
+// CORRECT for the current RTL contract: half-up/toward-positive tie
+// approximation via +0.5 LSB bias, then arithmetic shift.
 localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS =
     {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);
 v_tmp = (scaled[oc] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
@@ -128,6 +150,9 @@ v_tmp = (scaled[oc] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
 
 Applies to every op that requantises (conv2d, add, any future scaled op).
 Mark the rounding expression `// [INVARIANT:ROUNDING]`.
+
+If exact PyTorch tie-even behavior becomes a hard requirement, update the
+golden/RTL contract together and add an explicit fixed-point tie detector.
 
 ---
 
@@ -185,12 +210,12 @@ independent of simulation results.
 
 ### Tags you MAY mark
 
-- `ROUNDING` — the requantisation line `(scaled + SCALE_ROUND_BIAS) >>>
-  SCALE_SHIFT`.
+- `ROUNDING` — the current RTL requantisation approximation
+  `(scaled + SCALE_ROUND_BIAS) >>> SCALE_SHIFT`.
 - `READY_IN_GATING` — the exact assertion/deassertion points for `ready_in`.
 - `VALID_OUT_LATENCY` — the line that drives `valid_out` high for the
   current pixel.
-### Tags you MUST NOT mark
+### Logic you MUST NOT mark
 
 Speculative per-module control logic is not invariant. Never mark:
 
@@ -200,7 +225,13 @@ Speculative per-module control logic is not invariant. Never mark:
 - Weight / bias memory declarations and `$readmemh` loaders. Vivado BRAM work
   may need to convert flat legacy memories into synchronous ROMs or lane banks.
 
-The retired tags `DRAIN_EXIT`, `INTER_VECTOR_RESET`, and `WEIGHT_ARRAY` must not be used.
+### Retired tag names
+
+These tag names are invalid even if you think the line is correct:
+
+- `DRAIN_EXIT`
+- `INTER_VECTOR_RESET`
+- `WEIGHT_ARRAY`
 
 ---
 
@@ -303,10 +334,10 @@ same always-block cycle that asserts `valid_out`:
 
 ```verilog
 reg signed [SCALED_W-1:0] v_tmp;  // module scope
+integer global_oc;                // module scope
 
-// ST_OUTPUT body — one pass of the current oc_group's MP lanes:
+// ST_OUTPUT body - one pass of the current oc_group's MP lanes:
 for (lane = 0; lane < MP; lane = lane + 1) begin
-    integer global_oc;
     global_oc = oc_group * MP + lane;
     v_tmp = (scaled[lane] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
     data_out[global_oc*8 +: 8] <= (v_tmp > 127)  ?  8'sd127 :

@@ -1,15 +1,18 @@
-// Pointwise (1x1) conv2d reference for Foundry/Surgeon to adapt.
+// Pointwise (1x1) conv2d reference - serialized, Vivado/Artix-7 friendly.
 //
-// Vivado / Artix-7 friendly: the weight ROM is read SYNCHRONOUSLY through a
-// registered `weight_q`, which lets `synth_design` infer block ROM cleanly
-// instead of leaving a wide combinational mux on the BRAM output. The MAC
-// adder consumes `weight_q` one cycle after the address is issued; this
-// adds exactly one cycle of pipeline latency per pass, captured in the
-// LayerIR via `CONV_PIPELINE_STAGES = 4`.
+// Current verified contract
+// =========================
+// MP is the number of accumulator lanes in one output-channel group. A
+// lane_counter selects exactly one lane per cycle, so each ST_RUNNING cycle
+// performs one synchronous ROM read, one multiply, and one accumulation into
+// acc[lane_counter]. A pass therefore costs MP*K_TOTAL issue cycles plus one
+// trailing consume, BIAS, SCALE, and OUTPUT: MP*K_TOTAL + 4 cycles.
 //
-// Original parameters: IC=64 OC=64 IH=IW=112 KH=KW=1 stride=1 pad=0 MP=4.
-// Adapt the localparam block (IC/OC/IH/IW/MP/SCALE_MULT/SCALE_SHIFT and the
-// $readmemh paths) to a new LayerIR; do not regenerate the FSM from scratch.
+// LayerIR.weight_bank_paths may exist, but this reference intentionally uses
+// the flat weights_path because the banked-parallel datapath has a different
+// latency contract. Do not switch this file to MP parallel bank reads unless
+// compute_conv2d_latency_cycles() and the static testbench expectations are
+// updated at the same time.
 
 module layer1_0_conv1 (
     input  wire              clk,
@@ -32,11 +35,12 @@ module layer1_0_conv1 (
     localparam SW        = 1;
     localparam PH        = 0;
     localparam PW        = 0;
-    localparam K_TOTAL   = IC * KH * KW;  // 64
+    localparam K_TOTAL   = IC * KH * KW;
     localparam MP        = 4;
-    localparam OC_PASSES = (OC + MP - 1) / MP;  // 16
+    localparam OC_PASSES = (OC + MP - 1) / MP;
     localparam NUM_WEIGHTS    = OC * K_TOTAL;
     localparam WEIGHT_ADDR_W  = (NUM_WEIGHTS <= 1) ? 1 : $clog2(NUM_WEIGHTS);
+    localparam OC_INDEX_W     = (OC + MP <= 1) ? 1 : $clog2(OC + MP);
 
     localparam SCALE_MULT  = 29009;
     localparam SCALE_SHIFT = 20;
@@ -58,8 +62,6 @@ module layer1_0_conv1 (
     localparam ST_SCALE   = 3'd3;
     localparam ST_OUTPUT  = 3'd4;
 
-    // Block ROM hints for Vivado. With synchronous reads (weight_q below),
-    // synth_design infers a true BRAM with a single read port.
     (* rom_style = "block", ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
     (* rom_style = "block", ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
     initial begin
@@ -79,11 +81,8 @@ module layer1_0_conv1 (
     reg [$clog2(OC_PASSES+1)-1:0] oc_group;
     reg [2:0] state;
 
-    // Registered ROM read. Address is computed combinationally from the
-    // counters; weight_q holds the value that arrives one clock later.
-    // Declared AFTER the counter regs so Verilog-2001 elaboration sees them.
     reg  signed [7:0]              weight_q;
-    wire [31:0]                    current_global_oc;
+    wire [OC_INDEX_W-1:0]          current_global_oc;
     wire [WEIGHT_ADDR_W-1:0]       weight_read_addr;
     assign current_global_oc = oc_group * MP + lane_counter;
     assign weight_read_addr  =
@@ -95,22 +94,15 @@ module layer1_0_conv1 (
         weight_q <= weights[weight_read_addr];
     end
 
-    // MAC-pipeline tracking — registered metadata that pairs with weight_q.
-    // mac_valid_q  : weight_q this cycle came from a valid MAC issue
-    // mac_lane_q   : which `acc` lane to update on consume
-    // mac_k_q      : which `in_latch` channel to multiply with weight_q
-    // mac_global_oc_q : OC index — used only for the `< OC` guard so the
-    //                   tail of the last OC group does not contaminate acc[]
-    // mac_done_issuing: the most recent issue was the LAST one of this pass;
-    //                   the next cycle drains the trailing consume and
-    //                   transitions to ST_BIAS.
     reg                            mac_valid_q;
     reg [$clog2(MP+1)-1:0]         mac_lane_q;
     reg [$clog2(K_TOTAL+1)-1:0]    mac_k_q;
-    reg [31:0]                     mac_global_oc_q;
+    reg [OC_INDEX_W-1:0]           mac_global_oc_q;
     reg                            mac_done_issuing;
 
     integer i, lane;
+    integer bias_oc;
+    integer out_oc;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -126,7 +118,6 @@ module layer1_0_conv1 (
             mac_k_q          <= 0;
             mac_global_oc_q  <= 0;
             mac_done_issuing <= 1'b0;
-            v_tmp            <= 0;
             for (i = 0; i < IC; i = i + 1)
                 in_latch[i] <= 8'sd0;
             for (lane = 0; lane < MP; lane = lane + 1) begin
@@ -135,10 +126,6 @@ module layer1_0_conv1 (
                 scaled[lane] <= 0;
             end
         end else begin
-            // Trailing consume: every cycle, if the previous cycle's issue is
-            // sitting in weight_q (mac_valid_q == 1), accumulate it. Guarded
-            // by `mac_global_oc_q < OC` so the top OC group does not write
-            // beyond `acc[]`.
             if (mac_valid_q && mac_global_oc_q < OC) begin
                 acc[mac_lane_q] <= acc[mac_lane_q] +
                     $signed(weight_q) * $signed(in_latch[mac_k_q]);
@@ -165,13 +152,10 @@ module layer1_0_conv1 (
 
             ST_RUNNING: begin
                 if (mac_done_issuing) begin
-                    // Final consume already happened above; advance to BIAS.
                     mac_valid_q      <= 1'b0;
                     mac_done_issuing <= 1'b0;
                     state            <= ST_BIAS;
                 end else begin
-                    // Issue: capture which lane / k this address is for, so the
-                    // NEXT cycle's consume knows where to put weight_q.
                     mac_lane_q       <= lane_counter;
                     mac_k_q          <= k_counter;
                     mac_global_oc_q  <= current_global_oc;
@@ -180,7 +164,6 @@ module layer1_0_conv1 (
                     if (lane_counter == MP - 1) begin
                         lane_counter <= 0;
                         if (k_counter == K_TOTAL - 1) begin
-                            // Last issue of this pass; one more cycle to drain.
                             mac_done_issuing <= 1'b1;
                         end else begin
                             k_counter <= k_counter + 1;
@@ -192,11 +175,10 @@ module layer1_0_conv1 (
             end
 
             ST_BIAS: begin
-                for (lane = 0; lane < MP; lane = lane + 1) begin : BIAS_LANE
-                    integer bias_oc;
+                for (lane = 0; lane < MP; lane = lane + 1) begin
                     bias_oc = oc_group * MP + lane;
                     if (bias_oc < OC)
-                        biased[lane] <= acc[lane] + biases[bias_oc];
+                        biased[lane] <= $signed(acc[lane]) + $signed(biases[bias_oc]);
                     else
                         biased[lane] <= 0;
                 end
@@ -210,8 +192,7 @@ module layer1_0_conv1 (
             end
 
             ST_OUTPUT: begin
-                for (lane = 0; lane < MP; lane = lane + 1) begin : OUT_LANE
-                    integer out_oc;
+                for (lane = 0; lane < MP; lane = lane + 1) begin
                     out_oc = oc_group * MP + lane;
                     if (out_oc < OC) begin
                         // [INVARIANT:ROUNDING]

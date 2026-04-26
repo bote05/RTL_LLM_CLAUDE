@@ -705,6 +705,28 @@ describe("orchestrate helpers", () => {
 
     const smallLayer = { ...baseLayer, input_width_bits: 512, output_width_bits: 512 };
     expect(checkBusWidthCapability(smallLayer)).toBeNull();
+
+    const layer2Add = {
+      ...baseLayer,
+      op_type: "add" as const,
+      input_shape: [1, 512, 28, 28],
+      output_shape: [1, 512, 28, 28],
+      weight_shape: [1],
+      num_weights: 0,
+      bias_path: null,
+      input_width_bits: 8192,
+      output_width_bits: 4096,
+    };
+    expect(checkBusWidthCapability(layer2Add)).toBeNull();
+
+    const layer3Add = {
+      ...layer2Add,
+      input_shape: [1, 1024, 14, 14],
+      output_shape: [1, 1024, 14, 14],
+      input_width_bits: 16384,
+      output_width_bits: 8192,
+    };
+    expect(checkBusWidthCapability(layer3Add)).toContain("per_operand_input_width_bits=8192");
   });
 
   it("records fatal pipeline errors to the run log", async () => {

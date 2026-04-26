@@ -64,10 +64,12 @@ export const layerIrBaseSchema = z
     // Conv2d geometry — emitted by the frontends for op-aware generation/repair.
     stride: z.array(z.number().int().positive()).optional(),
     padding: z.array(z.number().int().nonnegative()).optional(),
-    // Number of parallel MAC lanes Foundry must instantiate for this layer.
-    // The FSM runs ceil(OC / mac_parallelism) passes per output pixel. Only
-    // emitted for op_type == "conv2d"; ignored otherwise. Frontend computes
-    // it as min(OC, PIPELINE_CONFIG.MAX_PARALLEL_MACS).
+    // Number of accumulator lanes in each conv output-channel group. In the
+    // current verified conv contract, a lane_counter serializes those lanes:
+    // one lane issues one weight read / MAC per cycle. The FSM runs
+    // ceil(OC / mac_parallelism) passes per output pixel. Only emitted for
+    // op_type == "conv2d"; ignored otherwise. Frontend computes it as
+    // min(OC, PIPELINE_CONFIG.MAX_PARALLEL_MACS).
     mac_parallelism: z.number().int().positive().optional(),
     weight_bank_paths: z.array(z.string()).optional(),
     io_mode: z.enum(["packed_full", "channel_tiled"]).optional(),

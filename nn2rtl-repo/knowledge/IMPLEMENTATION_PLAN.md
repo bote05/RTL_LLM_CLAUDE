@@ -240,9 +240,9 @@ All four items below are universal, not ResNet-specific. They encode lessons lea
 
 **Fix:**
 
-1. **`sdk/config.ts`:** add `MAX_SUPPORTED_BUS_BITS: 4096` to `PIPELINE_CONFIG`. The exact constant is a judgment call — 4096 bits = 512 channels INT8, which covers ResNet-50 up to and including L2. Layers beyond that need tiled channel streaming (deferred).
+1. **`sdk/config.ts`:** add `MAX_SUPPORTED_BUS_BITS: 4096` to `PIPELINE_CONFIG`. The exact constant is a judgment call — 4096 bits = 512 channels INT8, which covers ResNet-50 conv/relu outputs up to and including L2. For add layers, the gate must check each operand width (`input_width_bits / 2`) plus `output_width_bits`, not the concatenated lhs+rhs `data_in` width. Layers beyond that need tiled channel streaming (deferred).
 
-2. **`sdk/orchestrate.ts`:** before dispatching Foundry (i.e. at the top of `tick()` or inside `invoke_foundry`'s handler), check both `layer.input_width_bits > MAX_SUPPORTED_BUS_BITS` and `layer.output_width_bits > MAX_SUPPORTED_BUS_BITS`. On exceed:
+2. **`sdk/orchestrate.ts`:** before dispatching Foundry (i.e. at the top of `tick()` or inside `invoke_foundry`'s handler), check `layer.output_width_bits > MAX_SUPPORTED_BUS_BITS` and the effective input stream width (`layer.input_width_bits` except `layer.input_width_bits / 2` for add). On exceed:
    - Emit a `VerifResult` with `status: "fail"`, `failure_class: "architectural_unsupported"`, and a `fix_hint` reading exactly `"Layer <module_id> has bus width <N> bits exceeding MAX_SUPPORTED_BUS_BITS=<M>. Tiled channel streaming is not yet implemented. Skip or extend the pipeline before retrying."`
    - Transition the module directly to `fail_abort` — **do not route to Surgeon**. Surgeon cannot fix a capability gap.
 
@@ -272,7 +272,7 @@ All four items below are universal, not ResNet-specific. They encode lessons lea
 
 4. **Weight and bias must use `$readmemh`.** Require at least one `$readmemh("...", weights)` and at least one `$readmemh("...", biases)` inside an `initial` block. Violation → `structural_preflight_failed: readmemh_missing`.
 
-5. **Output counter / completion guard must exist.** The FSM must have a state or condition that strictly bounds the total number of `valid_out` pulses. Approximated via a regex scan for `out_row|out_col|outputs_emitted` registers declared and updated. (Full symbolic bound-checking is out of scope; the heuristic is enough to catch "forgot the stop condition" bugs that produce infinite output streams.) Violation → `structural_preflight_failed: output_counter_missing`.
+5. **Output counter / completion guard must exist for frame-traversing ops.** Spatial conv and maxpool must have a state or condition that strictly bounds the total number of `valid_out` pulses. Approximated via a regex scan for `out_row|out_col|outputs_emitted` registers declared and updated, or by recognizing `coord_scheduler`. Pointwise 1x1 conv, ReLU, and add are intentionally excluded because they are one-output-per-accepted-input and a frame-level counter breaks back-to-back frames. Violation → `structural_preflight_failed: output_counter_missing`.
 
 **On any violation:** return a `VerifResult` immediately with the exact violation name in `failure_class` and the offending source line range in `fix_hint`. This feeds into Surgeon the same as sim/synth failures, so Surgeon knows exactly what structural rule it broke.
 
