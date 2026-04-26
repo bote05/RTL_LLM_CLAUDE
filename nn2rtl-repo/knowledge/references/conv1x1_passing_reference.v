@@ -104,10 +104,14 @@ module layer1_0_conv1 (
     wire [OC_INDEX_W-1:0]          current_global_oc;
     wire [WEIGHT_ADDR_W-1:0]       weight_read_addr;
     assign current_global_oc = oc_group * MP + lane_counter;
-    assign weight_read_addr  =
-        (current_global_oc < OC)
-            ? (current_global_oc * K_TOTAL + k_counter)
-            : {WEIGHT_ADDR_W{1'b0}};
+    // Unconditional address path. The (current_global_oc < OC) gate that
+    // used to wrap this expression blocked Vivado's BRAM inference (the
+    // synth tool wants a clean, mux-free address path for $readmemh-
+    // initialised ROMs). For padded lanes (current_global_oc >= OC, only
+    // possible when OC is not divisible by MP), the BRAM read still
+    // happens but its result is dropped at the accumulator gate
+    // `mac_global_oc_q2 < OC` below, so out-of-range reads are harmless.
+    assign weight_read_addr = current_global_oc * K_TOTAL + k_counter;
 
     always @(posedge clk) begin
         weight_q <= weights[weight_read_addr];

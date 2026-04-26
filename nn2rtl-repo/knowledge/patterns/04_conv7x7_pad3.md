@@ -33,12 +33,17 @@ agnostic):
 fill_rows = max(KH - 1 - PH, 0) = max(6 - 3, 0) = 3
 fill_cols = max(KW - PW,   1) = max(7 - 3, 1) = 4
 latency   = 3 * (IW + PW) + 4 + OC_PASSES * pass_cycles
-          = 3 * (224 + 3) + 4 + OC_PASSES * (MP * 7*IC*7 + 4)
+          = 3 * (224 + 3) + 4 + OC_PASSES * (MP * 7*IC*7 + 6)
 ```
 
 For the current stem contract (IC=3, OC=64, IW=224, MP=4):
-`OC_PASSES=16, K_TOTAL=147`, `pass_cycles = 4*147 + 4 = 592`,
-`latency = 3*227 + 4 + 16*592 = 10157`.
+`OC_PASSES=16, K_TOTAL=147`, `pass_cycles = 4*147 + 6 = 594`,
+`latency = 3*227 + 4 + 1 + 16*594 = 10190`. The `+6` per pass is the
+3-stage MAC pipeline (weight ROM read, registered DSP multiply,
+indexed accumulate) plus ST_BIAS + ST_SCALE + ST_OUTPUT, matching
+`CONV_PIPELINE_STAGES = 6` in `scripts/golden_impl.py`. The extra
+`+1` is the spatial-only coord_scheduler→`output_fires`→ST_IDLE→
+ST_MAC transition latency that is absent in the pointwise path.
 
 ## Required FSM, registers, coordinate logic
 
@@ -99,10 +104,15 @@ and `out_frame_done`. Do not re-derive the wrap/stride/padding math.
 
 ## Reference status
 
-No proven-passing 7×7 reference exists. The stem uses the same
-line-buffer + shift-window structure as `03_conv3x3_pad1.md`, so promoting
-a future 3×3 reference first is the cheaper path to first-shot reliability
-on stem convs.
+A proven-passing 7×7 reference now exists at
+`knowledge/references/conv7x7_passing_reference.v`. It is a direct
+adaptation of the 3×3 reference -- same split-architecture skeleton
+(`coord_scheduler` + `line_buf_window` + `conv_datapath` instantiation,
+`pending_rearm`+`mac_busy` re-arm gate), only the localparam block
+and the asymmetric bus widths differ. The stride / padding / wrap /
+right-edge-pad logic that historically failed under hand-rolled
+attempts (`fmm=7122` class) lives entirely inside `coord_scheduler.v`
+and `line_buf_window.v`, so Foundry's job is structural wiring only.
 
 ## Known failure modes
 

@@ -13,6 +13,8 @@ import {
   read_weights,
   resolveOutputRoot,
   resolveRepoRootFromEnv,
+  resolveVerilatorBuildJobs,
+  resolveVerilatorThreads,
   run_iverilog,
   run_verilator,
   run_vivado,
@@ -116,6 +118,13 @@ describe("mcp tools", () => {
       path.resolve("/tmp/override"),
     );
     expect(resolveRepoRootFromEnv({})).toBe(repoRoot);
+  });
+
+  it("resolves Verilator thread and build-job overrides", () => {
+    expect(resolveVerilatorThreads({ NN2RTL_VERILATOR_THREADS: "6" })).toBe(6);
+    expect(resolveVerilatorThreads({ NN2RTL_VERILATOR_THREADS: "0" })).toBe(0);
+    expect(resolveVerilatorBuildJobs({ NN2RTL_VERILATOR_BUILD_JOBS: "10" })).toBe(10);
+    expect(resolveVerilatorBuildJobs({ NN2RTL_VERILATOR_BUILD_JOBS: "0" })).toBe(0);
   });
 
   it("runs iverilog successfully through the command abstraction", async () => {
@@ -388,6 +397,36 @@ describe("mcp tools", () => {
     });
     expect(result.fix_hint).toContain("external C++ / bus-width diagnostics");
     expect(result.verilator_stderr).toContain("static_verilator_tb.cpp");
+  });
+
+  it("passes Verilator simulation threads and build jobs to the command line", async () => {
+    const tempDir = await makeTempDir("nn2rtl-verilator-threaded-build-");
+    const sidecarPath = await writeSidecar(tempDir);
+
+    const result = await run_verilator("module unit_module; endmodule", "unit_module", sidecarPath, {
+      env: {
+        ...process.env,
+        NN2RTL_VERILATOR_THREADS: "6",
+        NN2RTL_VERILATOR_BUILD_JOBS: "10",
+      },
+      commandRunner: async (file, args) => {
+        if (file === VERILATOR_COMMAND) {
+          const threadIndex = args.indexOf("--threads");
+          const jobsIndex = args.indexOf("-j");
+          expect(threadIndex).toBeGreaterThanOrEqual(0);
+          expect(args[threadIndex + 1]).toBe("6");
+          expect(jobsIndex).toBeGreaterThanOrEqual(0);
+          expect(args[jobsIndex + 1]).toBe("10");
+          const makeflagsIndex = args.indexOf("-MAKEFLAGS");
+          expect(makeflagsIndex).toBeGreaterThanOrEqual(0);
+          expect(args[makeflagsIndex + 1]).toBe("CFG_CXXFLAGS_STD_NEWEST=-std=c++17");
+          throw { stderr: "compile boom" };
+        }
+        return { stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result.status).toBe("syntax_error");
   });
 
   it("rejects non-absolute sidecar vector paths before invoking verilator", async () => {

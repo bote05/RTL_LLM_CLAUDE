@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 
 async function main(): Promise<void> {
-  const moduleName = "layer1_0_conv1";
+  const moduleName = process.argv[2] ?? "layer1_0_conv1";
   const verilogPath = path.join(repoRoot, "output", "rtl", `${moduleName}.v`);
   const sidecarPath = path.join(repoRoot, "output", "tb", `${moduleName}.sidecar.json`);
   const source = await readFile(verilogPath, "utf8");

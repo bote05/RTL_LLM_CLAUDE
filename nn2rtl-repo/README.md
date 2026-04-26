@@ -468,12 +468,14 @@ The MCP server exposes exactly five tools.
 
 - Inputs: Verilog source, module name, sidecar path
 - Action: compiles with Verilator, runs the static C++ testbench, parses results JSON
+- Parallelism: generated simulation uses `--threads` by default, capped at 8 host workers. Set `NN2RTL_VERILATOR_THREADS=0` to disable or set it to an explicit worker count. The C++ build uses `-j`, capped at 16 jobs by default, with `NN2RTL_VERILATOR_BUILD_JOBS` as an override.
 - Output: full `VerifResult`
 
 ### `run_vivado`
 
 - Inputs: Verilog source, module name, clock period, optional Artix-7 part, optional thread count
 - Action: runs Vivado synth-only for Nexys A7 / Artix-7 and extracts utilization/timing metrics
+- Parallelism: defaults to detected host CPU availability, can be overridden by the `threads` argument or `NN2RTL_VIVADO_THREADS`; Vivado logs both requested and effective `general.maxThreads`.
 - Output: `{ success, tool, part, stage, lut_count, ff_count, dsp_count, bram18_count, bram36_count, bram18_equiv, wns_ns, timing_met, fmax_mhz, report }`
 
 ### `read_weights`

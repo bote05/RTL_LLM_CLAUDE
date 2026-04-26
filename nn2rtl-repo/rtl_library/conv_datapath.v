@@ -97,10 +97,15 @@ module conv_datapath #(
     assign mac_busy = (state != ST_IDLE);
 
     wire [OC_INDEX_W-1:0] current_global_oc = oc_group * MP + lane_counter;
+    // Unconditional address path. The (current_global_oc < OC) gate that
+    // used to wrap this expression blocked Vivado's BRAM inference (the
+    // synth tool wants a clean, mux-free address path for $readmemh-
+    // initialised ROMs). For padded lanes (current_global_oc >= OC, only
+    // possible when OC is not divisible by MP), the BRAM read still
+    // happens but its result is dropped at the accumulator gate
+    // `mac_global_oc_q2 < OC` below, so out-of-range reads are harmless.
     wire [WEIGHT_ADDR_W-1:0] weight_read_addr =
-        (current_global_oc < OC)
-            ? (current_global_oc * K_TOTAL + k_counter)
-            : {WEIGHT_ADDR_W{1'b0}};
+        current_global_oc * K_TOTAL + k_counter;
 
     // Window-tap indexer: kernel-index k -> flat window byte.
     //   ic = k / (KH*KW); kh = (k % (KH*KW)) / KW; kw = k % KW
