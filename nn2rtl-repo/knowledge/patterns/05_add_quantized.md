@@ -38,45 +38,58 @@ reference for picking constants.
 
 ## Latency contract
 
-`pipeline_latency_cycles == 3`. Use the LayerIR value; do not re-derive.
-The cycle budget breaks down as one pipeline stage per registered hop:
+Use the LayerIR value; do not re-derive. The current resource-bounded add
+contract is serialized over channels:
 
-1. **Stage 1 — multiplies.** Per channel,
+```
+pipeline_latency_cycles = output_channels + 3
+```
+
+The cycle budget is one packed-pixel capture cycle, then one channel per
+cycle through a three-stage arithmetic pipe:
+
+1. **Stage 1 — multiplies.** For the current channel only,
    `lhs_term <= lhs_ch * LHS_FUSED_MULT` and
    `rhs_term <= rhs_ch * RHS_FUSED_MULT`. With `(* use_dsp = "yes" *)`
-   on each registered product, Vivado infers the DSP48E1 MREG=1 path.
+   on each registered product, Vivado infers two DSP48E1 multipliers total.
 2. **Stage 2 — sum + round bias.**
    `sum_term <= lhs_term + rhs_term + FUSED_ROUND_BIAS`.
 3. **Stage 3 — shift + saturate.** `(sum_term >>> FUSED_SHIFT)`,
-   clamp to INT8, pack into `data_out`. `valid_out` registers along
-   the same chain (`valid_out <= valid_q2`).
+   clamp to INT8, and write only the current channel slice of `data_out`.
 
-The single-cycle combinational implementation that the legacy
-`computeScaleApprox` / Foundry templates produced does NOT close
-timing on Artix-7 100T at OC=256: a 256-channel residual add saturates
-all 240 DSP slices and pushes the rest of the multiplies into a wide
-LUT-mul cone whose end-to-end depth blows past the 20 ns clock. The
-3-stage pipeline restores Fmax without changing functional behavior.
+Do not instantiate one multiplier per channel. The old 3-cycle fully parallel
+implementation is numerically correct but architecturally bad at OC=256: it
+creates 512 constant multipliers, consumes all 240 Artix-7 DSPs, spills the
+remaining multipliers into LUTs, and turns residual add into the largest LUT
+consumer in layer 1.
 
 ## Required FSM
 
-No explicit state register is needed — every stage is unconditionally
-clocked, valid propagates through `valid_q1 -> valid_q2 -> valid_out`
-with the same depth as the data path. `ready_in` is held high (the
-pipe is always ready to accept the next sample); the output-counter
-preflight rule does not apply to `add` (it's triggered by op_type;
-add is excluded).
+Use a two-state `IDLE/RUN` controller:
+
+- `IDLE`: `ready_in=1`; when `valid_in` is high, capture the full packed
+  `data_in` into `input_buf`, clear `ch_idx`, deassert `ready_in`, enter `RUN`.
+- `RUN`: stream channels `0..OC-1` through the three arithmetic stages,
+  writing `data_out[ch_idx*8 +: 8]` as each channel exits stage 3.
+- Assert `valid_out` for one cycle when channel `OC-1` is written, then
+  return to `IDLE` and reassert `ready_in`.
+
+The output-counter preflight rule does not apply to `add` (it is triggered by
+op_type; add is excluded).
 
 ## Required registers
 
-- `(* use_dsp = "yes" *) reg signed [PROD_W-1:0] lhs_term [0:OC-1];`
-- `(* use_dsp = "yes" *) reg signed [PROD_W-1:0] rhs_term [0:OC-1];`
-- `reg signed [SUM_W-1:0] sum_term [0:OC-1];`
-- `reg valid_q1, valid_q2;`
+- `reg [INPUT_WIDTH-1:0] input_buf;`
+- `reg [OUTPUT_WIDTH-1:0] data_out;`
+- `reg [CH_IDX_W-1:0] ch_idx, stage1_idx, stage2_idx, stage3_idx;`
+- `reg stage1_valid, stage2_valid, stage3_valid;`
+- `(* use_dsp = "yes" *) reg signed [PROD_W-1:0] lhs_term;`
+- `(* use_dsp = "yes" *) reg signed [PROD_W-1:0] rhs_term;`
+- `reg signed [SUM_W-1:0] sum_term;`
 - No weights, no biases, no `$readmemh`.
 
-`PROD_W = 8 + SCALE_CONST_W` (8-bit input × `SCALE_CONST_W`-bit fused
-multiplier). `SUM_W = PROD_W + 1` to absorb the lhs+rhs sum.
+`PROD_W = 8 + SCALE_CONST_W` (8-bit input x `SCALE_CONST_W`-bit fused
+multiplier). `SUM_W = PROD_W + 2` to absorb the lhs+rhs sum and round bias.
 
 ## Rules
 

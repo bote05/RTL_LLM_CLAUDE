@@ -75,7 +75,7 @@ def test_prepare_pipeline_cli_runs_full_frontend_and_prints_all_17_modules(
 
     assert table_rows["layer0_0_conv1"]["op_type"] == "conv2d"
     assert table_rows["layer1_0_downsample"]["op_type"] == "conv2d"
-    assert table_rows["layer1_0_add"]["pipeline_latency_cycles"] == "1"
+    assert table_rows["layer1_0_add"]["pipeline_latency_cycles"] == "7"
     assert table_rows["layer1_2_post_add_relu"]["pipeline_latency_cycles"] == "1"
 
 

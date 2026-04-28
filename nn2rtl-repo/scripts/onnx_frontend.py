@@ -81,6 +81,7 @@ from scripts.golden_impl import (
     Int8ReLU,
     build_deterministic_input_stream,
     channel_bus_bits_from_shape,
+    compute_add_latency_cycles,
     compute_conv2d_latency_cycles,
     get_golden_artifact_paths,
     get_weight_artifact_paths,
@@ -930,7 +931,9 @@ def _pipeline_latency(spec: OnnxLayerSpec) -> int:
         )
     if spec.op_type == "maxpool":
         return compute_maxpool_latency_cycles(spec)
-    # relu, add: 1 cycle
+    if spec.op_type == "add":
+        return compute_add_latency_cycles(spec.output_shape)
+    # relu: 1 cycle
     return 1
 
 

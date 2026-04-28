@@ -137,7 +137,7 @@ Latency targets by operation type:
 | `3x3` convolution | 5 cycles |
 | folded batchnorm stage | 2 cycles |
 | `ReLU` | 1 cycle |
-| residual add | 1 cycle |
+| residual add | `output_channels + 3` cycles |
 
 Each generated module must implement:
 
