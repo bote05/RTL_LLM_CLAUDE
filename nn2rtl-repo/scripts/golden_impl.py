@@ -28,14 +28,12 @@ SIGNAL_LITERALS = {
     "data_in_signal": "data_in",
     "data_out_signal": "data_out",
 }
-# `add` latency = 3: the legacy single-cycle combinational implementation
-# does not close timing on Artix-7 100T at OC=256 (the residual-add
-# datapath maxes out the 240 DSP slices and pushes the rest into a
-# wide LUT-mul cone that misses 50 MHz). The 3-stage pipelined design
-# (multiply -> sum + ROUND_BIAS -> shift+saturate, each registered)
-# meets timing; latency widens by two cycles which is invisible against
-# the spatial conv layers that dominate per-frame latency anyway.
-PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 3, "maxpool": 1}
+# Add latency is shape-dependent. The resource-bounded add template captures
+# the packed pixel, then streams one channel per cycle through a 3-stage
+# multiply/sum/saturate pipe. This avoids the old 512-parallel-multiplier
+# residual add that consumed all 240 Artix-7 DSPs and spilled the rest into
+# LUTs at OC=256.
+PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1, "maxpool": 1}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
 # Number of register stages wrapped around the output-stationary conv
@@ -66,6 +64,19 @@ CONV_PIPELINE_STAGES = 6
 # passes, but wider groups need corresponding BRAM banking and routing budget.
 # 4 is the current conservative point for the existing serialized datapath.
 MAX_PARALLEL_MACS = 4
+
+
+def compute_add_latency_cycles(output_shape: Sequence[int]) -> int:
+    if len(output_shape) < 2:
+        raise GoldenGenerationError(
+            f"Add output_shape must include a channel dimension, got {list(output_shape)}."
+        )
+    output_channels = int(output_shape[1])
+    if output_channels <= 0:
+        raise GoldenGenerationError(
+            f"Add output channel count must be positive, got {output_channels}."
+        )
+    return output_channels + 3
 
 
 def conv_mac_parallelism(output_channels: int) -> int:
@@ -1359,7 +1370,11 @@ def build_fx_pipeline_ir_payload(
                 mac_parallelism=conv_mp,
             )
         else:
-            layer_payload["pipeline_latency_cycles"] = PIPELINE_LATENCY_CYCLES[op_type]
+            layer_payload["pipeline_latency_cycles"] = (
+                compute_add_latency_cycles(layer_payload["output_shape"])
+                if op_type == "add"
+                else PIPELINE_LATENCY_CYCLES[op_type]
+            )
         if op_type == "conv2d" and not bias_values:
             raise GoldenGenerationError(f"Layer '{module_id}' did not serialize a bias vector.")
         if op_type == "add":

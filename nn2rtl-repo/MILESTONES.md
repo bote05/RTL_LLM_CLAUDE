@@ -94,10 +94,11 @@ add). Largest per-module BRAM: 45 BRAM18 (17%) on each of the three
    spatial convs that previously didn't fit -- 162K LUT / 178K FF
    on a 64K-LUT device became 10.7K LUT / 4.5K FF for the same
    `layer1_0_conv2`.
-3. The 3-stage pipelined `add` pattern documented in
-   `05_add_quantized.md` closes timing at OC=256 on Artix-7 100T
-   (the legacy single-cycle combinational implementation maxed out
-   the 240 DSPs and missed 50 MHz).
+3. The old 3-stage fully parallel `add` pattern closes timing at OC=256
+   on Artix-7 100T, but the resource report also exposed it as the wrong
+   area architecture: 512 fused-scale multipliers consumed all 240 DSPs
+   and spilled the rest into LUTs. The follow-up fix is the serialized
+   deterministic add template documented in `05_add_quantized.md`.
 4. The full Foundry -> Verilator -> Vivado -> orchestrator gate ->
    Surgeon repair loop converges on 17/17 modules with a ~12%
    Surgeon-retry rate at $8.02 total cost.

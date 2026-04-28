@@ -10,6 +10,7 @@ import torch
 from scripts.golden_impl import (
     bank_weight_values_for_mac_lanes,
     build_pipeline_ir_payload,
+    compute_add_latency_cycles,
     compute_conv2d_latency_cycles,
     compute_scale_approx,
     fold_batch_norm_into_conv,
@@ -267,6 +268,11 @@ def test_conv_latency_uses_serialized_mac_lane_contract() -> None:
     assert conv2_latency == 37076
 
 
+def test_add_latency_uses_serialized_channel_contract() -> None:
+    assert compute_add_latency_cycles([1, 1, 8, 8]) == 4
+    assert compute_add_latency_cycles([1, 256, 112, 112]) == 259
+
+
 def test_golden_vector_files_store_bus_bytes_per_sample_in_v2_header(tmp_path: Path) -> None:
     file_path = tmp_path / "packed.goldin"
     write_golden_vector_file([[0x04030201, 0x00000005]], file_path, bus_bits=40)
@@ -420,6 +426,7 @@ def test_build_pipeline_ir_payload_captures_fx_layers_in_topological_order(tmp_p
     ]
 
     assert add_layer["input_width_bits"] == 16
+    assert add_layer["pipeline_latency_cycles"] == 4
     assert add_layer["lhs_scale_factor"] == pytest.approx(0.25)
     assert add_layer["rhs_scale_factor"] == pytest.approx(0.5)
     assert layer_goldens["add0"]["inputs"] == expected_packed_inputs

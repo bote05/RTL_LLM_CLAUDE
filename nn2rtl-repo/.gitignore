@@ -46,6 +46,10 @@ output/*.onnx
 output/*.onnx.data
 output/saved_rtl_*/
 
+# Local comparison / smoke artifacts
+comparison/
+scripts/regen_add_smoke.ts
+
 # Model checkpoints
 checkpoints/
 

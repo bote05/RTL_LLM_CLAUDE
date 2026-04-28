@@ -2460,6 +2460,247 @@ function computeScaleApprox(scaleFactor: number): { mult: number; shift: number 
 }
 
 /**
+ * Quantized add uses fused constants:
+ *
+ *   out = round((lhs * lhs_scale + rhs * rhs_scale) / output_scale)
+ *
+ * The ratios can be greater than 1, so unlike the conv scale helper this does
+ * not cap the multiplier at INT16 range. The serialized add RTL only spends
+ * two DSPs, so wider constants are acceptable.
+ */
+function computeAddFusedScaleApprox(
+  inputScaleFactor: number,
+  outputScaleFactor: number,
+): { mult: number; shift: number } {
+  if (inputScaleFactor <= 0 || outputScaleFactor <= 0) {
+    throw new Error(
+      `Add scale factors must be positive; got input=${inputScaleFactor}, output=${outputScaleFactor}.`,
+    );
+  }
+  const ratio = inputScaleFactor / outputScaleFactor;
+  let best = { mult: 1, shift: 8, err: Infinity };
+  for (let shift = 8; shift <= 23; shift++) {
+    const mult = Math.round(ratio * Math.pow(2, shift));
+    if (mult >= 1 && mult < Math.pow(2, 23)) {
+      const err = Math.abs(mult / Math.pow(2, shift) - ratio) / ratio;
+      if (err < best.err) {
+        best = { mult, shift, err };
+      }
+    }
+  }
+  return { mult: best.mult, shift: best.shift };
+}
+
+function addScaleConstWidth(...mults: number[]): number {
+  const maxMult = Math.max(...mults, 1);
+  return Math.max(2, Math.ceil(Math.log2(maxMult + 1)) + 1);
+}
+
+function computeSerializedAddLatencyCycles(layer: LayerIR): number {
+  const outputChannels = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
+  // One cycle to capture the packed pixel, then one channel per cycle through
+  // the three registered arithmetic stages. The testbench observes valid_out
+  // one cycle after the final register update, so the contract is OC + 3.
+  return outputChannels + 3;
+}
+
+export function buildSerializedAddModule(layer: LayerIR): VerilogModule {
+  if (layer.op_type !== "add") {
+    throw new Error(`buildSerializedAddModule called for non-add layer '${layer.module_id}'.`);
+  }
+  if (layer.lhs_scale_factor === undefined || layer.rhs_scale_factor === undefined) {
+    throw new Error(`Add layer '${layer.module_id}' is missing lhs_scale_factor/rhs_scale_factor.`);
+  }
+  const oc = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
+  const w = layer.output_width_bits;
+  if (layer.input_width_bits !== 2 * w) {
+    throw new Error(
+      `Add layer '${layer.module_id}' has input_width_bits=${layer.input_width_bits}; expected ${2 * w}.`,
+    );
+  }
+
+  const lhs = computeAddFusedScaleApprox(layer.lhs_scale_factor, layer.scale_factor);
+  const rhs = computeAddFusedScaleApprox(layer.rhs_scale_factor, layer.scale_factor);
+  const fusedShift = Math.max(lhs.shift, rhs.shift);
+  const lhsMult = lhs.mult * Math.pow(2, fusedShift - lhs.shift);
+  const rhsMult = rhs.mult * Math.pow(2, fusedShift - rhs.shift);
+  const constWidth = addScaleConstWidth(lhsMult, rhsMult);
+  const chIdxW = Math.max(1, Math.ceil(Math.log2(oc + 1)));
+  const prodW = 8 + constWidth;
+  const sumW = prodW + 2;
+  const expectedLatency = computeSerializedAddLatencyCycles(layer);
+
+  if (layer.pipeline_latency_cycles !== expectedLatency) {
+    throw new Error(
+      `Add layer '${layer.module_id}' latency=${layer.pipeline_latency_cycles}, but serialized add expects ${expectedLatency}. ` +
+        `Regenerate LayerIR/goldens with the current add latency contract.`,
+    );
+  }
+
+  const source = `module ${layer.module_id} (
+    input  wire                clk,
+    input  wire                rst_n,
+    input  wire                valid_in,
+    output reg                 ready_in,
+    input  wire [${layer.input_width_bits - 1}:0]       data_in,
+    output reg                 valid_out,
+    output reg  [${layer.output_width_bits - 1}:0]       data_out
+);
+
+    localparam integer OC            = ${oc};
+    localparam integer W             = ${w};
+    localparam integer CH_IDX_W      = (OC <= 1) ? 1 : $clog2(OC + 1);
+    localparam integer SCALE_CONST_W = ${constWidth};
+    localparam integer FUSED_SHIFT   = ${fusedShift};
+    localparam integer PROD_W        = ${prodW};
+    localparam integer SUM_W         = ${sumW};
+    localparam [CH_IDX_W-1:0] OC_IDX      = ${chIdxW}'d${oc};
+    localparam [CH_IDX_W-1:0] LAST_CH_IDX = ${chIdxW}'d${oc - 1};
+
+    localparam signed [SCALE_CONST_W-1:0] LHS_FUSED_MULT = ${constWidth}'sd${lhsMult};
+    localparam signed [SCALE_CONST_W-1:0] RHS_FUSED_MULT = ${constWidth}'sd${rhsMult};
+    localparam signed [SUM_W-1:0]         FUSED_ROUND_BIAS =
+        {{(SUM_W-1){1'b0}}, 1'b1} <<< (FUSED_SHIFT - 1);
+    localparam signed [SUM_W-1:0]         SAT_HI =  127;
+    localparam signed [SUM_W-1:0]         SAT_LO = -128;
+
+    localparam [1:0] ST_IDLE = 2'd0;
+    localparam [1:0] ST_RUN  = 2'd1;
+
+    reg [1:0] state;
+    reg [${layer.input_width_bits - 1}:0] input_buf;
+    reg [CH_IDX_W-1:0] ch_idx;
+    reg [CH_IDX_W-1:0] stage1_idx, stage2_idx;
+    reg stage1_valid, stage2_valid;
+
+    // 3-stage pipeline (OC + 3 latency): stage 1 multiplies one channel
+    // per cycle into (lhs_term, rhs_term); stage 2 sums + adds the round
+    // bias one cycle later, reading stage 1's products DIRECTLY (NBA
+    // semantics make the BEFORE-edge value of lhs_term = the channel
+    // stage 1 just issued); stage 3 (saturate + write) fires the cycle
+    // after stage 2 commits, indexed by stage2_idx.
+    //
+    // The intermediate "wait state" (stage2_idx <= stage1_idx; stage3_idx
+    // <= stage2_idx; sum_term <= lhs_term) that an earlier version had
+    // is REMOVED here -- it caused a one-channel index drift between
+    // sum_term and stage3_idx because stage 1's lhs_term was overwritten
+    // before the stage that read it actually committed. Verilator
+    // simulation catches that drift; lint does not. Do not re-introduce
+    // it without re-verifying with a real Verilator run.
+    (* use_dsp = "yes" *) reg signed [PROD_W-1:0] lhs_term;
+    (* use_dsp = "yes" *) reg signed [PROD_W-1:0] rhs_term;
+    reg signed [SUM_W-1:0] sum_term;
+
+    wire [CH_IDX_W-1:0] safe_ch_idx = (ch_idx < OC_IDX) ? ch_idx : {CH_IDX_W{1'b0}};
+    wire signed [7:0] lhs_ch = $signed(input_buf[safe_ch_idx*8 +: 8]);
+    wire signed [7:0] rhs_ch = $signed(input_buf[W + safe_ch_idx*8 +: 8]);
+    wire signed [SUM_W-1:0] lhs_term_ext = {{(SUM_W-PROD_W){lhs_term[PROD_W-1]}}, lhs_term};
+    wire signed [SUM_W-1:0] rhs_term_ext = {{(SUM_W-PROD_W){rhs_term[PROD_W-1]}}, rhs_term};
+    wire signed [SUM_W-1:0] shifted_w = (sum_term >>> FUSED_SHIFT); // [INVARIANT:ROUNDING]
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ready_in     <= 1'b0;
+            valid_out    <= 1'b0;
+            data_out     <= {W{1'b0}};
+            input_buf    <= {${layer.input_width_bits}{1'b0}};
+            state        <= ST_IDLE;
+            ch_idx       <= {CH_IDX_W{1'b0}};
+            stage1_idx   <= {CH_IDX_W{1'b0}};
+            stage2_idx   <= {CH_IDX_W{1'b0}};
+            stage1_valid <= 1'b0;
+            stage2_valid <= 1'b0;
+            lhs_term     <= {PROD_W{1'b0}};
+            rhs_term     <= {PROD_W{1'b0}};
+            sum_term     <= {SUM_W{1'b0}};
+        end else begin
+            valid_out <= 1'b0;
+
+            case (state)
+                ST_IDLE: begin
+                    ready_in     <= 1'b1; // [INVARIANT:READY_IN_GATING]
+                    stage1_valid <= 1'b0;
+                    stage2_valid <= 1'b0;
+                    ch_idx       <= {CH_IDX_W{1'b0}};
+
+                    if (valid_in) begin
+                        input_buf <= data_in;
+                        ready_in  <= 1'b0;
+                        state     <= ST_RUN;
+                    end
+                end
+
+                ST_RUN: begin
+                    ready_in <= 1'b0;
+
+                    // Stage 3: saturate + write data_out for the channel
+                    // whose sum stage 2 committed last cycle.
+                    if (stage2_valid) begin
+                        if (shifted_w > SAT_HI)
+                            data_out[stage2_idx*8 +: 8] <= 8'h7F;
+                        else if (shifted_w < SAT_LO)
+                            data_out[stage2_idx*8 +: 8] <= 8'h80;
+                        else
+                            data_out[stage2_idx*8 +: 8] <= shifted_w[7:0];
+
+                        if (stage2_idx == LAST_CH_IDX) begin
+                            valid_out    <= 1'b1; // [INVARIANT:VALID_OUT_LATENCY]
+                            ready_in     <= 1'b1;
+                            state        <= ST_IDLE;
+                            stage1_valid <= 1'b0;
+                            stage2_valid <= 1'b0;
+                        end
+                    end
+
+                    // Stage 2: sum stage 1's products + round bias.
+                    // Reads lhs_term / rhs_term BEFORE the edge -- those
+                    // are the ch=stage1_idx products that stage 1 just
+                    // committed at the previous edge. Forwards stage1_idx
+                    // to stage2_idx so the sat stage indexes correctly.
+                    if (stage1_valid) begin
+                        sum_term     <= lhs_term_ext + rhs_term_ext + FUSED_ROUND_BIAS;
+                        stage2_idx   <= stage1_idx;
+                        stage2_valid <= 1'b1;
+                    end else begin
+                        stage2_valid <= 1'b0;
+                    end
+
+                    // Stage 1: issue one channel per cycle until ch_idx
+                    // reaches OC. Multiplies are registered and DSP-tagged.
+                    if (ch_idx < OC_IDX) begin
+                        lhs_term     <= lhs_ch * LHS_FUSED_MULT;
+                        rhs_term     <= rhs_ch * RHS_FUSED_MULT;
+                        stage1_idx   <= ch_idx;
+                        stage1_valid <= 1'b1;
+                        ch_idx       <= ch_idx + 1'b1;
+                    end else begin
+                        stage1_valid <= 1'b0;
+                    end
+                end
+
+                default: begin
+                    state        <= ST_IDLE;
+                    ready_in     <= 1'b1;
+                    stage1_valid <= 1'b0;
+                    stage2_valid <= 1'b0;
+                end
+            endcase
+        end
+    end
+
+endmodule
+`;
+
+  return {
+    module_id: layer.module_id,
+    spec_hash: computeExpectedSpecHash(layer),
+    verilog_source: source,
+    generated_by: "Foundry",
+    attempt: 1,
+  };
+}
+
+/**
  * Clone a passing VerilogModule for a new module_id, substituting:
  *   1. The `module <name>` declaration
  *   2. The $readmemh weight/bias paths
@@ -2502,6 +2743,37 @@ function instantiateTemplateModule(
     /\bSCALE_SHIFT\b(\s*=\s*)\d*'?d?(\d+)/g,
     (_m, eq) => `SCALE_SHIFT${eq}5'd${newScale.shift}`,
   );
+
+  if (
+    targetLayer.op_type === "add" &&
+    sourceLayer.op_type === "add" &&
+    targetLayer.lhs_scale_factor !== undefined &&
+    targetLayer.rhs_scale_factor !== undefined
+  ) {
+    const lhs = computeAddFusedScaleApprox(targetLayer.lhs_scale_factor, targetLayer.scale_factor);
+    const rhs = computeAddFusedScaleApprox(targetLayer.rhs_scale_factor, targetLayer.scale_factor);
+    const fusedShift = Math.max(lhs.shift, rhs.shift);
+    const lhsMult = lhs.mult * Math.pow(2, fusedShift - lhs.shift);
+    const rhsMult = rhs.mult * Math.pow(2, fusedShift - rhs.shift);
+    const constWidth = addScaleConstWidth(lhsMult, rhsMult);
+
+    src = src.replace(
+      /\bSCALE_CONST_W\b(\s*=\s*)\d+/g,
+      (_m, eq) => `SCALE_CONST_W${eq}${constWidth}`,
+    );
+    src = src.replace(
+      /\bFUSED_SHIFT\b(\s*=\s*)\d+/g,
+      (_m, eq) => `FUSED_SHIFT${eq}${fusedShift}`,
+    );
+    src = src.replace(
+      /\bLHS_FUSED_MULT\b(\s*=\s*)\d+'sd\d+/g,
+      (_m, eq) => `LHS_FUSED_MULT${eq}${constWidth}'sd${lhsMult}`,
+    );
+    src = src.replace(
+      /\bRHS_FUSED_MULT\b(\s*=\s*)\d+'sd\d+/g,
+      (_m, eq) => `RHS_FUSED_MULT${eq}${constWidth}'sd${rhsMult}`,
+    );
+  }
 
   const targetSpecHash = computeExpectedSpecHash(targetLayer);
   return {
@@ -2713,6 +2985,80 @@ export async function runPipeline(
           },
           runtime,
         );
+        continue;
+      }
+
+      // The deterministic serialized-add template (`buildSerializedAddModule`)
+      // is OFF by default. Pipeline runs (`--only layer*_add` or full
+      // pipeline) go through the normal Foundry + Surgeon path so add
+      // layers exercise the LLM contract documented in
+      // `knowledge/patterns/05_add_quantized.md` end-to-end.
+      //
+      // Set `NN2RTL_DETERMINISTIC_ADD=1` to short-circuit Foundry and
+      // emit the deterministic template instead. This is intended ONLY
+      // for testing the template (e.g. via `scripts/regen_add_smoke.ts`)
+      // and for golden-result comparisons; it must NOT be set during
+      // milestone or thesis-evaluation runs.
+      if (
+        layer.op_type === "add" &&
+        process.env.NN2RTL_DETERMINISTIC_ADD === "1"
+      ) {
+        const addModule = buildSerializedAddModule(layer);
+        await appendRunLog(
+          {
+            event: "action",
+            action: "invoke_deterministic_add_template",
+            module_id: nextAction.module_id,
+            spec_hash: addModule.spec_hash,
+          },
+          runtime,
+        );
+
+        await persistVerilogModule(addModule);
+
+        const statusBeforeVerify = manager.getState().modules[nextAction.module_id];
+        manager.setStatus(nextAction.module_id, "verifying");
+        await logStateTransition(
+          manager,
+          nextAction.module_id,
+          statusBeforeVerify,
+          "verifying",
+          "deterministic_add_template_completed",
+          runtime,
+        );
+        await manager.saveState(statePath);
+
+        const addVerif = await invokeAssayer(addModule, layer, runtime);
+        const statusBeforeApply = manager.getState().modules[nextAction.module_id];
+        manager.applyVerifResult(nextAction.module_id, addVerif);
+        const statusAfterApply = manager.getState().modules[nextAction.module_id];
+        await logStateTransition(
+          manager,
+          nextAction.module_id,
+          statusBeforeApply,
+          statusAfterApply,
+          `assayer_${addVerif.status}`,
+          runtime,
+        );
+        await manager.saveState(statePath);
+
+        if (statusAfterApply === "pass") {
+          passedModules.set(nextAction.module_id, { module: addModule, layer });
+          await processSynthesisOutcome(
+            manager,
+            nextAction.module_id,
+            addModule,
+            layer,
+            addVerif,
+            statePath,
+            runtime,
+          );
+        }
+
+        if (statusAfterApply === "fail_abort") {
+          await appendRunLog({ event: "module_fail_abort", module_id: nextAction.module_id, result: addVerif }, runtime);
+        }
+
         continue;
       }
 
