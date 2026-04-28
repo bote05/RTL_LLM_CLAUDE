@@ -538,7 +538,19 @@ export function parseVivadoReport(
   const wns_ns = parseVivadoWns(report);
   const hasTimingViolation =
     /timing constraints are not met|timing constraints are not satisfied|VIOLATED/i.test(report);
-  const timing_met = wns_ns !== null ? wns_ns >= 0 && !hasTimingViolation : false;
+  // Vivado's Design Timing Summary prints `WNS = NA` for designs that have
+  // no inter-FF setup paths -- typically a 1-cycle pass-through where every
+  // register is driven only from primary inputs. The report still asserts
+  // "All user specified timing constraints are met." in that case, so treat
+  // it as timing_met = true even though there's no numeric WNS to extract.
+  // Without this branch, trivially-meeting designs (e.g. a stream-through
+  // ReLU) get classified as synth failures.
+  const timingExplicitlyMet =
+    /All user specified timing constraints are met/i.test(report);
+  const timing_met =
+    wns_ns !== null
+      ? wns_ns >= 0 && !hasTimingViolation
+      : timingExplicitlyMet && !hasTimingViolation;
   const critical_path_ns =
     wns_ns !== null && clock_period_ns > 0 ? clock_period_ns - wns_ns : 0;
   const fmax_mhz =

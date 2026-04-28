@@ -28,7 +28,14 @@ SIGNAL_LITERALS = {
     "data_in_signal": "data_in",
     "data_out_signal": "data_out",
 }
-PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1, "maxpool": 1}
+# `add` latency = 3: the legacy single-cycle combinational implementation
+# does not close timing on Artix-7 100T at OC=256 (the residual-add
+# datapath maxes out the 240 DSP slices and pushes the rest into a
+# wide LUT-mul cone that misses 50 MHz). The 3-stage pipelined design
+# (multiply -> sum + ROUND_BIAS -> shift+saturate, each registered)
+# meets timing; latency widens by two cycles which is invisible against
+# the spatial conv layers that dominate per-frame latency anyway.
+PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 3, "maxpool": 1}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
 # Number of register stages wrapped around the output-stationary conv

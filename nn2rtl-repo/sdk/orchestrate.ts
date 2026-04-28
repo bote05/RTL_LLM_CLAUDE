@@ -204,7 +204,16 @@ function evaluateSynthesis(
     };
   }
 
-  if (report.fmax_mhz <= 0 || report.wns_ns === null) {
+  // Vivado prints `WNS = NA` for trivially-meeting designs that have no
+  // inter-FF setup paths -- e.g. a stream-through ReLU where every output
+  // register is driven from primary inputs only. In that case the parser
+  // reads `timing_met = true` from the "All user specified timing
+  // constraints are met" line in the report but cannot extract a numeric
+  // WNS / Fmax. Treat the explicit timing-met assertion as authoritative
+  // and only fail here when timing actually has no result AND was not
+  // confirmed met. The downstream Fmax-vs-target gate further down still
+  // applies when there IS a measurable result.
+  if (!report.timing_met && (report.fmax_mhz <= 0 || report.wns_ns === null)) {
     return {
       ...verifiedResult,
       module_id: moduleId,
@@ -219,7 +228,15 @@ function evaluateSynthesis(
     };
   }
 
-  if (!report.timing_met || report.fmax_mhz < FMAX_TARGET_MHZ) {
+  // Fmax-vs-target gate. Only meaningful when there's a numeric WNS to
+  // compute Fmax from -- the trivial WNS=NA case (handled above) was
+  // accepted with a `timing_met = true` from the report's explicit
+  // "constraints met" line, and there's no critical path to push back on
+  // for those designs.
+  if (
+    report.wns_ns !== null &&
+    (!report.timing_met || report.fmax_mhz < FMAX_TARGET_MHZ)
+  ) {
     // Synthesis succeeded but critical path is too long. Fix strategy:
     // insert a pipeline register in the longest combinational path.
     // Note the latency-contract implication — adding a register changes

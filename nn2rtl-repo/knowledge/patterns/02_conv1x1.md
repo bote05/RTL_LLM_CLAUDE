@@ -1,8 +1,18 @@
 # 02 — Pointwise (1×1) conv2d
 
-Canonical legacy reference: `knowledge/references/conv1x1_passing_reference.v`
-(Foundry first-shot, 0 Surgeon retries in the older flow). For new Vivado
-work, preserve the FSM shape but use synchronous ROM reads and BRAM attributes.
+Canonical reference: `knowledge/references/conv1x1_passing_reference.v`
+(Foundry first-shot, 0 Surgeon retries). The FSM is monolithic — pointwise
+convs do not use the split-architecture library because they have no line
+buffer / window to share with spatial convs. The reference embeds the full
+serialized MAC pipeline; Foundry only adapts the localparam block + `$readmemh`
+paths from the LayerIR.
+
+Weight ROM uses a clean unconditional address path
+(`current_global_oc * K_TOTAL + k_counter`). Do NOT wrap it in
+`(current_global_oc < OC) ? addr : 0` — that conditional mux blocks Vivado
+BRAM inference and forces the weight memory into LUT logic. The accumulator
+gate `mac_global_oc_q2 < OC` later in the pipeline already prevents
+out-of-range reads from contaminating results.
 
 ## When to use
 
