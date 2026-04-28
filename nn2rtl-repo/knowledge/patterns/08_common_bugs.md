@@ -47,16 +47,21 @@ simplest form of some of these before simulation even runs.
   `outputs_emitted == OH*OW`. The handwritten `coord_scheduler` module
   implements this correctly; prefer it over rolling your own.
 
-## right-edge padding off-by-one (fmm=7122 on layer0_0_conv1)
+## right-edge padding off-by-one (fmm=7122 on layer0_0_conv1) — RESOLVED
 
-- **Symptom**: `first_mismatch_index` in the OH*OW/2 range, `max_error`
-  small (1–3) but non-zero, histogram concentrated in last quarter.
-- **Diagnosis**: The `in_col` wrap point is off by one. Correct wrap is at
-  `IW - 1 + PW` (so visible in_col values range 0..IW-1+PW, which for
-  IW=224 PW=3 is 0..226, producing 227 cycles per row).
-- **Fix**: verify the exact constant. `IW + PW - 1 == IW - 1 + PW`, but
-  `IW + PW` and `IW - 1` are both wrong. See `04_conv7x7_pad3.md` — this
-  specific bug has survived every Surgeon attempt on the 7×7 stem.
+- **Status**: Resolved by the split-architecture rework. Spatial conv
+  top-levels no longer roll their own wrap math; `coord_scheduler.v`
+  owns the `IW-1+PW` constant, and `line_buf_window.v`'s right-pad
+  reads are sourced from BRAM cells that are never written (so they
+  return zero by construction). `layer0_0_conv1` now passes first-shot
+  (`max_error=0`) via `knowledge/references/conv7x7_passing_reference.v`.
+- **Historical record**: The bug repeatedly produced
+  `first_mismatch_index` in the `OH*OW/2` range with `max_error` 1–3,
+  histogram concentrated in the last quarter. Diagnosis was the
+  `in_col` wrap constant off by one. The repair was structural, not
+  literal: stop hand-rolling the FSM. If a future regression brings
+  this symptom back on a spatial layer, do not patch a constant; check
+  whether the generated module is bypassing the library.
 
 ## MAC window indexing swap
 
@@ -126,6 +131,52 @@ simplest form of some of these before simulation even runs.
   both, a negative bias wraps at 2^N-1 and saturates.
 - **Fix**: wrap the bias add in `$signed(...)` both sides; widen
   `biased_w` to `max(acc_w, bias_w) + 1` to absorb the sign bit.
+
+## BRAM line_buf — bottom-pad row_valid leak
+
+- **Symptom**: First several output ROWS of a frame are bit-exact; the
+  last few rows are wrong with `max_error` small-to-moderate and
+  `first_mismatch_index` deep in the stream. Most visible on layers
+  with `PH > 1` (e.g. the 7×7 stem with PH=3).
+- **Diagnosis**: `coord_scheduler` walks `in_row` past `IH-1` into the
+  bottom-pad fringe; `row_wrap_this_cycle` fires on those rows even
+  though no real writes landed in `line_buf_window`'s currently-writing
+  slot. If `row_valid[current_write_slot] := 1` is asserted
+  unconditionally at row_wrap, that slot's `row_valid` becomes 1 while
+  it still holds STALE data from KH rows ago (slots cycle through KH
+  values). Subsequent reads for output rows whose receptive field
+  includes the bottom-pad position return that stale data instead of
+  zero.
+- **Fix**: gate the row_valid set on `!bottom_padded` —
+  `row_valid[current_write_slot] <= !bottom_padded`. The slot becomes
+  "valid history" only when a real input row has actually written into
+  it.
+
+## BRAM line_buf — q_reg phase corruption mid-MAC
+
+- **Symptom**: Bit-exact timing (`timing_actual == timing_expected`)
+  but values disagree from `first_mismatch_index = 0`. `max_error`
+  large (saturation-range), `mean_error` modest, diffs scattered.
+  Hand-written legacy line_buf passes the same layer cleanly. Tiny
+  geometry tests don't reproduce because they drive `sched_in_col`
+  directly without modeling the scheduler's "advance, then output_fires
+  next cycle while coord already advanced" phase.
+- **Diagnosis**: `coord_scheduler` emits `output_fires` the cycle
+  AFTER it advances past the firing coord, with `sched_in_col`
+  already pointing at the NEXT coord. If `line_buf_window`'s per-slot
+  BRAM output register `q_reg` free-runs off live `sched_in_col`
+  every clock, the rightmost window column changes mid-MAC. The
+  `conv_datapath` pipeline reads `window_flat[...]` at every
+  `k_counter` step, so a moving `q` corrupts every k≥1 contribution
+  of the MAC accumulation — the first weight is correct, the
+  remainder are off.
+- **Fix**: gate the `q_reg <= mem[sched_in_col]` update on
+  `sched_advance`. The scheduler holds `sched_advance = 0` from
+  `output_fires` through the entire MAC pass (via
+  `eff_stall = stall_in || output_fires`), so the BRAM output stays
+  stable as long as the scheduler is stalled. Writes (`mem[..] <= ..`)
+  are independently gated and don't fire during stall anyway, so this
+  is read-side only.
 
 ## Surgeon regression by scale rounding
 

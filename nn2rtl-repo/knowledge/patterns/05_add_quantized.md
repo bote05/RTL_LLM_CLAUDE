@@ -38,28 +38,45 @@ reference for picking constants.
 
 ## Latency contract
 
-Usually `pipeline_latency_cycles == 2` or `3` — a single-pixel combinational
-path plus the output register. Use the LayerIR value; do not re-derive.
+`pipeline_latency_cycles == 3`. Use the LayerIR value; do not re-derive.
+The cycle budget breaks down as one pipeline stage per registered hop:
 
-## Required FSM states
+1. **Stage 1 — multiplies.** Per channel,
+   `lhs_term <= lhs_ch * LHS_FUSED_MULT` and
+   `rhs_term <= rhs_ch * RHS_FUSED_MULT`. With `(* use_dsp = "yes" *)`
+   on each registered product, Vivado infers the DSP48E1 MREG=1 path.
+2. **Stage 2 — sum + round bias.**
+   `sum_term <= lhs_term + rhs_term + FUSED_ROUND_BIAS`.
+3. **Stage 3 — shift + saturate.** `(sum_term >>> FUSED_SHIFT)`,
+   clamp to INT8, pack into `data_out`. `valid_out` registers along
+   the same chain (`valid_out <= valid_q2`).
 
-An add is essentially combinational. Typical structure:
+The single-cycle combinational implementation that the legacy
+`computeScaleApprox` / Foundry templates produced does NOT close
+timing on Artix-7 100T at OC=256: a 256-channel residual add saturates
+all 240 DSP slices and pushes the rest of the multiplies into a wide
+LUT-mul cone whose end-to-end depth blows past the 20 ns clock. The
+3-stage pipeline restores Fmax without changing functional behavior.
 
-- `ST_WAIT` — wait for `valid_in`; latch lhs/rhs channels.
-- `ST_COMPUTE` — compute `scaled[i]` for all i in one cycle (combinational
-  multiply-add-shift) and register the result.
-- `ST_OUTPUT` — assert `valid_out`, return to ST_WAIT.
+## Required FSM
 
-For small OC this can be collapsed to a single pipelined stage without an
-explicit state register. The output-counter preflight rule does not apply
-to `add` (it's triggered by op_type; add is excluded).
+No explicit state register is needed — every stage is unconditionally
+clocked, valid propagates through `valid_q1 -> valid_q2 -> valid_out`
+with the same depth as the data path. `ready_in` is held high (the
+pipe is always ready to accept the next sample); the output-counter
+preflight rule does not apply to `add` (it's triggered by op_type;
+add is excluded).
 
 ## Required registers
 
-- `reg signed [7:0]  lhs_latch [0:OC-1];`
-- `reg signed [7:0]  rhs_latch [0:OC-1];`
-- `reg signed [31:0] scaled    [0:OC-1];`
-- No weights, no biases, no $readmemh.
+- `(* use_dsp = "yes" *) reg signed [PROD_W-1:0] lhs_term [0:OC-1];`
+- `(* use_dsp = "yes" *) reg signed [PROD_W-1:0] rhs_term [0:OC-1];`
+- `reg signed [SUM_W-1:0] sum_term [0:OC-1];`
+- `reg valid_q1, valid_q2;`
+- No weights, no biases, no `$readmemh`.
+
+`PROD_W = 8 + SCALE_CONST_W` (8-bit input × `SCALE_CONST_W`-bit fused
+multiplier). `SUM_W = PROD_W + 1` to absorb the lhs+rhs sum.
 
 ## Rules
 

@@ -295,15 +295,46 @@ three handwritten library modules under `rtl_library/`:
   completion count. Emits `advance` (combinational, high when scheduler
   moves this cycle) and `output_fires` (registered 1-cycle pulse the
   cycle AFTER advance past a firing coord).
-- `line_buf_window.v` — KH-row line buffer with vertical shift on row
-  transitions, KH×KW×IC registered shift-register window. Exposes
-  `window_flat`. Takes a `frame_start` input for multi-frame reset.
+- `line_buf_window.v` — KH per-slot BRAM-inferred line buffer (rotating
+  `oldest_slot` pointer + `row_valid` mask) plus a KH×KW×IC registered
+  shift-register window. Exposes `window_flat`. Takes a `frame_start`
+  input for multi-frame reset. Storage characteristics: KH BRAM18/36
+  instances on Artix-7 (one per slot), small distributed-fabric shift
+  register for the window itself. The bulk vertical-shift of the legacy
+  flop-array implementation is replaced by a single counter increment.
 - `conv_datapath.v` — MP-lane serialized MAC + BIAS + SCALE + OUTPUT
   pipeline. Exposes `mac_busy` (so the top-level can drive
-  `stall_in = mac_busy`) and `valid_out` / `data_out`.
+  `stall_in = mac_busy`) and `valid_out` / `data_out`. Weight ROM uses
+  a clean `current_global_oc * K_TOTAL + k_counter` address path; do
+  NOT wrap it in `(current_global_oc < OC) ? addr : 0` — that mux
+  blocks Vivado's BRAM inference for the weight memory.
 
 All three are automatically bundled into every iverilog / Verilator /
 Vivado invocation via `RTL_LIBRARY_SOURCES` in `mcp/tools.ts`.
+
+### Library invariants you can rely on (and must not break)
+
+- **`q_reg` freeze during MAC.** `line_buf_window`'s per-slot BRAM
+  output register only updates when `sched_advance == 1`. The
+  scheduler holds `sched_advance = 0` from `output_fires` through the
+  entire MAC pass (via `eff_stall = stall_in || output_fires`), so
+  `window_flat` is bit-stable from the cycle the MAC samples it
+  through every `k_counter` step. If `q_reg` were free-running off
+  live `sched_in_col`, the rightmost window column would shift while
+  the MAC is reading taps and every k≥1 contribution would be wrong.
+- **Multi-frame correctness via `row_valid`.** BRAM cells retain
+  prior-frame data across a new `frame_start`. `line_buf_window`'s
+  `row_valid[KH-1:0]` register is cleared at `frame_start` and is
+  the SOLE guarantee that top-pad reads return zero instead of stale
+  pixels from the previous frame. Bottom-pad row_wraps must not
+  mark a slot valid (the scheduler walks past `IH-1` into the
+  bottom-pad fringe but no real writes land there, so the slot still
+  holds stale data from KH rows ago).
+- **Right-pad zeros via BRAM init.** Writes are gated by
+  `!right_padded`, so `mem[MAX_IN_COL]` is never touched. Vivado
+  initialises BRAMs to zero at FPGA configuration, so right-pad
+  reads return zero without an explicit gate in the read path. Do
+  not introduce a write to right-pad columns.
 
 ### Top-level contract (what the generated wrapper does)
 
