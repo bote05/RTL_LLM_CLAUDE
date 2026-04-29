@@ -47,19 +47,11 @@ export const PIPELINE_CONFIG = {
   // frontends must read this same value when computing mac_parallelism and
   // pipeline_latency_cycles.
   MAX_PARALLEL_MACS: 4,
-  // Hard capability ceiling on each packed activation stream. Foundry's
-  // ability to emit correct bit-slicing scales poorly past a few thousand
-  // bits; burning Foundry + Surgeon attempts on a layer beyond that point is
-  // pure waste. 4096 bits = 512 INT8 channels, which covers ResNet-50
-  // through L2 for conv/relu outputs and for each side of an add. Add layers
-  // carry lhs+rhs concatenated on data_in, so the gate checks input_width_bits
-  // / 2 for add instead of the combined top-level port width. L3/L4 at
-  // 8192/16384-bit activation streams need tiled channel streaming, which is
-  // not yet implemented: the orchestrator fast-fails those layers with
-  // failure_class=architectural_unsupported and routes them directly to
-  // fail_abort (NOT to Surgeon — Surgeon cannot fix a capability gap).
-  // Change this when tiled streaming ships; until then, architectural_unsupported
-  // layers are reported separately in the pipeline summary, not as RTL failures.
+  // Flat-bus capability ceiling. Layers above this should be manually tagged
+  // with a heavier contract (`tiled-streaming`, `dram-backed-weights`,
+  // `activation-double-buffering`, or `weight-tiling`) so the orchestrator
+  // selects the matching contract infrastructure instead of spending retries
+  // on an impossible full-width bus.
   MAX_SUPPORTED_BUS_BITS: 4096,
   output_dir: "../output",
   rtl_dir: "../output/rtl",

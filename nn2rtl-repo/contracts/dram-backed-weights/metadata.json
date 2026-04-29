@@ -1,0 +1,39 @@
+{
+  "name": "dram-backed-weights",
+  "display_name": "DRAM-backed Weights",
+  "complexity_rank": 2,
+  "interface_signals": [
+    { "name": "clk", "direction": "input", "width_bits": 1, "role": "clock" },
+    { "name": "rst_n", "direction": "input", "width_bits": 1, "role": "active-low reset" },
+    { "name": "valid_in", "direction": "input", "width_bits": 1, "role": "activation stream valid" },
+    { "name": "ready_in", "direction": "output", "width_bits": 1, "role": "activation stream ready/stall" },
+    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "activation beat" },
+    { "name": "valid_out", "direction": "output", "width_bits": 1, "role": "output stream valid" },
+    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "output beat" },
+    { "name": "weights_arvalid", "direction": "output", "width_bits": 1, "role": "AXI read address valid" },
+    { "name": "weights_arready", "direction": "input", "width_bits": 1, "role": "AXI read address ready" },
+    { "name": "weights_araddr", "direction": "output", "width_bits": 32, "role": "AXI read byte address" },
+    { "name": "weights_arlen", "direction": "output", "width_bits": 8, "role": "AXI burst length minus one" },
+    { "name": "weights_rvalid", "direction": "input", "width_bits": 1, "role": "AXI read data valid" },
+    { "name": "weights_rready", "direction": "output", "width_bits": 1, "role": "AXI read data ready" },
+    { "name": "weights_rdata", "direction": "input", "width_bits": 64, "role": "AXI read data" },
+    { "name": "weights_rlast", "direction": "input", "width_bits": 1, "role": "AXI read data last" }
+  ],
+  "fit_constraints": {
+    "max_bus_width_bits": 4096,
+    "default_beat_width_bits": 256,
+    "bram_formula": "on-chip BRAM stores only prefetch_fifo_depth*64 bits plus optional active weight tile and bias cache; full weights remain in external memory.",
+    "dram_bandwidth_assumption": "64-bit AXI read data at one beat per cycle when weights_arvalid/weights_arready and weights_rvalid/weights_rready sustain without bubbles.",
+    "buffer_sizing_rules": [
+      "prefetch FIFO depth must cover worst-case MAC consumption burst",
+      "ready_in must deassert when the prefetch FIFO underruns",
+      "weights_araddr must address the serialized weight stream in byte order"
+    ]
+  },
+  "supported_ops": ["conv2d"],
+  "dependencies": ["axi_read_memory_controller"],
+  "docs": [
+    "knowledge/patterns/01_context.md",
+    "knowledge/patterns/08_common_bugs.md"
+  ]
+}

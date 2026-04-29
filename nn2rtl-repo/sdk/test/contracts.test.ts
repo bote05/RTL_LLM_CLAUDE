@@ -12,6 +12,13 @@ import {
   layerIrSchema as sdkLayerIrSchema,
   verificationSidecarSchema as sdkVerificationSidecarSchema,
 } from "../schemas.js";
+import {
+  CONTRACT_IDS,
+  contractSelectionForLayer,
+  contractTestbenchTemplatePath,
+  loadContractMetadata,
+  resolveLayerContractId,
+} from "../contracts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,6 +45,66 @@ function extractSchemaDefinition(source: string, schemaName: string): string {
 }
 
 describe("contract parity", () => {
+  it("has a complete metadata/template/generator/checker set for every contract", async () => {
+    for (const contractId of CONTRACT_IDS) {
+      const metadata = loadContractMetadata(contractId);
+      expect(metadata.name).toBe(contractId);
+      expect(metadata.interface_signals.some((signal) => signal.name === "clk")).toBe(true);
+      expect(metadata.interface_signals.some((signal) => signal.name === "data_in")).toBe(true);
+      expect(metadata.fit_constraints.max_bus_width_bits).toBeGreaterThan(0);
+
+      const contractDir = path.join(repoRoot, "contracts", contractId);
+      await expect(readFile(path.join(contractDir, "testbench.cpp"), "utf8")).resolves.toContain(
+        contractId,
+      );
+      await expect(readFile(path.join(contractDir, "golden.py"), "utf8")).resolves.toContain(
+        "generate_contract_vectors",
+      );
+      await expect(readFile(path.join(contractDir, "latency.ts"), "utf8")).resolves.toContain(
+        "expectedLatencyCycles",
+      );
+    }
+  });
+
+  it("resolves contract tags and preserves legacy io_mode aliases", () => {
+    const base = {
+      module_id: "unit",
+      op_type: "conv2d" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 64, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 1, 1],
+      num_weights: 4096,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+
+    expect(resolveLayerContractId(base)).toBe("flat-bus");
+    expect(resolveLayerContractId({ ...base, io_mode: "channel_tiled" })).toBe("tiled-streaming");
+    expect(resolveLayerContractId({ ...base, contract_id: "weight-tiling" })).toBe("weight-tiling");
+    expect(contractSelectionForLayer({ ...base, contract_id: "dram-backed-weights" }).selected.name).toBe(
+      "dram-backed-weights",
+    );
+    // Use a path.join to keep the assertion portable across Windows (\) and POSIX (/).
+    expect(contractTestbenchTemplatePath("flat-bus")).toContain(
+      path.join("contracts", "flat-bus", "testbench.cpp"),
+    );
+  });
+
   it("keeps shared interfaces aligned across sdk and mcp", async () => {
     const sdkTypes = await readFile(path.join(repoRoot, "sdk", "types.ts"), "utf8");
     const mcpTypes = await readFile(path.join(repoRoot, "mcp", "types.ts"), "utf8");
@@ -144,6 +211,13 @@ describe("contract parity", () => {
       golden_outputs_path: "/tmp/out.json",
       results_path: "/tmp/results.json",
       testbench_template_path: "/tmp/tb.cpp",
+      contract_id: "flat-bus",
+      contract_name: "Flat Bus",
+      contract_metadata_path: "/tmp/contracts/flat-bus/metadata.json",
+      beat_width_bits: 8,
+      beats_per_input_sample: 1,
+      beats_per_output_sample: 1,
+      contract_params: {},
     });
     expect(sdkVerificationSidecarSchema.parse(sidecar)).toEqual(sidecar);
 
@@ -152,6 +226,7 @@ describe("contract parity", () => {
     expect(tbReadme).toContain('"data_in_signal": "data_in"');
     expect(tbReadme).toContain('"data_out_signal": "data_out"');
     expect(tbReadme).toContain('"bus_bytes_per_sample": 1');
+    expect(sidecar.contract_id).toBe("flat-bus");
     expect(tbCpp).toContain("ready_in_signal");
     expect(tbCpp).toContain("data_in_signal");
     expect(tbCpp).toContain("data_out_signal");

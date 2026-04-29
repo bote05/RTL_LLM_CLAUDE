@@ -599,6 +599,7 @@ function requireAbsoluteSidecarPaths(sidecar: VerificationSidecar): void {
     "golden_inputs_path",
     "golden_outputs_path",
     "results_path",
+    "testbench_template_path",
   ] as const;
 
   for (const field of pathFields) {
@@ -703,7 +704,8 @@ export async function run_verilator(
 
     await writeFile(verilogPath, verilog_source, "utf8");
     await mkdir(tempJsonDir, { recursive: true });
-    await copyFile(TB_SOURCE_PATH, tempTbPath);
+    await copyFile(sidecar.testbench_template_path || TB_SOURCE_PATH, tempTbPath);
+    await copyFile(TB_SOURCE_PATH, path.join(tempDir, "contract_tb_runtime.cpp"));
     await copyFile(TB_JSON_HPP_PATH, tempJsonPath);
     const libraryPaths = await copyRtlLibrarySources(tempDir);
     const libraryBasenames = libraryPaths.map((p) => path.basename(p));

@@ -32,6 +32,19 @@ export const moduleStatusSchema = z.enum([
   "fail_abort",
 ]);
 
+const contractIdSchema = z.enum([
+  "flat-bus",
+  "tiled-streaming",
+  "dram-backed-weights",
+  "activation-double-buffering",
+  "weight-tiling",
+]);
+
+const contractParamSchema = z.record(
+  z.string(),
+  z.union([z.string(), z.number(), z.boolean(), z.null()]),
+);
+
 // Base ZodObject — exposes .pick / .omit / .partial for callers that need
 // structural slicing (tests, delegation output-format derivation).
 export const layerIrBaseSchema = z
@@ -72,7 +85,17 @@ export const layerIrBaseSchema = z
     // min(OC, PIPELINE_CONFIG.MAX_PARALLEL_MACS).
     mac_parallelism: z.number().int().positive().optional(),
     weight_bank_paths: z.array(z.string()).optional(),
-    io_mode: z.enum(["packed_full", "channel_tiled"]).optional(),
+    contract_id: contractIdSchema.optional(),
+    contract_params: contractParamSchema.optional(),
+    io_mode: z
+      .enum([
+        "packed_full",
+        "channel_tiled",
+        "dram_backed_weights",
+        "activation_double_buffered",
+        "weight_tiled",
+      ])
+      .optional(),
     channel_tile: z.number().int().positive().optional(),
     // MaxPool2d geometry — optional at the type level because only present
     // when op_type === "maxpool". The *refined* schema below requires them
@@ -201,6 +224,13 @@ export const verificationSidecarSchema = z
     golden_outputs_path: z.string(),
     results_path: z.string(),
     testbench_template_path: z.string(),
+    contract_id: contractIdSchema.optional(),
+    contract_name: z.string().optional(),
+    contract_metadata_path: z.string().optional(),
+    beat_width_bits: z.number().int().positive().optional(),
+    beats_per_input_sample: z.number().int().positive().optional(),
+    beats_per_output_sample: z.number().int().positive().optional(),
+    contract_params: contractParamSchema.optional(),
   })
   .strict();
 
