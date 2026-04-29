@@ -2,6 +2,12 @@
 
 **Goal:** give Foundry and Surgeon a lookup tool that returns op-type-specific RTL patterns + reference implementations, so they adapt proven structures instead of hallucinating them. Covers Tiers 0, 1, 2 — deliberately stops short of handwritten parameterized library (Tier 3).
 
+**Phase 7 status:** contract-specific infrastructure is now split into
+`contracts/<contract_name>/` folders for `flat-bus`, `tiled-streaming`,
+`dram-backed-weights`, `activation-double-buffering`, and `weight-tiling`.
+Each folder owns metadata, a testbench template, a golden-vector adapter, and
+a latency checker. `sdk/contracts.ts` is the shared selection logic.
+
 **Context to read before starting:**
 - `ARCHITECTURE.md` — especially the "Known Bottleneck — Spatial Convolutions Do Not Close Reliably" section (near the end). Documents what we've tried and the exact failure modes.
 - `nn2rtl-plugin/agents/foundry.md` — current Foundry system prompt and pinned template.
@@ -12,7 +18,7 @@
 
 **What NOT to do:**
 - Do not write Verilog `.v` files directly under `output/rtl/` — always via `write_verilog` MCP tool (the Foundry/Surgeon path handles this).
-- Do not modify `tb/static_verilator_tb.cpp`, `scripts/golden_impl.py` semantics, or the LayerIR schema.
+- Do not modify `tb/static_verilator_tb.cpp` or `scripts/golden_impl.py` semantics without updating the contract infrastructure tests. LayerIR schema changes must stay mirrored between `sdk/` and `mcp/`.
 - Do not add handwritten parameterized operator library modules (that would be Tier 3; deferred).
 
 ---

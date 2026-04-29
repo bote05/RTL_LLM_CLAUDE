@@ -1,0 +1,46 @@
+{
+  "name": "weight-tiling",
+  "display_name": "Weight Tiling",
+  "complexity_rank": 4,
+  "interface_signals": [
+    { "name": "clk", "direction": "input", "width_bits": 1, "role": "clock" },
+    { "name": "rst_n", "direction": "input", "width_bits": 1, "role": "active-low reset" },
+    { "name": "valid_in", "direction": "input", "width_bits": 1, "role": "activation stream valid" },
+    { "name": "ready_in", "direction": "output", "width_bits": 1, "role": "activation stream ready/stall" },
+    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "activation beat" },
+    { "name": "valid_out", "direction": "output", "width_bits": 1, "role": "final accumulated output valid" },
+    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "final accumulated output beat" },
+    { "name": "tile_start", "direction": "output", "width_bits": 1, "role": "begins a new weight tile" },
+    { "name": "tile_done", "direction": "output", "width_bits": 1, "role": "current weight tile complete" },
+    { "name": "tile_index", "direction": "output", "width_bits": 16, "role": "current weight tile index" },
+    { "name": "weights_arvalid", "direction": "output", "width_bits": 1, "role": "AXI read address valid" },
+    { "name": "weights_arready", "direction": "input", "width_bits": 1, "role": "AXI read address ready" },
+    { "name": "weights_araddr", "direction": "output", "width_bits": 32, "role": "AXI read byte address" },
+    { "name": "weights_arlen", "direction": "output", "width_bits": 8, "role": "AXI burst length minus one" },
+    { "name": "weights_rvalid", "direction": "input", "width_bits": 1, "role": "AXI read data valid" },
+    { "name": "weights_rready", "direction": "output", "width_bits": 1, "role": "AXI read data ready" },
+    { "name": "weights_rdata", "direction": "input", "width_bits": 64, "role": "AXI read data" },
+    { "name": "weights_rlast", "direction": "input", "width_bits": 1, "role": "AXI read data last" }
+  ],
+  "fit_constraints": {
+    "max_bus_width_bits": 256,
+    "default_beat_width_bits": 256,
+    "bram_formula": "BRAM bits = active_weight_tile_bytes*8 + partial_accumulator_bits + prefetch_fifo_depth*64; active_weight_tile_bytes must fit target BRAM after activation buffers.",
+    "dram_bandwidth_assumption": "64-bit AXI stream cannot deliver the whole layer at compute rate; computation is split into weight tiles with partial sums retained on-chip.",
+    "weight_tiling_rules": [
+      "split output channels and/or input-channel kernel ranges into deterministic tiles",
+      "accumulate partial sums across tiles before requantizing",
+      "valid_out may assert only after the final tile for the output pixel"
+    ],
+    "buffer_sizing_rules": [
+      "partial accumulator storage must cover one output tile",
+      "ready_in may deassert while a tile is loading or partial sums are draining"
+    ]
+  },
+  "supported_ops": ["conv2d"],
+  "dependencies": ["axi_read_memory_controller", "dram-backed-weights"],
+  "docs": [
+    "knowledge/patterns/01_context.md",
+    "knowledge/patterns/08_common_bugs.md"
+  ]
+}

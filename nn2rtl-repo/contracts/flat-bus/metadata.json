@@ -1,0 +1,28 @@
+{
+  "name": "flat-bus",
+  "display_name": "Flat Bus",
+  "complexity_rank": 0,
+  "interface_signals": [
+    { "name": "clk", "direction": "input", "width_bits": 1, "role": "clock" },
+    { "name": "rst_n", "direction": "input", "width_bits": 1, "role": "active-low reset" },
+    { "name": "valid_in", "direction": "input", "width_bits": 1, "role": "input stream valid" },
+    { "name": "ready_in", "direction": "output", "width_bits": 1, "role": "input stream ready" },
+    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "one packed pixel per beat" },
+    { "name": "valid_out", "direction": "output", "width_bits": 1, "role": "output stream valid" },
+    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "one packed output pixel per beat" }
+  ],
+  "fit_constraints": {
+    "max_bus_width_bits": 4096,
+    "bram_formula": "conv2d weights use num_weights bytes plus optional output_channels*4 bias bytes; activations are streamed and not stored by the contract.",
+    "buffer_sizing_rules": [
+      "input_width_bits must equal full input channel pack (or lhs/rhs operand pack for add)",
+      "output_width_bits must equal full output channel pack"
+    ]
+  },
+  "supported_ops": ["conv2d", "relu", "add", "maxpool"],
+  "dependencies": [],
+  "docs": [
+    "knowledge/patterns/01_context.md",
+    "knowledge/patterns/08_common_bugs.md"
+  ]
+}

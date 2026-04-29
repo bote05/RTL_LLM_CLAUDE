@@ -700,8 +700,8 @@ describe("orchestrate helpers", () => {
       golden_outputs_path: "/tmp/out.goldout",
     };
     const reason = checkBusWidthCapability(baseLayer);
-    expect(reason).toContain("requires tiled channel streaming which is not yet implemented");
-    expect(reason).toContain("MAX_SUPPORTED_BUS_BITS");
+    expect(reason).toContain("does not fit contract 'flat-bus'");
+    expect(reason).toContain("max_bus_width_bits=4096");
 
     const smallLayer = { ...baseLayer, input_width_bits: 512, output_width_bits: 512 };
     expect(checkBusWidthCapability(smallLayer)).toBeNull();
@@ -726,7 +726,57 @@ describe("orchestrate helpers", () => {
       input_width_bits: 16384,
       output_width_bits: 8192,
     };
-    expect(checkBusWidthCapability(layer3Add)).toContain("per_operand_input_width_bits=8192");
+    expect(checkBusWidthCapability(layer3Add)).toContain("effective_input_width_bits=8192");
+  });
+
+  it("preflight uses selected contract metadata for extra interface ports", () => {
+    const layer = {
+      module_id: "dram_conv",
+      op_type: "conv2d" as const,
+      contract_id: "dram-backed-weights" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 64, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 1, 1],
+      num_weights: 4096,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+    const module = {
+      module_id: "dram_conv",
+      spec_hash: "fixture",
+      generated_by: "Foundry" as const,
+      attempt: 1,
+      verilog_source: `
+module dram_conv(
+  input wire clk,
+  input wire rst_n,
+  input wire valid_in,
+  output wire ready_in,
+  input wire [511:0] data_in,
+  output wire valid_out,
+  output wire [511:0] data_out
+);
+endmodule
+`,
+    };
+
+    const issues = preflightVerilogModule(module, layer);
+    expect(issues.some((issue) => issue.includes("weights_arvalid"))).toBe(true);
   });
 
   it("records fatal pipeline errors to the run log", async () => {
