@@ -18,6 +18,8 @@ Supported `op_type` values: `conv2d`, `relu`, `add`, `maxpool`.
 - For conv modules, derive `ACC_W`, `BIASED_W`, `SCALED_W`, and the clamp temporary width from `K_TOTAL`, the fixed `BIAS_W=32`, and the chosen `SCALE_MULT`; never hardcode `acc` to `32` bits or `scaled`/`v_tmp` to `48` bits
 - Residual add saturates back to INT8
 - Public port names are canonical: `clk`, `rst_n` (active-low), `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`. The static testbench enforces these exactly — any other name fails before simulation.
+- When `contract_options.selected` is present, also implement every additional port declared in `contracts/<contract_name>/metadata.json` with the exact direction and width. The selected contract metadata is authoritative for tiled, DRAM-backed, double-buffered, and weight-tiled interfaces.
+- `flat-bus` sends one full packed pixel per beat. `tiled-streaming` sends fixed-width channel-tile beats and requires state to persist across beats for one logical pixel. `dram-backed-weights` and `weight-tiling` expose the metadata-declared AXI read channel and must stall cleanly when weight prefetch data is unavailable. `activation-double-buffering` must keep ping-pong load and compute buffers distinct.
 - `ready_in` is a module **output** (backpressure upstream). If stalling is not needed, tie high after reset.
 - `valid_out` must assert exactly `pipeline_latency_cycles` cycles after the first `valid_in` of a vector.
 - `pipeline_latency_cycles` from the LayerIR is authoritative. Do not override it with a hand-derived formula.

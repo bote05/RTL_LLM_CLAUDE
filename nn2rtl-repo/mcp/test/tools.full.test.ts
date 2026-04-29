@@ -145,6 +145,66 @@ async function writeSidecar(
   return sidecarPath;
 }
 
+const CONTRACT_IDS = [
+  "flat-bus",
+  "tiled-streaming",
+  "dram-backed-weights",
+  "activation-double-buffering",
+  "weight-tiling",
+] as const;
+
+async function contractPassthroughVerilog(moduleName: string, contractId: string): Promise<string> {
+  const metadataPath = path.join(repoRoot, "contracts", contractId, "metadata.json");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+    interface_signals: Array<{ name: string; direction: "input" | "output"; width_bits?: number; width_expr?: string }>;
+  };
+  const canonical = new Set(["clk", "rst_n", "valid_in", "ready_in", "data_in", "valid_out", "data_out"]);
+  const extraSignals = metadata.interface_signals.filter((signal) => !canonical.has(signal.name));
+  const extraPorts = extraSignals
+    .map((signal) => {
+      const width = signal.width_bits ?? 1;
+      const range = width > 1 ? ` [${width - 1}:0]` : "      ";
+      return `  ${signal.direction} wire${range} ${signal.name}`;
+    })
+    .join(",\n");
+  const extraAssigns = extraSignals
+    .filter((signal) => signal.direction === "output")
+    .map((signal) => {
+      const width = signal.width_bits ?? 1;
+      const zero = width > 1 ? `${width}'d0` : "1'b0";
+      return `  assign ${signal.name} = ${zero};`;
+    })
+    .join("\n");
+  const commaExtra = extraPorts ? `,\n${extraPorts}` : "";
+
+  return `
+module ${moduleName} (
+  input  wire       clk,
+  input  wire       rst_n,
+  input  wire       valid_in,
+  input  wire [7:0] data_in,
+  output wire       ready_in,
+  output reg        valid_out,
+  output reg  [7:0] data_out${commaExtra}
+);
+  assign ready_in = 1'b1;
+${extraAssigns}
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      valid_out <= 1'b0;
+      data_out <= 8'd0;
+    end else begin
+      valid_out <= valid_in;
+      if (valid_in) begin
+        data_out <= data_in;
+      end
+    end
+  end
+endmodule
+`;
+}
+
 // Real Verilator builds take 10–15s on Windows with w64devkit; the vitest
 // default 5s timeout is far too tight for this suite.
 const VERILATOR_TEST_TIMEOUT_MS = 180_000;
@@ -191,6 +251,56 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       got: [1, 2, 7],
       max_error: 0,
     });
+  });
+
+  it("passes a valid module through the flat-bus contract template", async () => {
+    const tempDir = await makeTempDir("nn2rtl-verilator-contract-template-");
+    const verilog = await loadFixture(verilatorFixtureRoot, "stream_passthrough.v");
+    const sidecarPath = await writeSidecar(tempDir, "stream_passthrough", [4, 5, 6], [4, 5, 6], 1, {
+      testbench_template_path: path.join(repoRoot, "contracts", "flat-bus", "testbench.cpp"),
+      contract_id: "flat-bus",
+      contract_name: "Flat Bus",
+      contract_metadata_path: path.join(repoRoot, "contracts", "flat-bus", "metadata.json"),
+      beat_width_bits: 8,
+      beats_per_input_sample: 1,
+      beats_per_output_sample: 1,
+      contract_params: {},
+    });
+
+    const result = await run_verilator(verilog, "stream_passthrough", sidecarPath);
+
+    expect(result).toMatchObject({
+      module_id: "stream_passthrough",
+      status: "pass",
+      timing_pass: true,
+      timing_actual_cycles: 1,
+      expected: [4, 5, 6],
+      got: [4, 5, 6],
+      max_error: 0,
+    });
+  });
+
+  it("passes template smoke modules for every contract infrastructure set", async () => {
+    for (const contractId of CONTRACT_IDS) {
+      const moduleName = `contract_${contractId.replace(/-/g, "_")}_passthrough`;
+      const tempDir = await makeTempDir(`nn2rtl-verilator-${contractId}-`);
+      const verilog = await contractPassthroughVerilog(moduleName, contractId);
+      const sidecarPath = await writeSidecar(tempDir, moduleName, [7, 8], [7, 8], 1, {
+        testbench_template_path: path.join(repoRoot, "contracts", contractId, "testbench.cpp"),
+        contract_id: contractId,
+        contract_name: contractId,
+        contract_metadata_path: path.join(repoRoot, "contracts", contractId, "metadata.json"),
+        beat_width_bits: 8,
+        beats_per_input_sample: 1,
+        beats_per_output_sample: 1,
+        contract_params: {},
+      });
+
+      const result = await run_verilator(verilog, moduleName, sidecarPath);
+      expect(result.status, contractId).toBe("pass");
+      expect(result.expected, contractId).toEqual([7, 8]);
+      expect(result.got, contractId).toEqual([7, 8]);
+    }
   });
 
   it("packs and unpacks 32-bit multi-channel bus samples correctly", async () => {

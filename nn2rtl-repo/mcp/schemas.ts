@@ -48,6 +48,20 @@ export const retrospectorAdviceSchema = z
   })
   .strict();
 
+// Local helper schemas used by LayerIR and VerificationSidecar.
+const contractIdSchema = z.enum([
+  "flat-bus",
+  "tiled-streaming",
+  "dram-backed-weights",
+  "activation-double-buffering",
+  "weight-tiling",
+]);
+
+const contractParamSchema = z.record(
+  z.string(),
+  z.union([z.string(), z.number(), z.boolean(), z.null()]),
+);
+
 // See sdk/schemas.ts for the rationale; the two schemas must stay in
 // lockstep (check:twins).
 export const layerIrBaseSchema = z
@@ -82,7 +96,17 @@ export const layerIrBaseSchema = z
     padding: z.array(z.number().int().nonnegative()).optional(),
     mac_parallelism: z.number().int().positive().optional(),
     weight_bank_paths: z.array(z.string()).optional(),
-    io_mode: z.enum(["packed_full", "channel_tiled", "dram_backed"]).optional(),
+    contract_id: contractIdSchema.optional(),
+    contract_params: contractParamSchema.optional(),
+    io_mode: z
+      .enum([
+        "packed_full",
+        "channel_tiled",
+        "dram_backed_weights",
+        "activation_double_buffered",
+        "weight_tiled",
+      ])
+      .optional(),
     channel_tile: z.number().int().positive().optional(),
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
@@ -216,6 +240,13 @@ export const verificationSidecarSchema = z
     golden_outputs_path: z.string(),
     results_path: z.string(),
     testbench_template_path: z.string(),
+    contract_id: contractIdSchema.optional(),
+    contract_name: z.string().optional(),
+    contract_metadata_path: z.string().optional(),
+    beat_width_bits: z.number().int().positive().optional(),
+    beats_per_input_sample: z.number().int().positive().optional(),
+    beats_per_output_sample: z.number().int().positive().optional(),
+    contract_params: contractParamSchema.optional(),
   })
   .strict();
 

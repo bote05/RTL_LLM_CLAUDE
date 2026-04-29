@@ -31,7 +31,16 @@ import {
   verifResultSchema as verifResultZod,
   verilogModuleSchema as verilogModuleZod,
 } from "./schemas.js";
+import {
+  contractFitFailure,
+  contractSelectionForLayer,
+  contractSidecarFields,
+  contractTestbenchTemplatePath,
+  loadContractMetadata,
+  resolveLayerContractId,
+} from "./contracts.js";
 import type {
+  ContractId,
   LayerIR,
   FailureClassification,
   ModelUsageEntry,
@@ -342,25 +351,7 @@ function reportPath(fileName: string): string {
  * `input_width_bits`.
  */
 export function checkBusWidthCapability(layer: LayerIR): string | null {
-  const cap = PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS;
-  const effectiveInputWidthBits =
-    layer.op_type === "add" ? layer.input_width_bits / 2 : layer.input_width_bits;
-  const overIn = effectiveInputWidthBits > cap;
-  const overOut = layer.output_width_bits > cap;
-  if (!overIn && !overOut) return null;
-  const which: string[] = [];
-  if (overIn) {
-    which.push(
-      layer.op_type === "add"
-        ? `per_operand_input_width_bits=${effectiveInputWidthBits} (packed input_width_bits=${layer.input_width_bits})`
-        : `input_width_bits=${layer.input_width_bits}`,
-    );
-  }
-  if (overOut) which.push(`output_width_bits=${layer.output_width_bits}`);
-  return (
-    `Layer ${layer.module_id} requires tiled channel streaming which is not yet implemented. ` +
-    `${which.join(" and ")} exceeds MAX_SUPPORTED_BUS_BITS=${cap}.`
-  );
+  return contractFitFailure(layer);
 }
 
 export function normalizeAgentName(slug: AgentSlug): AgentName {
@@ -713,6 +704,12 @@ function buildFoundryGenerationBrief(payload: unknown): string | null {
     `- bus contract: data_in=${layer.input_width_bits} bits, data_out=${layer.output_width_bits} bits.`,
     `- pipeline_latency_cycles=${layer.pipeline_latency_cycles} from LayerIR is authoritative; do not override it with a hand-derived formula.`,
   ];
+  const contractSelection = contractSelectionForLayer(layer);
+  lines.push(
+    `- selected contract: ${contractSelection.selected.name} (rank ${contractSelection.selected.complexity_rank}).`,
+    `- contract template: ${contractTestbenchTemplatePath(contractSelection.selected.name)}.`,
+    `- contract constraints: max_bus_width_bits=${contractSelection.selected.fit_constraints.max_bus_width_bits}; dependencies=${contractSelection.selected.dependencies.join(", ") || "none"}.`,
+  );
   if (currentContractId(layer) !== "flat-bus") {
     lines.push(
       `- contract variant: ${currentContractId(layer)}; io_mode=${layer.io_mode}; channel_tile=${layer.channel_tile ?? "n/a"}.`,
@@ -778,6 +775,7 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
     "Compact repair brief:",
     `- op_type=${layer.op_type}; bus contract=data_in ${layer.input_width_bits} bits, data_out ${layer.output_width_bits} bits; preserve the public interface exactly.`,
     `- authoritative latency contract: pipeline_latency_cycles=${layer.pipeline_latency_cycles}.`,
+    `- selected contract: ${resolveLayerContractId(layer)}. Preserve every metadata-declared interface signal for that contract.`,
     `- current failure: status=${verif.status}; status_class=${verif.status_class ?? "n/a"}; failure_class=${verif.failure_class ?? "n/a"}.`,
     "- compiler-first rule: if status=syntax_error or compiler stderr is populated, read iverilog/verilator stderr before touching datapath logic.",
     "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
@@ -990,7 +988,6 @@ type DocLifecycleState = {
   docs: Record<string, DocLifecycleEntry>;
 };
 
-type ContractId = "flat-bus" | "tiled-streaming" | "dram-backed";
 type ContractPlan = {
   id: ContractId;
   complexity: number;
@@ -1026,9 +1023,9 @@ const CONTRACT_PLANS: ContractPlan[] = [
     description: "Channel-tiled stream contract that keeps each activation stream within the configured bus cap.",
   },
   {
-    id: "dram-backed",
+    id: "dram-backed-weights",
     complexity: 2,
-    description: "External-memory-backed contract for layers that cannot fit the simpler streaming contracts.",
+    description: "External-memory-backed weights contract for layers that cannot fit the simpler streaming contracts.",
   },
 ];
 
@@ -1058,8 +1055,11 @@ async function saveContractResponseState(state: ContractResponseState): Promise<
 }
 
 function currentContractId(layer: LayerIR): ContractId {
+  if (layer.contract_id) return layer.contract_id;
   if (layer.io_mode === "channel_tiled") return "tiled-streaming";
-  if (layer.io_mode === "dram_backed") return "dram-backed";
+  if (layer.io_mode === "dram_backed_weights") return "dram-backed-weights";
+  if (layer.io_mode === "activation_double_buffered") return "activation-double-buffering";
+  if (layer.io_mode === "weight_tiled") return "weight-tiling";
   return "flat-bus";
 }
 
@@ -1104,7 +1104,8 @@ function applyContractPlan(baseLayer: LayerIR, plan: ContractPlan): LayerIR {
   }
 
   const channelTile = chooseContractChannelTile(baseLayer);
-  layer.io_mode = plan.id === "tiled-streaming" ? "channel_tiled" : "dram_backed";
+  layer.io_mode = plan.id === "tiled-streaming" ? "channel_tiled" : "dram_backed_weights";
+  layer.contract_id = plan.id;
   layer.channel_tile = channelTile;
   layer.input_width_bits = tiledInputBusWidthBits(baseLayer, channelTile);
   layer.output_width_bits = tiledOutputBusWidthBits(channelTile);
@@ -2566,25 +2567,42 @@ const assayerLayerBusContractZod = layerIrZod.superRefine((layer, ctx) => {
     });
   }
 
-  const expectedInput = expectedInputBusWidthBits(layer);
-  if (layer.input_width_bits !== expectedInput) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["input_width_bits"],
-      message:
-        `input_width_bits=${layer.input_width_bits} does not match the LayerIR channel contract ` +
-        `for op_type='${layer.op_type}' (expected ${expectedInput}).`,
-    });
-  }
+  const contractId = resolveLayerContractId(layer);
+  const metadata = loadContractMetadata(contractId);
+  if (contractId === "flat-bus" || layer.channel_tile) {
+    const expectedInput = expectedInputBusWidthBits(layer);
+    if (layer.input_width_bits !== expectedInput) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["input_width_bits"],
+        message:
+          `input_width_bits=${layer.input_width_bits} does not match the ${contractId} channel contract ` +
+          `for op_type='${layer.op_type}' (expected ${expectedInput}).`,
+      });
+    }
 
-  const expectedOutput = expectedOutputBusWidthBits(layer);
-  if (layer.output_width_bits !== expectedOutput) {
+    const expectedOutput = expectedOutputBusWidthBits(layer);
+    if (layer.output_width_bits !== expectedOutput) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["output_width_bits"],
+        message:
+          `output_width_bits=${layer.output_width_bits} does not match the ${contractId} channel contract ` +
+          `for op_type='${layer.op_type}' (expected ${expectedOutput}).`,
+      });
+    }
+  }
+  if (
+    (layer.op_type === "add" ? layer.input_width_bits / 2 : layer.input_width_bits) >
+      metadata.fit_constraints.max_bus_width_bits ||
+    layer.output_width_bits > metadata.fit_constraints.max_bus_width_bits
+  ) {
     ctx.addIssue({
       code: "custom",
-      path: ["output_width_bits"],
+      path: ["contract_id"],
       message:
-        `output_width_bits=${layer.output_width_bits} does not match the LayerIR channel contract ` +
-        `for op_type='${layer.op_type}' (expected ${expectedOutput}).`,
+        `LayerIR '${layer.module_id}' exceeds ${contractId} max_bus_width_bits=` +
+        `${metadata.fit_constraints.max_bus_width_bits}.`,
     });
   }
 });
@@ -2757,6 +2775,18 @@ function expectedTopPortWidthBits(
 ): number {
   const spec = CANONICAL_TOP_PORTS[portName];
   return "width_key" in spec ? layer[spec.width_key] : spec.width_bits;
+}
+
+function evaluateContractPortWidthBits(widthExpr: string | undefined, widthBits: number | undefined, layer: LayerIR): number {
+  if (typeof widthBits === "number") return widthBits;
+  switch (widthExpr) {
+    case "input_width_bits":
+      return layer.input_width_bits;
+    case "output_width_bits":
+      return layer.output_width_bits;
+    default:
+      return 1;
+  }
 }
 
 /**
@@ -3041,10 +3071,13 @@ export function preflightVerilogModule(module: VerilogModule, layer: LayerIR): s
   }
 
   const ports = parseAnsiTopPorts(portBlock);
-  for (const [portName, expected] of Object.entries(CANONICAL_TOP_PORTS)) {
+  const contract = loadContractMetadata(resolveLayerContractId(layer));
+  const expectedPorts = contract.interface_signals;
+  for (const expected of expectedPorts) {
+    const portName = expected.name;
     const parsed = ports.get(portName);
     if (!parsed) {
-      issues.push(`Missing canonical top-level port '${portName}'.`);
+      issues.push(`Missing ${contract.name} top-level port '${portName}'.`);
       continue;
     }
 
@@ -3054,10 +3087,7 @@ export function preflightVerilogModule(module: VerilogModule, layer: LayerIR): s
       );
     }
 
-    const expectedWidth = expectedTopPortWidthBits(
-      portName as keyof typeof CANONICAL_TOP_PORTS,
-      layer,
-    );
+    const expectedWidth = evaluateContractPortWidthBits(expected.width_expr, expected.width_bits, layer);
     if (parsed.width_bits !== null && parsed.width_bits !== expectedWidth) {
       issues.push(
         `Top-level port '${portName}' declares width ${parsed.width_bits} bits, expected ${expectedWidth} bits from LayerIR.`,
@@ -3768,7 +3798,8 @@ async function runAssayerDeterministic(
     golden_inputs_path: layer.golden_inputs_path,
     golden_outputs_path: layer.golden_outputs_path,
     results_path: resultsPath,
-    testbench_template_path: resolveFromSdk(PIPELINE_CONFIG.static_testbench_path),
+    testbench_template_path: contractTestbenchTemplatePath(resolveLayerContractId(layer)),
+    ...contractSidecarFields(layer),
   };
   await mkdir(path.dirname(sidecarPath), { recursive: true });
   await mkdir(path.dirname(resultsPath), { recursive: true });

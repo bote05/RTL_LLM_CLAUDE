@@ -23,6 +23,7 @@ nn2rtl-repo/
 ├── nn2rtl-plugin/             # Layer 1: Claude Code plugin (agent roles + skills)
 ├── sdk/                       # Layer 2: TypeScript orchestrator
 ├── mcp/                       # Layer 3: MCP server exposing hardware toolchain
+├── contracts/                 # Contract-specific metadata, testbench templates, golden adapters, latency checks
 ├── scripts/                   # Frontend prep plus shared maintenance checks
 ├── tb/                        # Static C++ Verilator testbench
 ├── vendor/sky130/             # Legacy ASIC library artifacts, not used by current Vivado flow
@@ -120,7 +121,7 @@ Tiny CLI wrapper. Calls `runCli()` and routes uncaught errors through `handlePip
 ### `types.ts`
 Canonical TypeScript interfaces for the pipeline data contracts:
 
-- `LayerIR` — master per-module spec. `module_id`, `op_type`, input/output shapes, `weights_path` / `bias_path` / `weight_shape` / `num_weights` (weights on disk, not inline), `scale_factor`, `zero_point`, timing contract (`pipeline_latency_cycles`, `clock_period_ns`), port widths (`input_width_bits = in_channels * 8` for conv/relu/maxpool, `= output_channels * 16` for add because lhs+rhs are concatenated; `output_width_bits = out_channels * 8`), **seven canonical signal names typed as string literals** (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`), and golden input/output vector file paths.
+- `LayerIR` — master per-module spec. `module_id`, `op_type`, input/output shapes, `weights_path` / `bias_path` / `weight_shape` / `num_weights` (weights on disk, not inline), `scale_factor`, `zero_point`, timing contract (`pipeline_latency_cycles`, `clock_period_ns`), port widths (`input_width_bits = in_channels * 8` for conv/relu/maxpool, `= output_channels * 16` for add because lhs+rhs are concatenated; `output_width_bits = out_channels * 8`), optional `contract_id` / `contract_params`, **seven canonical signal names typed as string literals** (`"clk"`, `"rst_n"`, `"valid_in"`, `"valid_out"`, `"ready_in"`, `"data_in"`, `"data_out"`), and golden input/output vector file paths.
 - `PipelineIR` — container for all LayerIRs plus model metadata.
 - `VerilogModule` — what Foundry and Surgeon produce.
 - `VerifResult` — what the deterministic Assayer function returns. Includes timing fields, numerical diagnostics, and optional `failure_class`.
@@ -199,13 +200,15 @@ Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus man
 12. If the post-Retrospector attempt still fails, flag the selected structural contract in `output/contract_state.json` as `manual_correction_needed`, write a manual-correction report under `output/reports/`, and retry the same module with the next available contract in complexity order (`flat-bus`, `tiled-streaming`, `dram-backed`). If every contract is flagged, leave only that module in `fail_abort`; other modules continue.
 13. On terminal state, write `output/reports/pipeline_summary.json`.
 
-**Deterministic Assayer (`runAssayerDeterministic`).** Verification is no longer an LLM agent. The orchestrator writes the sidecar JSON from LayerIR fields (all signal names are fixed literals, widths and paths copied from the LayerIR), runs a deterministic RTL preflight that parses the ANSI port list to catch port-direction, port-width, and missing-port errors before invoking the toolchain, then calls `run_iverilog` for a fast lint pass followed by `run_verilator` for full simulation — both imported directly from the MCP package. The Verilator testbench produces a structured `VerifResult` JSON validated by Zod. No Haiku, no hallucination — a module has a `VerifResult` iff Verilator produced one.
+**Deterministic Assayer (`runAssayerDeterministic`).** Verification is no longer an LLM agent. The orchestrator writes the sidecar JSON from LayerIR fields (all signal names are fixed literals, widths and paths copied from the LayerIR), resolves the selected contract infrastructure from `contracts/<contract_name>/`, runs a deterministic RTL preflight that parses the ANSI port list to catch port-direction, port-width, and missing-port errors before invoking the toolchain, then calls `run_iverilog` for a fast lint pass followed by `run_verilator` for full simulation — both imported directly from the MCP package. The Verilator testbench produces a structured `VerifResult` JSON validated by Zod. No Haiku, no hallucination — a module has a `VerifResult` iff Verilator produced one.
 
 The sidecar includes `bus_bytes_per_sample` (= `input_width_bits / 8`), which the testbench cross-checks against the NN2V binary header's `bytes_per_sample` field.
 
 **Deterministic Vivado invocation (`invokeVivado`).** Vivado is invoked via direct MCP import, not through an LLM mediator. The result is validated against `synthesisReportSchema`.
 
-**RTL Preflight (`preflightVerilogModule`).** Before running any toolchain, the orchestrator parses the generated Verilog's ANSI port list and checks: (1) all seven canonical ports are present, (2) directions match the spec (e.g. `ready_in` must be `output`), (3) bus widths match `input_width_bits` / `output_width_bits` from the LayerIR. Preflight failures return a `VerifResult` with `failure_class: port_width_mismatch` and skip the iverilog/Verilator invocations entirely, saving minutes of build time.
+**RTL Preflight (`preflightVerilogModule`).** Before running any toolchain, the orchestrator parses the generated Verilog's ANSI port list and checks the selected contract metadata: required ports are present, directions match, and dynamic widths match `input_width_bits` / `output_width_bits` from the LayerIR. Flat-bus still checks the original seven canonical ports; DRAM/tiling contracts add their metadata-declared memory/tile/buffer ports. Preflight failures return a `VerifResult` with `failure_class: port_width_mismatch` and skip the iverilog/Verilator invocations entirely, saving minutes of build time.
+
+**Contract infrastructure.** `contracts/<contract_name>/` is the manual infrastructure boundary for Phase 7. Every contract has `metadata.json`, `testbench.cpp`, `golden.py`, and `latency.ts`. `sdk/contracts.ts` loads metadata, resolves legacy `io_mode` aliases, sends the selected + available contracts to Foundry, and chooses the Assayer testbench template. The implemented contract set is `flat-bus`, `tiled-streaming`, `dram-backed-weights`, `activation-double-buffering`, and `weight-tiling`.
 
 **PPA gates (`evaluateSynthesis`).** After Vivado succeeds, `evaluateSynthesis` checks: (1) `timing_met === true`, (2) Fmax >= 50 MHz target (else `failure_class: missing_pipeline_register`), and (3) timing data is present (`wns_ns !== null` and `fmax_mhz > 0`, else `synthesis_failed`). LUT/FF/DSP/BRAM metrics are recorded for thesis analysis but are not hard-failed yet. Reports larger than ~6 KB are summarized as head + ERROR lines + tail so Surgeon sees the actual diagnostics instead of warning spam.
 

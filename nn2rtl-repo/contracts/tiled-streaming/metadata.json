@@ -1,0 +1,32 @@
+{
+  "name": "tiled-streaming",
+  "display_name": "Tiled Streaming",
+  "complexity_rank": 1,
+  "interface_signals": [
+    { "name": "clk", "direction": "input", "width_bits": 1, "role": "clock" },
+    { "name": "rst_n", "direction": "input", "width_bits": 1, "role": "active-low reset" },
+    { "name": "valid_in", "direction": "input", "width_bits": 1, "role": "input beat valid" },
+    { "name": "ready_in", "direction": "output", "width_bits": 1, "role": "input beat ready/backpressure" },
+    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "fixed-width channel tile beat" },
+    { "name": "valid_out", "direction": "output", "width_bits": 1, "role": "output beat valid" },
+    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "fixed-width output channel tile beat" }
+  ],
+  "fit_constraints": {
+    "max_bus_width_bits": 256,
+    "default_beat_width_bits": 256,
+    "default_channel_tile": 32,
+    "bram_formula": "line buffers store channel_tile lanes per spatial row; BRAM bits ~= channel_tile*8*image_width*(kernel_h-1) plus accumulator state.",
+    "buffer_sizing_rules": [
+      "input_width_bits and output_width_bits must be <= 256",
+      "channel_tile defines channels per beat",
+      "beats per pixel = ceil(channels / channel_tile)",
+      "spatial ops must retain line-buffer/window state across beats for the same pixel"
+    ]
+  },
+  "supported_ops": ["conv2d", "relu", "add", "maxpool"],
+  "dependencies": [],
+  "docs": [
+    "knowledge/patterns/01_context.md",
+    "knowledge/patterns/08_common_bugs.md"
+  ]
+}

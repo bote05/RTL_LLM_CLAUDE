@@ -225,7 +225,7 @@ async function seedLifecycleDoc(args: {
 const fixtureContractKeys = {
   flat: "flat-bus:conv2d_1x1x1x1_s1x1_i8_o8",
   tiled: "tiled-streaming:conv2d_1x1x1x1_s1x1_i8_o8_iotiled-streaming_tile1",
-  dram: "dram-backed:conv2d_1x1x1x1_s1x1_i8_o8_iodram-backed_tile1",
+  dram: "dram-backed-weights:conv2d_1x1x1x1_s1x1_i8_o8_iodram-backed-weights_tile1",
 } as const;
 
 async function seedContractFlags(keys: Array<keyof typeof fixtureContractKeys>): Promise<void> {
@@ -291,9 +291,12 @@ function createQueryMock(
           ? {
               category: "architectural_fit",
               violated_resource: null,
-              violated_constraint: evidence.includes("MAX_SUPPORTED_BUS_BITS")
-                ? "MAX_SUPPORTED_BUS_BITS"
-                : "resource_or_constraint_from_logs",
+              violated_constraint:
+                evidence.includes("MAX_SUPPORTED_BUS_BITS") ||
+                evidence.includes("max_bus_width_bits") ||
+                evidence.includes("max_supported_bus_bits")
+                  ? "MAX_SUPPORTED_BUS_BITS"
+                  : "resource_or_constraint_from_logs",
               rationale: "Mock classifier found a contract-fit indicator in the prompt.",
             }
           : {

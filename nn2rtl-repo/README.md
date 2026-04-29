@@ -410,12 +410,32 @@ Required semantics:
 - `clock_period_ns`
 - `input_width_bits`
 - `output_width_bits`
+- `contract_id` (optional; defaults to `flat-bus`)
+- `contract_params` (optional contract-specific numeric/string parameters)
 - `valid_in_signal`
 - `valid_out_signal`
 - `clock_signal`
 - `reset_signal`
 - `golden_inputs`
 - `golden_outputs`
+
+### Contract Infrastructure
+
+Manual contract infrastructure lives under `contracts/<contract_name>/`.
+Each contract folder contains `metadata.json`, `testbench.cpp`, `golden.py`,
+and `latency.ts`. The orchestrator resolves the selected contract from
+`LayerIR.contract_id` (or legacy `io_mode`), sends the selected metadata and
+ordered available contracts to Foundry, writes the matching testbench template
+into the verification sidecar, and preflights the RTL against the metadata
+interface signals.
+
+Available contracts, in complexity order:
+
+- `flat-bus`
+- `tiled-streaming`
+- `dram-backed-weights`
+- `activation-double-buffering`
+- `weight-tiling`
 
 ### VerilogModule
 

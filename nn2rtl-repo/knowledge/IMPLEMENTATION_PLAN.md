@@ -10,6 +10,12 @@
 - Phase 5 failure response is implemented behind self-improve mode: terminal `code_bug` and `architectural_fit` failures run Retrospector, exhausted contracts are flagged in `output/contract_state.json`, alternatives are tried in `flat-bus -> tiled-streaming -> dram-backed` order, and all-contract exhaustion writes a manual-correction report plus human-escalation log.
 - Phase 6 new doc/reference creation is implemented behind self-improve mode: when the selected contract or technique has no doc coverage, Foundry receives `create_new_doc_request` with the spec, closest same-family local docs/references, and failure context; external retrieval is disallowed, and the successful doc/reference enters `probationary/` tagged with `contract_id` / `contract_key`.
 
+**Phase 7 status:** contract-specific infrastructure is now split into
+`contracts/<contract_name>/` folders for `flat-bus`, `tiled-streaming`,
+`dram-backed-weights`, `activation-double-buffering`, and `weight-tiling`.
+Each folder owns metadata, a testbench template, a golden-vector adapter, and
+a latency checker. `sdk/contracts.ts` is the shared selection logic.
+
 **Context to read before starting:**
 - `ARCHITECTURE.md` — especially the "Known Bottleneck — Spatial Convolutions Do Not Close Reliably" section (near the end). Documents what we've tried and the exact failure modes.
 - `nn2rtl-plugin/agents/foundry.md` — current Foundry system prompt and pinned template.
@@ -20,7 +26,7 @@
 
 **What NOT to do:**
 - Do not write Verilog `.v` files directly under `output/rtl/` — always via `write_verilog` MCP tool (the Foundry/Surgeon path handles this).
-- Do not modify `tb/static_verilator_tb.cpp`, `scripts/golden_impl.py` semantics, or the LayerIR schema.
+- Do not modify `tb/static_verilator_tb.cpp` or `scripts/golden_impl.py` semantics without updating the contract infrastructure tests. LayerIR schema changes must stay mirrored between `sdk/` and `mcp/`.
 - Do not add handwritten parameterized operator library modules (that would be Tier 3; deferred).
 
 ---

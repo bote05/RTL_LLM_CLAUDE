@@ -1,4 +1,16 @@
 export type LayerOpType = "conv2d" | "relu" | "add" | "maxpool";
+export type ContractId =
+  | "flat-bus"
+  | "tiled-streaming"
+  | "dram-backed-weights"
+  | "activation-double-buffering"
+  | "weight-tiling";
+export type IoMode =
+  | "packed_full"
+  | "channel_tiled"
+  | "dram_backed_weights"
+  | "activation_double_buffered"
+  | "weight_tiled";
 
 export interface LayerIR {
   module_id: string;
@@ -38,10 +50,11 @@ export interface LayerIR {
   // Layout is one file per lane; current verified RTL may continue to use the
   // flat weights_path until the banked datapath contract is enabled.
   weight_bank_paths?: string[];
-  // Optional IO-mode hooks for alternative module contracts. packed_full is
-  // the current default when omitted; channel_tiled / dram_backed are selected
-  // by the failure-response orchestrator when a simpler contract is flagged.
-  io_mode?: "packed_full" | "channel_tiled" | "dram_backed";
+  // Contract selection hook. When omitted, flat-bus is the default. io_mode is
+  // kept for backward compatibility with older manually-tagged LayerIR files.
+  contract_id?: ContractId;
+  contract_params?: Record<string, string | number | boolean | null>;
+  io_mode?: IoMode;
   channel_tile?: number;
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
@@ -166,6 +179,13 @@ export interface VerificationSidecar {
   golden_outputs_path: string;
   results_path: string;
   testbench_template_path: string;
+  contract_id?: ContractId;
+  contract_name?: string;
+  contract_metadata_path?: string;
+  beat_width_bits?: number;
+  beats_per_input_sample?: number;
+  beats_per_output_sample?: number;
+  contract_params?: Record<string, string | number | boolean | null>;
 }
 
 export type ModuleStatus =
