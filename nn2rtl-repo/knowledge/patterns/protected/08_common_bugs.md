@@ -54,7 +54,7 @@ simplest form of some of these before simulation even runs.
   owns the `IW-1+PW` constant, and `line_buf_window.v`'s right-pad
   reads are sourced from BRAM cells that are never written (so they
   return zero by construction). `layer0_0_conv1` now passes first-shot
-  (`max_error=0`) via `knowledge/references/conv7x7_passing_reference.v`.
+  (`max_error=0`) via `knowledge/references/protected/conv7x7_passing_reference.v`.
 - **Historical record**: The bug repeatedly produced
   `first_mismatch_index` in the `OH*OW/2` range with `max_error` 1–3,
   histogram concentrated in the last quarter. Diagnosis was the

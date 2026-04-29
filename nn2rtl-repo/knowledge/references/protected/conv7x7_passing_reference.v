@@ -2,7 +2,7 @@
 // IC=3, OC=64, IH=IW=224, OH=OW=112, KH=KW=7, stride=2, padding=3, MP=4.
 //
 // Concrete instantiation of the split-architecture pattern documented in
-// `knowledge/patterns/04_conv7x7_pad3.md`. Foundry's job for any stem-
+// `knowledge/patterns/protected/04_conv7x7_pad3.md`. Foundry's job for any stem-
 // shaped 7x7 conv is structural wiring only: pick the LayerIR's IC/OC/
 // IH/IW/MP/scale_factor/$readmemh paths and adapt the localparam block
 // + the two `$readmemh` parameter strings on the `conv_datapath`
@@ -86,8 +86,8 @@ module layer0_0_conv1 (
     // --- One-cycle start pulse on reset deassertion. Re-arms when
     //     sched_out_frame_done fires AND the last pixel's MAC pipeline
     //     has fully drained (mac_busy goes back to 0). Same pattern as
-    //     conv3x3 reference (see `knowledge/patterns/03_conv3x3_pad1.md`
-    //     and `knowledge/references/conv3x3_passing_reference.v` for
+    //     conv3x3 reference (see `knowledge/patterns/protected/03_conv3x3_pad1.md`
+    //     and `knowledge/references/protected/conv3x3_passing_reference.v` for
     //     the full rationale -- fix for the last-pixel race when the
     //     re-arm fires mid-MAC).
     reg started, start_pulse, pending_rearm;

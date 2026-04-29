@@ -21,7 +21,32 @@ export const failureClassSchema = z.enum([
   "verilator_timeout",
   "architectural_unsupported",
   "structural_preflight_failed",
+  "manual_correction_needed",
 ]);
+
+export const failureCategorySchema = z.enum([
+  "code_bug",
+  "architectural_fit",
+  "unknown",
+]);
+
+export const failureClassificationSchema = z
+  .object({
+    category: failureCategorySchema,
+    violated_resource: z.string().nullable().optional(),
+    violated_constraint: z.string().nullable().optional(),
+    rationale: z.string().min(1),
+  })
+  .strict();
+
+export const retrospectorAdviceSchema = z
+  .object({
+    analysis: z.string().min(1),
+    suggestion: z.string().min(1),
+    doc_fault: z.boolean().optional(),
+    faulty_doc_paths: z.array(z.string()).optional(),
+  })
+  .strict();
 
 // See sdk/schemas.ts for the rationale; the two schemas must stay in
 // lockstep (check:twins).
@@ -57,7 +82,7 @@ export const layerIrBaseSchema = z
     padding: z.array(z.number().int().nonnegative()).optional(),
     mac_parallelism: z.number().int().positive().optional(),
     weight_bank_paths: z.array(z.string()).optional(),
-    io_mode: z.enum(["packed_full", "channel_tiled"]).optional(),
+    io_mode: z.enum(["packed_full", "channel_tiled", "dram_backed"]).optional(),
     channel_tile: z.number().int().positive().optional(),
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
@@ -132,6 +157,17 @@ export const verifResultSchema = z
       },
       failureClassSchema.optional(),
     ),
+    failure_category: z.preprocess(
+      (v) => {
+        if (v === null || v === undefined) return undefined;
+        if (typeof v !== "string") return undefined;
+        return failureCategorySchema.safeParse(v).success ? v : undefined;
+      },
+      failureCategorySchema.optional(),
+    ),
+    violated_resource: nullToUndef(z.string()),
+    violated_constraint: nullToUndef(z.string()),
+    classifier_reason: nullToUndef(z.string()),
     fix_hint: nullToUndef(z.string()),
     iverilog_stderr: nullToUndef(z.string()),
     verilator_stderr: nullToUndef(z.string()),

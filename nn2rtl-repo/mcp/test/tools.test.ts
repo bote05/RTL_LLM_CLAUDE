@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  KNOWLEDGE_ARCHIVE_TIER,
+  KNOWLEDGE_READ_TIERS,
   VERILATOR_COMMAND,
   get_rtl_patterns,
   parseVivadoReport,
@@ -82,6 +84,11 @@ async function writeSidecar(
 }
 
 describe("mcp tools", () => {
+  it("keeps archive out of the readable knowledge tiers", () => {
+    expect([...KNOWLEDGE_READ_TIERS]).toEqual(["protected", "active", "probationary"]);
+    expect(KNOWLEDGE_READ_TIERS).not.toContain(KNOWLEDGE_ARCHIVE_TIER);
+  });
+
   it("get_rtl_patterns returns a reference Verilog for conv2d 1x1 when the file exists", async () => {
     const result = await get_rtl_patterns("conv2d", 1, 1);
     expect(typeof result.pattern_markdown).toBe("string");

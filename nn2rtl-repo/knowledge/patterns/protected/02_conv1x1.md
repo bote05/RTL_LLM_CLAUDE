@@ -1,6 +1,6 @@
 # 02 — Pointwise (1×1) conv2d
 
-Canonical reference: `knowledge/references/conv1x1_passing_reference.v`
+Canonical reference: `knowledge/references/protected/conv1x1_passing_reference.v`
 (Foundry first-shot, 0 Surgeon retries). The FSM is monolithic — pointwise
 convs do not use the split-architecture library because they have no line
 buffer / window to share with spatial convs. The reference embeds the full
@@ -191,14 +191,14 @@ module <module_id> (
 endmodule
 ```
 
-The reference file in `references/conv1x1_passing_reference.v` is 245 lines
+The reference file in `references/protected/conv1x1_passing_reference.v` is 245 lines
 with all the boilerplate filled in. Adapt its parameter block (IC, OC, IH,
 IW, MP, SCALE_MULT, SCALE_SHIFT, weights_path, bias_path) to the new layer's
 LayerIR — do not regenerate the surrounding FSM from scratch.
 
 ## Reference to adapt
 
-`knowledge/references/conv1x1_passing_reference.v` — proven-passing 1×1
+`knowledge/references/protected/conv1x1_passing_reference.v` — proven-passing 1×1
 RTL from this repo (historical first-shot pass for `layer1_0_conv1`). Adapt
 its parameter block (IC / OC / IH / IW / MP / SCALE_MULT / SCALE_SHIFT /
 `$readmemh` paths) to the current LayerIR; do not regenerate the FSM from

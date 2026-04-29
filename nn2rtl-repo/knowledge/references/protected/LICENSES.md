@@ -45,11 +45,12 @@ All written in this repo, same license as the rest of the codebase.
 
 ## Rule for adding future references
 
-Every file in `knowledge/references/` must be actually read by
-`foundry.md`'s catalog and actually referenced by a
-`knowledge/patterns/*.md` file for adaptation. If neither is true,
-delete the file — provenance-only references are noise that mislead
-both reviewers and the agent.
+Every file in `knowledge/references/{protected,active,probationary}/`
+must be actually read by `get_rtl_patterns` / `foundry.md`'s catalog and
+actually referenced by a `knowledge/patterns/{protected,active,probationary}/*.md`
+file for adaptation. If neither is true, archive or delete the file —
+provenance-only references are noise that mislead both reviewers and the
+agent.
 
 When adding a new reference, record here: source repo / shape it
 embodies / license, and which pattern file + MCP-tool branch consumes

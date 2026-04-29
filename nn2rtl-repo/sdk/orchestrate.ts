@@ -1,4 +1,5 @@
-import { appendFile, access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { appendFile, access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -13,19 +14,29 @@ import {
   type SDKMessage,
   type SDKResultMessage,
 } from "./claude-agent-sdk-compat.js";
-import { AGENT_CONFIG, PIPELINE_CONFIG, type AgentName } from "./config.js";
+import {
+  AGENT_CONFIG,
+  FAILURE_CLASSIFIER_CONFIG,
+  PIPELINE_CONFIG,
+  RETROSPECTOR_CONFIG,
+  type AgentName,
+} from "./config.js";
 import { PipelineStateManager } from "./pipeline.js";
 import {
   layerIrSchema as layerIrZod,
+  failureClassificationSchema as failureClassificationZod,
   pipelineIrSchema as pipelineIrZod,
+  retrospectorAdviceSchema as retrospectorAdviceZod,
   synthesisReportSchema as synthesisReportZod,
   verifResultSchema as verifResultZod,
   verilogModuleSchema as verilogModuleZod,
 } from "./schemas.js";
 import type {
   LayerIR,
+  FailureClassification,
   ModelUsageEntry,
   PipelineIR,
+  RetrospectorAdvice,
   VerifResult,
   VerilogModule,
 } from "./types.js";
@@ -70,6 +81,14 @@ type AgentRunResult<T> = {
   result: SDKResultMessage;
   messages: SDKMessage[];
 };
+type RtlAgentRunResult = AgentRunResult<VerilogModule> & {
+  draft_doc?: DocDraft | null;
+  doc_request?: CreateNewDocRequest | null;
+};
+type DelegatedAgentRunOptions = {
+  prompt?: string;
+  resumeSessionId?: string;
+};
 type FrontmatterRecord = Record<string, unknown>;
 
 type PortDirection = "input" | "output" | "inout";
@@ -96,6 +115,9 @@ export type RunPipelineOptions = {
   resume?: boolean;
   runtime?: Partial<OrchestratorRuntime>;
   maxRetries?: number;
+  // Optional programmatic override for tests/experiments. The default comes
+  // from PIPELINE_CONFIG.self_improve / NN2RTL_SELF_IMPROVE.
+  selfImprove?: boolean;
   // When set, restrict the pipeline to a single module (scoped run for
   // testing). The pipeline state is built with only that module in the
   // module set, so isDone() resolves after it passes or fail_aborts.
@@ -123,6 +145,54 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
 const pipelineIrOutputFormat = toOutputFormat(pipelineIrZod);
 const verilogModuleOutputFormat = toOutputFormat(verilogModuleZod);
 const verifResultOutputFormat = toOutputFormat(verifResultZod);
+const failureClassificationOutputFormat = toOutputFormat(failureClassificationZod);
+const retrospectorAdviceOutputFormat = toOutputFormat(retrospectorAdviceZod);
+
+const docDraftZod = z
+  .object({
+    title: z.string().min(1),
+    pattern_markdown: z.string().min(1),
+    reference_verilog: z.string().min(1),
+    notes: z.string().optional(),
+  })
+  .strict();
+type DocDraft = z.infer<typeof docDraftZod>;
+
+type ClosestDocSnippet = {
+  id: string;
+  tier: DocTier;
+  kind: "pattern" | "reference";
+  op_type: LayerIR["op_type"] | "shared";
+  contract_id?: ContractId;
+  relative_path: string;
+  text: string;
+};
+type NewDocFailureContext = {
+  reason: string;
+  previous_contract_id?: ContractId;
+  previous_contract_key?: string;
+  failure_result?: VerifResult;
+  flagged_contracts?: ContractFlag[];
+};
+type CreateNewDocRequest = {
+  enabled: true;
+  destination_tier: "probationary";
+  contract_id: ContractId;
+  contract_key: string;
+  reason: string;
+  no_external_retrieval: true;
+  closest_existing_docs: ClosestDocSnippet[];
+  failure_context: NewDocFailureContext;
+};
+
+const rtlAgentWithDocZod = z
+  .object({
+    module: verilogModuleZod,
+    draft_doc: docDraftZod,
+  })
+  .strict();
+type RtlAgentWithDoc = z.infer<typeof rtlAgentWithDocZod>;
+const rtlAgentWithDocOutputFormat = toOutputFormat(rtlAgentWithDocZod);
 
 export function createOrchestratorRuntime(
   overrides: Partial<OrchestratorRuntime> = {},
@@ -643,6 +713,12 @@ function buildFoundryGenerationBrief(payload: unknown): string | null {
     `- bus contract: data_in=${layer.input_width_bits} bits, data_out=${layer.output_width_bits} bits.`,
     `- pipeline_latency_cycles=${layer.pipeline_latency_cycles} from LayerIR is authoritative; do not override it with a hand-derived formula.`,
   ];
+  if (currentContractId(layer) !== "flat-bus") {
+    lines.push(
+      `- contract variant: ${currentContractId(layer)}; io_mode=${layer.io_mode}; channel_tile=${layer.channel_tile ?? "n/a"}.`,
+      "- contract switching rule: implement the requested interface variant exactly; do not fall back to the full flat-bus contract.",
+    );
+  }
 
   if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
     const kh = layer.weight_shape[2];
@@ -687,6 +763,7 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   }
   const layer = payload.layer_ir as unknown as LayerIR;
   const verif = payload.verif_result as unknown as VerifResult;
+  const retrySeed = typeof payload.retry_seed === "string" ? payload.retry_seed : null;
 
   // Distinguish the sim-passed / synth-only failure from a full functional
   // failure. When sim passed, the datapath is already correct by evidence —
@@ -705,6 +782,14 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
     "- compiler-first rule: if status=syntax_error or compiler stderr is populated, read iverilog/verilator stderr before touching datapath logic.",
     "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
   ];
+  if (retrySeed) {
+    lines.push(`- retry seed: ${retrySeed}. Use this as a fresh-attempt discriminator; do not repeat a prior unsuccessful patch shape.`);
+  }
+  if (currentContractId(layer) !== "flat-bus") {
+    lines.push(
+      `- contract variant: ${currentContractId(layer)}; io_mode=${layer.io_mode}; channel_tile=${layer.channel_tile ?? "n/a"}. Preserve this interface variant exactly.`,
+    );
+  }
 
   if (verif.failure_class === "verilator_timeout") {
     lines.push(
@@ -793,6 +878,1441 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   return lines.join("\n");
 }
 
+export type ModuleContractSummary = {
+  interface: {
+    clock: "clk";
+    reset: "rst_n";
+    valid_in: "valid_in";
+    ready_in: "ready_in";
+    valid_out: "valid_out";
+    data_in_bits: number;
+    data_out_bits: number;
+  };
+  timing: {
+    pipeline_latency_cycles: number;
+    clock_period_ns: number;
+    fmax_target_mhz: number;
+  };
+  capability_limits: {
+    max_supported_bus_bits: number;
+    target_part: "xc7a100tcsg324-1";
+    artix7_100t_capacity: {
+      lut: 63400;
+      ff: 126800;
+      dsp: 240;
+      bram18: 240;
+    };
+  };
+  operation: Record<string, unknown>;
+};
+
+export type FailureClassifierInput = {
+  module_spec: LayerIR;
+  contract: ModuleContractSummary;
+  failure_result: VerifResult;
+  logs: Record<string, unknown>;
+  module?: Pick<VerilogModule, "module_id" | "spec_hash" | "generated_by" | "attempt">;
+};
+
+export type RtlKnowledgeDoc = {
+  pattern_markdown: string;
+  reference_verilog: string | null;
+  license_notice: string | null;
+};
+
+export type FoundryVersionRecord = {
+  version_index: number;
+  module: VerilogModule;
+  session_id: string | null;
+  tool_use_summary: Record<string, unknown>;
+  documents_used: Array<{
+    tool_name: string | null;
+    input: unknown;
+  }>;
+};
+
+export type FailureAttemptRecord = {
+  attempt_index: number;
+  stage: string;
+  module: Pick<VerilogModule, "module_id" | "spec_hash" | "generated_by" | "attempt"> | null;
+  result: VerifResult;
+  logs: Record<string, unknown>;
+};
+
+export type RetrospectorInput = {
+  original_spec: LayerIR;
+  contract: ModuleContractSummary;
+  current_contract: ContractPlan;
+  available_contracts: ContractPlan[];
+  doc_used: RtlKnowledgeDoc;
+  knowledge_docs_used: KnowledgeDocRecord[];
+  foundry_versions: FoundryVersionRecord[];
+  failure_attempts: FailureAttemptRecord[];
+};
+
+type DocTier = "protected" | "active" | "probationary" | "archive";
+type GeneratedDocStatus = "probationary" | "active" | "archived";
+type KnowledgeDocRecord = {
+  id: string;
+  tier: DocTier;
+  kind: "pattern" | "reference";
+  op_type: LayerIR["op_type"];
+  contract_id?: ContractId;
+  path: string;
+  relative_path: string;
+};
+type DocLifecycleEntry = {
+  id: string;
+  op_type: LayerIR["op_type"];
+  contract_id?: ContractId;
+  contract_key?: string;
+  spec_hash: string;
+  status: GeneratedDocStatus;
+  pattern_path: string;
+  reference_path: string;
+  created_by_module: string;
+  created_by_agent: VerilogModule["generated_by"];
+  created_at: string;
+  creation_reason?: string;
+  source_doc_ids?: string[];
+  replacement_for?: string[];
+  used_by_modules: string[];
+  successful_modules: string[];
+  failed_modules: string[];
+  promoted_at?: string;
+  archived_at?: string;
+  archive_reason?: string;
+  archived_pattern_path?: string;
+  archived_reference_path?: string;
+};
+type DocLifecycleState = {
+  version: 1;
+  docs: Record<string, DocLifecycleEntry>;
+};
+
+type ContractId = "flat-bus" | "tiled-streaming" | "dram-backed";
+type ContractPlan = {
+  id: ContractId;
+  complexity: number;
+  description: string;
+};
+type ContractFlag = {
+  key: string;
+  contract_id: ContractId;
+  spec_hash: string;
+  op_type: LayerIR["op_type"];
+  status: "manual_correction_needed";
+  flagged_at: string;
+  updated_at: string;
+  module_ids: string[];
+  reason: string;
+  report_path?: string;
+  last_failure_result?: VerifResult;
+};
+type ContractResponseState = {
+  version: 1;
+  contracts: Record<string, ContractFlag>;
+};
+
+const CONTRACT_PLANS: ContractPlan[] = [
+  {
+    id: "flat-bus",
+    complexity: 0,
+    description: "Full packed activation bus, current default contract.",
+  },
+  {
+    id: "tiled-streaming",
+    complexity: 1,
+    description: "Channel-tiled stream contract that keeps each activation stream within the configured bus cap.",
+  },
+  {
+    id: "dram-backed",
+    complexity: 2,
+    description: "External-memory-backed contract for layers that cannot fit the simpler streaming contracts.",
+  },
+];
+
+const CONTRACT_STATE_PATH = resolveFromSdk(PIPELINE_CONFIG.contract_state_path);
+
+function emptyContractResponseState(): ContractResponseState {
+  return { version: 1, contracts: {} };
+}
+
+async function loadContractResponseState(): Promise<ContractResponseState> {
+  try {
+    const raw = await readFile(CONTRACT_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Partial<ContractResponseState>;
+    return {
+      version: 1,
+      contracts: parsed.contracts && typeof parsed.contracts === "object"
+        ? (parsed.contracts as Record<string, ContractFlag>)
+        : {},
+    };
+  } catch {
+    return emptyContractResponseState();
+  }
+}
+
+async function saveContractResponseState(state: ContractResponseState): Promise<void> {
+  await writeJsonFile(CONTRACT_STATE_PATH, state);
+}
+
+function currentContractId(layer: LayerIR): ContractId {
+  if (layer.io_mode === "channel_tiled") return "tiled-streaming";
+  if (layer.io_mode === "dram_backed") return "dram-backed";
+  return "flat-bus";
+}
+
+function contractStateKeyForLayer(layer: LayerIR): string {
+  return `${currentContractId(layer)}:${computeExpectedSpecHash(layer)}`;
+}
+
+function fullInputBusWidthBits(layer: LayerIR): number {
+  const inputChannels = getShapeChannels(layer.input_shape, "input_shape", layer.module_id);
+  return layer.op_type === "add" ? inputChannels * 16 : inputChannels * 8;
+}
+
+function fullOutputBusWidthBits(layer: LayerIR): number {
+  const outputChannels = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
+  return outputChannels * 8;
+}
+
+function chooseContractChannelTile(layer: LayerIR): number {
+  const inputChannels = getShapeChannels(layer.input_shape, "input_shape", layer.module_id);
+  const outputChannels = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
+  const maxChannels = Math.max(inputChannels, outputChannels);
+  const capChannels = Math.max(1, Math.floor(PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS / 8));
+  return Math.max(1, Math.min(maxChannels, capChannels));
+}
+
+function tiledInputBusWidthBits(layer: LayerIR, channelTile: number): number {
+  return layer.op_type === "add" ? channelTile * 16 : channelTile * 8;
+}
+
+function tiledOutputBusWidthBits(channelTile: number): number {
+  return channelTile * 8;
+}
+
+function applyContractPlan(baseLayer: LayerIR, plan: ContractPlan): LayerIR {
+  const layer = jsonClone(baseLayer);
+  if (plan.id === "flat-bus") {
+    layer.io_mode = "packed_full";
+    delete layer.channel_tile;
+    layer.input_width_bits = fullInputBusWidthBits(layer);
+    layer.output_width_bits = fullOutputBusWidthBits(layer);
+    return layer;
+  }
+
+  const channelTile = chooseContractChannelTile(baseLayer);
+  layer.io_mode = plan.id === "tiled-streaming" ? "channel_tiled" : "dram_backed";
+  layer.channel_tile = channelTile;
+  layer.input_width_bits = tiledInputBusWidthBits(baseLayer, channelTile);
+  layer.output_width_bits = tiledOutputBusWidthBits(channelTile);
+  return layer;
+}
+
+function contractPlanForLayer(layer: LayerIR): ContractPlan {
+  const id = currentContractId(layer);
+  const plan = CONTRACT_PLANS.find((candidate) => candidate.id === id);
+  if (!plan) {
+    throw new Error(`No contract plan registered for '${id}'.`);
+  }
+  return plan;
+}
+
+function isContractFlagged(state: ContractResponseState, layer: LayerIR): boolean {
+  return state.contracts[contractStateKeyForLayer(layer)]?.status === "manual_correction_needed";
+}
+
+function selectAvailableContract(
+  baseLayer: LayerIR,
+  state: ContractResponseState,
+  afterContractId?: ContractId,
+): { plan: ContractPlan; layer: LayerIR } | null {
+  const startIndex = afterContractId
+    ? CONTRACT_PLANS.findIndex((plan) => plan.id === afterContractId) + 1
+    : 0;
+  for (const plan of CONTRACT_PLANS.slice(Math.max(0, startIndex))) {
+    const layer = applyContractPlan(baseLayer, plan);
+    if (!isContractFlagged(state, layer)) {
+      return { plan, layer };
+    }
+  }
+  return null;
+}
+
+function setActiveLayerForModule(
+  pipelineIr: PipelineIR,
+  activeLayers: Map<string, LayerIR>,
+  moduleId: string,
+  layer: LayerIR,
+): void {
+  activeLayers.set(moduleId, layer);
+  const index = pipelineIr.layers.findIndex((candidate) => candidate.module_id === moduleId);
+  if (index >= 0) {
+    pipelineIr.layers[index] = layer;
+  }
+}
+
+async function writeManualCorrectionReport(input: {
+  moduleId: string;
+  layer: LayerIR;
+  result: VerifResult;
+  reason: string;
+  runtime: OrchestratorRuntime;
+}): Promise<string> {
+  const key = contractStateKeyForLayer(input.layer);
+  const reportAbs = reportPath(`manual_correction_${sanitizePathPart(key)}.json`);
+  await writeJsonFile(reportAbs, {
+    event: "manual_correction_needed",
+    generated_at: input.runtime.now().toISOString(),
+    module_id: input.moduleId,
+    contract_key: key,
+    contract_id: currentContractId(input.layer),
+    contract_plan: contractPlanForLayer(input.layer),
+    contract: buildModuleContractSummary(input.layer),
+    layer_ir: input.layer,
+    reason: input.reason,
+    final_result: input.result,
+    foundry_versions: foundryVersionsFor(input.layer),
+    failure_attempts: failureAttemptsFor(input.layer),
+    available_contracts: CONTRACT_PLANS,
+  });
+  return relFromRepo(reportAbs);
+}
+
+async function flagContractForManualCorrection(
+  state: ContractResponseState,
+  layer: LayerIR,
+  moduleId: string,
+  reason: string,
+  result: VerifResult,
+  runtime: OrchestratorRuntime,
+): Promise<ContractFlag> {
+  const key = contractStateKeyForLayer(layer);
+  const existing = state.contracts[key];
+  const reportPathRel = await writeManualCorrectionReport({
+    moduleId,
+    layer,
+    result,
+    reason,
+    runtime,
+  });
+  const moduleIds = new Set(existing?.module_ids ?? []);
+  moduleIds.add(moduleId);
+  const now = runtime.now().toISOString();
+  const flag: ContractFlag = {
+    key,
+    contract_id: currentContractId(layer),
+    spec_hash: computeExpectedSpecHash(layer),
+    op_type: layer.op_type,
+    status: "manual_correction_needed",
+    flagged_at: existing?.flagged_at ?? now,
+    updated_at: now,
+    module_ids: [...moduleIds].sort(),
+    reason,
+    report_path: reportPathRel,
+    last_failure_result: result,
+  };
+  state.contracts[key] = flag;
+  await appendRunLog(
+    {
+      event: "contract_manual_correction_needed",
+      module_id: moduleId,
+      contract_key: key,
+      contract_id: flag.contract_id,
+      reason,
+      report_path: reportPathRel,
+      result,
+    },
+    runtime,
+  );
+  return flag;
+}
+
+function buildModuleContractSummary(layer: LayerIR): ModuleContractSummary {
+  const operation: Record<string, unknown> = {
+    op_type: layer.op_type,
+    contract_id: currentContractId(layer),
+    contract_complexity: contractPlanForLayer(layer).complexity,
+    input_shape: layer.input_shape,
+    output_shape: layer.output_shape,
+    weight_shape: layer.weight_shape,
+    scale_factor: layer.scale_factor,
+    zero_point: layer.zero_point,
+  };
+
+  if (layer.op_type === "conv2d") {
+    operation.stride = layer.stride;
+    operation.padding = layer.padding;
+    operation.mac_parallelism = layer.mac_parallelism;
+    operation.io_mode = layer.io_mode ?? "packed_full";
+    operation.channel_tile = layer.channel_tile ?? null;
+    operation.weight_bank_paths = layer.weight_bank_paths ?? [];
+  } else if (layer.op_type === "add") {
+    operation.lhs_scale_factor = layer.lhs_scale_factor ?? null;
+    operation.rhs_scale_factor = layer.rhs_scale_factor ?? null;
+    operation.packed_operand_bits = layer.input_width_bits / 2;
+  } else if (layer.op_type === "maxpool") {
+    operation.kernel_size = layer.kernel_size;
+    operation.pool_stride = layer.pool_stride;
+    operation.pool_padding = layer.pool_padding;
+  }
+
+  return {
+    interface: {
+      clock: "clk",
+      reset: "rst_n",
+      valid_in: "valid_in",
+      ready_in: "ready_in",
+      valid_out: "valid_out",
+      data_in_bits: layer.input_width_bits,
+      data_out_bits: layer.output_width_bits,
+    },
+    timing: {
+      pipeline_latency_cycles: layer.pipeline_latency_cycles,
+      clock_period_ns: layer.clock_period_ns,
+      fmax_target_mhz: FMAX_TARGET_MHZ,
+    },
+    capability_limits: {
+      max_supported_bus_bits: PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS,
+      target_part: "xc7a100tcsg324-1",
+      artix7_100t_capacity: {
+        lut: 63400,
+        ff: 126800,
+        dsp: 240,
+        bram18: 240,
+      },
+    },
+    operation,
+  };
+}
+
+function buildFailureLogs(
+  result: VerifResult,
+  extraLogs: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    iverilog_stderr: result.iverilog_stderr ?? "",
+    verilator_stderr: result.verilator_stderr ?? "",
+    fix_hint: result.fix_hint ?? "",
+    verif_result_json: result,
+    ...extraLogs,
+  };
+}
+
+const FOUNDRY_HISTORY = new Map<string, FoundryVersionRecord[]>();
+const FAILURE_ATTEMPT_HISTORY = new Map<string, FailureAttemptRecord[]>();
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function moduleContractKey(layer: LayerIR): string {
+  return `${layer.module_id}:${computeExpectedSpecHash(layer)}`;
+}
+
+function extractSessionId(messages: SDKMessage[], result: SDKResultMessage): string | null {
+  const candidates: unknown[] = [result, ...messages.slice().reverse()];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue;
+    const sessionId = candidate.session_id;
+    if (typeof sessionId === "string" && sessionId.length > 0) {
+      return sessionId;
+    }
+  }
+  return null;
+}
+
+function recordFoundryVersion(
+  layer: LayerIR,
+  run: AgentRunResult<VerilogModule>,
+  audits: ToolUseAuditEntry[],
+): void {
+  const key = moduleContractKey(layer);
+  const history = FOUNDRY_HISTORY.get(key) ?? [];
+  const tool_use_summary = summarizeToolUse(audits);
+  const documents_used = audits
+    .filter((entry) => entry.kind === "tool_use" && entry.tool_name === "mcp__nn2rtl-tools__get_rtl_patterns")
+    .map((entry) => ({
+      tool_name: entry.tool_name,
+      input: entry.input,
+    }));
+
+  history.push({
+    version_index: history.length + 1,
+    module: jsonClone(run.payload),
+    session_id: extractSessionId(run.messages, run.result),
+    tool_use_summary,
+    documents_used,
+  });
+  FOUNDRY_HISTORY.set(key, history);
+}
+
+function recordFailureAttempt(
+  layer: LayerIR,
+  stage: string,
+  result: VerifResult,
+  module: VerilogModule | null,
+  extraLogs: Record<string, unknown> = {},
+): void {
+  if (result.status === "pass") return;
+  const key = moduleContractKey(layer);
+  const history = FAILURE_ATTEMPT_HISTORY.get(key) ?? [];
+  history.push({
+    attempt_index: history.length + 1,
+    stage,
+    module: module
+      ? {
+          module_id: module.module_id,
+          spec_hash: module.spec_hash,
+          generated_by: module.generated_by,
+          attempt: module.attempt,
+        }
+      : null,
+    result: jsonClone(result),
+    logs: buildFailureLogs(result, extraLogs),
+  });
+  FAILURE_ATTEMPT_HISTORY.set(key, history);
+}
+
+function failureAttemptsFor(layer: LayerIR): FailureAttemptRecord[] {
+  return FAILURE_ATTEMPT_HISTORY.get(moduleContractKey(layer)) ?? [];
+}
+
+function foundryVersionsFor(layer: LayerIR): FoundryVersionRecord[] {
+  return FOUNDRY_HISTORY.get(moduleContractKey(layer)) ?? [];
+}
+
+function latestFoundrySessionId(layer: LayerIR): string | null {
+  const versions = foundryVersionsFor(layer);
+  for (let i = versions.length - 1; i >= 0; i -= 1) {
+    const sessionId = versions[i].session_id;
+    if (sessionId) return sessionId;
+  }
+  return null;
+}
+
+const KNOWLEDGE_ROOT = path.join(repoRoot, "knowledge");
+const DOC_LIFECYCLE_STATE_PATH = path.join(KNOWLEDGE_ROOT, "doc_lifecycle.json");
+
+function emptyDocLifecycleState(): DocLifecycleState {
+  return { version: 1, docs: {} };
+}
+
+async function loadDocLifecycleState(): Promise<DocLifecycleState> {
+  try {
+    const raw = await readFile(DOC_LIFECYCLE_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Partial<DocLifecycleState>;
+    return {
+      version: 1,
+      docs: parsed.docs && typeof parsed.docs === "object" ? parsed.docs : {},
+    };
+  } catch {
+    return emptyDocLifecycleState();
+  }
+}
+
+async function saveDocLifecycleState(state: DocLifecycleState): Promise<void> {
+  await writeJsonFile(DOC_LIFECYCLE_STATE_PATH, state);
+}
+
+function relFromRepo(absPath: string): string {
+  return path.relative(repoRoot, absPath).split(path.sep).join("/");
+}
+
+function absFromRepo(relPath: string): string {
+  return path.resolve(repoRoot, relPath);
+}
+
+function sanitizePathPart(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "doc";
+}
+
+function docTimestamp(date: Date): string {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function docContractId(doc: Pick<DocLifecycleEntry, "contract_id">): ContractId {
+  return doc.contract_id ?? "flat-bus";
+}
+
+function docAppliesToLayer(doc: Pick<DocLifecycleEntry, "op_type" | "contract_id">, layer: LayerIR): boolean {
+  return doc.op_type === layer.op_type && docContractId(doc) === currentContractId(layer);
+}
+
+function protectedPatternCoveragePath(layer: LayerIR): string | null {
+  if (layer.op_type === "conv2d") {
+    const kh = layer.weight_shape[2];
+    const kw = layer.weight_shape[3];
+    const file =
+      kh === 1 && kw === 1
+        ? "02_conv1x1.md"
+        : kh === 3 && kw === 3
+          ? "03_conv3x3_pad1.md"
+          : kh === 7 && kw === 7
+            ? "04_conv7x7_pad3.md"
+            : null;
+    return file ? `knowledge/patterns/protected/${file}` : null;
+  }
+  const byOp: Partial<Record<LayerIR["op_type"], string>> = {
+    add: "05_add_quantized.md",
+    relu: "06_relu.md",
+    maxpool: "07_maxpool.md",
+  };
+  const file = byOp[layer.op_type];
+  return file ? `knowledge/patterns/protected/${file}` : null;
+}
+
+function protectedPatternCandidatesForLayer(layer: LayerIR): Array<{ id: string; op_type: LayerIR["op_type"] | "shared"; relPath: string }> {
+  const common = [
+    { id: "protected_context", op_type: "shared" as const, relPath: "knowledge/patterns/protected/01_context.md" },
+    { id: "protected_common_bugs", op_type: "shared" as const, relPath: "knowledge/patterns/protected/08_common_bugs.md" },
+  ];
+  if (layer.op_type === "conv2d") {
+    const exact =
+      layer.weight_shape[2] === 1 && layer.weight_shape[3] === 1
+        ? "02_conv1x1.md"
+        : layer.weight_shape[2] === 3 && layer.weight_shape[3] === 3
+          ? "03_conv3x3_pad1.md"
+          : layer.weight_shape[2] === 7 && layer.weight_shape[3] === 7
+            ? "04_conv7x7_pad3.md"
+            : null;
+    const convDocs = [
+      "02_conv1x1.md",
+      "03_conv3x3_pad1.md",
+      "04_conv7x7_pad3.md",
+    ];
+    const ordered = exact
+      ? [exact, ...convDocs.filter((file) => file !== exact)]
+      : convDocs;
+    return [
+      ...common,
+      ...ordered.map((file) => ({
+        id: `protected_${file.replace(/[^a-z0-9]+/gi, "_")}`,
+        op_type: "conv2d" as const,
+        relPath: `knowledge/patterns/protected/${file}`,
+      })),
+    ];
+  }
+  const byOp: Partial<Record<LayerIR["op_type"], string>> = {
+    add: "05_add_quantized.md",
+    relu: "06_relu.md",
+    maxpool: "07_maxpool.md",
+  };
+  const file = byOp[layer.op_type];
+  return file
+    ? [
+        ...common,
+        {
+          id: `protected_${file.replace(/[^a-z0-9]+/gi, "_")}`,
+          op_type: layer.op_type,
+          relPath: `knowledge/patterns/protected/${file}`,
+        },
+      ]
+    : common;
+}
+
+function protectedReferenceCandidatesForLayer(layer: LayerIR): Array<{ id: string; op_type: LayerIR["op_type"]; relPath: string }> {
+  if (layer.op_type !== "conv2d") return [];
+  const file =
+    layer.weight_shape[2] === 1 && layer.weight_shape[3] === 1
+      ? "conv1x1_passing_reference.v"
+      : layer.weight_shape[2] === 3 && layer.weight_shape[3] === 3
+        ? "conv3x3_passing_reference.v"
+        : layer.weight_shape[2] === 7 && layer.weight_shape[3] === 7
+          ? "conv7x7_passing_reference.v"
+          : null;
+  return file
+    ? [
+        {
+          id: `protected_${file.replace(/[^a-z0-9]+/gi, "_")}`,
+          op_type: "conv2d",
+          relPath: `knowledge/references/protected/${file}`,
+        },
+      ]
+    : [];
+}
+
+async function readSnippet(relPath: string, maxChars = 12000): Promise<string | null> {
+  const text = await readText(absFromRepo(relPath)).catch(() => null);
+  if (text === null) return null;
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n[... truncated ...]`;
+}
+
+async function closestDocsForNewDoc(
+  state: DocLifecycleState,
+  layer: LayerIR,
+): Promise<ClosestDocSnippet[]> {
+  const snippets: ClosestDocSnippet[] = [];
+  for (const candidate of protectedPatternCandidatesForLayer(layer)) {
+    const text = await readSnippet(candidate.relPath);
+    if (text !== null) {
+      snippets.push({
+        id: candidate.id,
+        tier: "protected",
+        kind: "pattern",
+        op_type: candidate.op_type,
+        relative_path: candidate.relPath,
+        text,
+      });
+    }
+  }
+  for (const candidate of protectedReferenceCandidatesForLayer(layer)) {
+    const text = await readSnippet(candidate.relPath);
+    if (text !== null) {
+      snippets.push({
+        id: candidate.id,
+        tier: "protected",
+        kind: "reference",
+        op_type: candidate.op_type,
+        relative_path: candidate.relPath,
+        text,
+      });
+    }
+  }
+
+  const generated = Object.values(state.docs)
+    .filter(
+      (doc) =>
+        doc.op_type === layer.op_type &&
+        (doc.status === "active" || doc.status === "probationary"),
+    )
+    .sort((a, b) => {
+      const aExact = docContractId(a) === currentContractId(layer) ? 0 : 1;
+      const bExact = docContractId(b) === currentContractId(layer) ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      const aTier = a.status === "active" ? 0 : 1;
+      const bTier = b.status === "active" ? 0 : 1;
+      return aTier !== bTier ? aTier - bTier : a.id.localeCompare(b.id);
+    })
+    .slice(0, 4);
+  for (const doc of generated) {
+    const patternText = await readSnippet(doc.pattern_path);
+    if (patternText !== null) {
+      snippets.push({
+        id: doc.id,
+        tier: doc.status === "active" ? "active" : "probationary",
+        kind: "pattern",
+        op_type: doc.op_type,
+        contract_id: doc.contract_id,
+        relative_path: doc.pattern_path,
+        text: patternText,
+      });
+    }
+    const referenceText = await readSnippet(doc.reference_path, 16000);
+    if (referenceText !== null) {
+      snippets.push({
+        id: doc.id,
+        tier: doc.status === "active" ? "active" : "probationary",
+        kind: "reference",
+        op_type: doc.op_type,
+        contract_id: doc.contract_id,
+        relative_path: doc.reference_path,
+        text: referenceText,
+      });
+    }
+  }
+  return snippets.slice(0, 10);
+}
+
+function contractHasDocCoverage(state: DocLifecycleState, layer: LayerIR): boolean {
+  if (currentContractId(layer) === "flat-bus") {
+    const coveragePath = protectedPatternCoveragePath(layer);
+    return coveragePath !== null && existsSync(absFromRepo(coveragePath));
+  }
+  return Object.values(state.docs).some(
+    (doc) =>
+      doc.status !== "archived" &&
+      doc.op_type === layer.op_type &&
+      docContractId(doc) === currentContractId(layer),
+  );
+}
+
+async function maybeBuildCreateNewDocRequest(
+  layer: LayerIR,
+  failureContext: NewDocFailureContext | undefined,
+  runtime: OrchestratorRuntime,
+): Promise<CreateNewDocRequest | null> {
+  const state = await loadDocLifecycleState();
+  if (contractHasDocCoverage(state, layer)) {
+    return null;
+  }
+  const request: CreateNewDocRequest = {
+    enabled: true,
+    destination_tier: "probationary",
+    contract_id: currentContractId(layer),
+    contract_key: contractStateKeyForLayer(layer),
+    reason: failureContext?.reason ?? "no_existing_doc_matches_selected_contract",
+    no_external_retrieval: true,
+    closest_existing_docs: await closestDocsForNewDoc(state, layer),
+    failure_context: failureContext ?? {
+      reason: "no_existing_doc_matches_selected_contract",
+    },
+  };
+  await appendRunLog(
+    {
+      event: "create_new_doc_requested",
+      module_id: layer.module_id,
+      contract_id: request.contract_id,
+      contract_key: request.contract_key,
+      reason: request.reason,
+      closest_doc_ids: request.closest_existing_docs.map((doc) => doc.id),
+      no_external_retrieval: true,
+    },
+    runtime,
+  );
+  return request;
+}
+
+function lifecycleDocsForLayer(
+  state: DocLifecycleState,
+  layer: LayerIR,
+  tiers: Array<"active" | "probationary"> = ["active", "probationary"],
+): KnowledgeDocRecord[] {
+  const tierRank: Record<"active" | "probationary", number> = { active: 0, probationary: 1 };
+  return Object.values(state.docs)
+    .filter((doc) => docAppliesToLayer(doc, layer) && tiers.includes(doc.status as "active" | "probationary"))
+    .sort((a, b) => {
+      const tierDelta =
+        tierRank[a.status as "active" | "probationary"] -
+        tierRank[b.status as "active" | "probationary"];
+      return tierDelta !== 0 ? tierDelta : a.id.localeCompare(b.id);
+    })
+    .flatMap((doc): KnowledgeDocRecord[] => [
+      {
+        id: doc.id,
+        tier: doc.status === "active" ? "active" : "probationary",
+        kind: "pattern",
+        op_type: doc.op_type,
+        contract_id: doc.contract_id,
+        path: absFromRepo(doc.pattern_path),
+        relative_path: doc.pattern_path,
+      },
+      {
+        id: doc.id,
+        tier: doc.status === "active" ? "active" : "probationary",
+        kind: "reference",
+        op_type: doc.op_type,
+        contract_id: doc.contract_id,
+        path: absFromRepo(doc.reference_path),
+        relative_path: doc.reference_path,
+      },
+    ]);
+}
+
+async function recordDocUsageForAgent(
+  layer: LayerIR,
+  moduleId: string,
+  audits: ToolUseAuditEntry[],
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const calledPatternTool = audits.some(
+    (entry) =>
+      entry.kind === "tool_use" &&
+      entry.tool_name === "mcp__nn2rtl-tools__get_rtl_patterns",
+  );
+  if (!calledPatternTool) return;
+
+  const state = await loadDocLifecycleState();
+  let changed = false;
+  for (const doc of Object.values(state.docs)) {
+    if (!docAppliesToLayer(doc, layer)) continue;
+    if (doc.status !== "probationary" && doc.status !== "active") continue;
+    if (!doc.used_by_modules.includes(moduleId)) {
+      doc.used_by_modules.push(moduleId);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+
+  await saveDocLifecycleState(state);
+  await appendRunLog(
+    {
+      event: "doc_lifecycle_usage_recorded",
+      module_id: moduleId,
+      docs: Object.values(state.docs)
+        .filter((doc) => docAppliesToLayer(doc, layer) && doc.used_by_modules.includes(moduleId))
+        .map((doc) => ({ id: doc.id, status: doc.status, contract_id: docContractId(doc) })),
+    },
+    runtime,
+  );
+}
+
+async function moveLifecycleFile(
+  relPath: string,
+  targetTier: "active" | "archive",
+  suffix = "",
+): Promise<string> {
+  const sourceAbs = absFromRepo(relPath);
+  const collection = relPath.includes("/references/") ? "references" : "patterns";
+  const ext = path.extname(relPath);
+  const stem = path.basename(relPath, ext);
+  const targetName = `${stem}${suffix}${ext}`;
+  const targetAbs = path.join(KNOWLEDGE_ROOT, collection, targetTier, targetName);
+  await mkdir(path.dirname(targetAbs), { recursive: true });
+  await rename(sourceAbs, targetAbs);
+  return relFromRepo(targetAbs);
+}
+
+async function archiveDocEntry(
+  state: DocLifecycleState,
+  doc: DocLifecycleEntry,
+  reason: string,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  if (doc.status === "archived") return;
+  if (doc.status !== "active" && doc.status !== "probationary") return;
+
+  const suffix = `.archived_${docTimestamp(runtime.now())}`;
+  const archivedPattern = await moveLifecycleFile(doc.pattern_path, "archive", suffix);
+  const archivedReference = await moveLifecycleFile(doc.reference_path, "archive", suffix);
+  doc.status = "archived";
+  doc.archived_at = runtime.now().toISOString();
+  doc.archive_reason = reason;
+  doc.archived_pattern_path = archivedPattern;
+  doc.archived_reference_path = archivedReference;
+
+  await appendRunLog(
+    {
+      event: "doc_lifecycle_archived",
+      doc_id: doc.id,
+      reason,
+      archived_pattern_path: archivedPattern,
+      archived_reference_path: archivedReference,
+    },
+    runtime,
+  );
+}
+
+async function archiveProbationaryDocsForFailure(
+  layer: LayerIR,
+  moduleId: string,
+  reason: string,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const state = await loadDocLifecycleState();
+  const docs = Object.values(state.docs).filter(
+    (doc) =>
+      docAppliesToLayer(doc, layer) &&
+      doc.status === "probationary" &&
+      doc.used_by_modules.includes(moduleId),
+  );
+  if (docs.length === 0) return;
+  for (const doc of docs) {
+    if (!doc.failed_modules.includes(moduleId)) {
+      doc.failed_modules.push(moduleId);
+    }
+    await archiveDocEntry(state, doc, reason, runtime);
+  }
+  await saveDocLifecycleState(state);
+}
+
+async function archiveActiveDocsConfirmedByRetrospector(
+  layer: LayerIR,
+  moduleId: string,
+  advice: RetrospectorAdvice,
+  runtime: OrchestratorRuntime,
+): Promise<string[]> {
+  if (advice.doc_fault !== true) return [];
+
+  const state = await loadDocLifecycleState();
+  const requested = new Set(advice.faulty_doc_paths ?? []);
+  const docs = Object.values(state.docs).filter((doc) => {
+    if (!docAppliesToLayer(doc, layer) || doc.status !== "active") return false;
+    if (!doc.used_by_modules.includes(moduleId)) return false;
+    if (requested.size === 0) return true;
+    return (
+      requested.has(doc.pattern_path) ||
+      requested.has(doc.reference_path) ||
+      requested.has(doc.id)
+    );
+  });
+  if (docs.length === 0) return [];
+
+  const archivedIds: string[] = [];
+  for (const doc of docs) {
+    if (!doc.failed_modules.includes(moduleId)) {
+      doc.failed_modules.push(moduleId);
+    }
+    await archiveDocEntry(
+      state,
+      doc,
+      `retrospector_doc_fault:${moduleId}`,
+      runtime,
+    );
+    archivedIds.push(doc.id);
+  }
+  await saveDocLifecycleState(state);
+  return archivedIds;
+}
+
+async function promoteEligibleProbationaryDocs(
+  state: DocLifecycleState,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const threshold = PIPELINE_CONFIG.doc_promotion_success_threshold;
+  for (const doc of Object.values(state.docs)) {
+    if (doc.status !== "probationary") continue;
+    if (new Set(doc.successful_modules).size < threshold) continue;
+
+    const activePattern = await moveLifecycleFile(doc.pattern_path, "active");
+    const activeReference = await moveLifecycleFile(doc.reference_path, "active");
+    doc.status = "active";
+    doc.pattern_path = activePattern;
+    doc.reference_path = activeReference;
+    doc.promoted_at = runtime.now().toISOString();
+
+    await appendRunLog(
+      {
+        event: "doc_lifecycle_promoted",
+        doc_id: doc.id,
+        threshold,
+        successful_modules: doc.successful_modules,
+        active_pattern_path: activePattern,
+        active_reference_path: activeReference,
+      },
+      runtime,
+    );
+  }
+}
+
+async function recordSuccessfulUseOfProbationaryDocs(
+  layer: LayerIR,
+  moduleId: string,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const state = await loadDocLifecycleState();
+  let changed = false;
+  for (const doc of Object.values(state.docs)) {
+    if (!docAppliesToLayer(doc, layer)) continue;
+    if (doc.status !== "probationary") continue;
+    if (!doc.used_by_modules.includes(moduleId)) continue;
+    if (!doc.successful_modules.includes(moduleId)) {
+      doc.successful_modules.push(moduleId);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  await promoteEligibleProbationaryDocs(state, runtime);
+  await saveDocLifecycleState(state);
+}
+
+async function writeProbationaryDocDraft(
+  module: VerilogModule,
+  layer: LayerIR,
+  draft: DocDraft | null | undefined,
+  runtime: OrchestratorRuntime,
+  replacementFor: string[] = [],
+  createNewDocRequest: CreateNewDocRequest | null = null,
+): Promise<void> {
+  if (!draft) {
+    await appendRunLog(
+      {
+        event: "doc_lifecycle_draft_missing",
+        module_id: module.module_id,
+        reason: "RTL agent did not return a draft_doc with its successful module.",
+      },
+      runtime,
+    );
+    return;
+  }
+
+  const state = await loadDocLifecycleState();
+  const sourceDocIds = createNewDocRequest?.closest_existing_docs.map((doc) => doc.id) ?? [];
+  const base = [
+    "auto",
+    sanitizePathPart(layer.op_type),
+    sanitizePathPart(currentContractId(layer)),
+    sanitizePathPart(module.module_id),
+    sanitizePathPart(module.spec_hash).slice(0, 32),
+    docTimestamp(runtime.now()),
+  ].join("_");
+  const id = base;
+  const patternAbs = path.join(KNOWLEDGE_ROOT, "patterns", "probationary", `${base}.md`);
+  const referenceAbs = path.join(KNOWLEDGE_ROOT, "references", "probationary", `${base}.v`);
+
+  await mkdir(path.dirname(patternAbs), { recursive: true });
+  await mkdir(path.dirname(referenceAbs), { recursive: true });
+  const header = [
+    "---",
+    `id: ${id}`,
+    `tier: probationary`,
+    `op_type: ${layer.op_type}`,
+    `contract_id: ${currentContractId(layer)}`,
+    `contract_key: ${contractStateKeyForLayer(layer)}`,
+    `module_id: ${module.module_id}`,
+    `spec_hash: ${module.spec_hash}`,
+    `generated_by: ${module.generated_by}`,
+    `created_at: ${runtime.now().toISOString()}`,
+    createNewDocRequest ? `creation_reason: create_new_doc` : `creation_reason: successful_module`,
+    sourceDocIds.length > 0 ? `source_doc_ids: [${sourceDocIds.join(", ")}]` : "",
+    replacementFor.length > 0 ? `replacement_for: [${replacementFor.join(", ")}]` : "",
+    "---",
+    "",
+    `# ${draft.title}`,
+    "",
+  ].filter(Boolean).join("\n");
+
+  await writeFile(patternAbs, `${header}${draft.pattern_markdown.trim()}\n`, "utf8");
+  await writeFile(referenceAbs, `${draft.reference_verilog.trim()}\n`, "utf8");
+
+  state.docs[id] = {
+    id,
+    op_type: layer.op_type,
+    contract_id: currentContractId(layer),
+    contract_key: contractStateKeyForLayer(layer),
+    spec_hash: module.spec_hash,
+    status: "probationary",
+    pattern_path: relFromRepo(patternAbs),
+    reference_path: relFromRepo(referenceAbs),
+    created_by_module: module.module_id,
+    created_by_agent: module.generated_by,
+    created_at: runtime.now().toISOString(),
+    creation_reason: createNewDocRequest ? "create_new_doc" : "successful_module",
+    source_doc_ids: sourceDocIds.length > 0 ? sourceDocIds : undefined,
+    replacement_for: replacementFor.length > 0 ? replacementFor : undefined,
+    used_by_modules: [],
+    successful_modules: [],
+    failed_modules: [],
+  };
+  await saveDocLifecycleState(state);
+  await appendRunLog(
+    {
+      event: "doc_lifecycle_probationary_created",
+      doc_id: id,
+      module_id: module.module_id,
+      pattern_path: state.docs[id].pattern_path,
+      reference_path: state.docs[id].reference_path,
+      contract_id: state.docs[id].contract_id,
+      contract_key: state.docs[id].contract_key,
+      creation_reason: state.docs[id].creation_reason,
+      replacement_for: replacementFor,
+    },
+    runtime,
+  );
+}
+
+async function finalizeSuccessfulRtlDocs(
+  module: VerilogModule,
+  layer: LayerIR,
+  draft: DocDraft | null | undefined,
+  runtime: OrchestratorRuntime,
+  selfImproveEnabled: boolean,
+  replacementFor: string[] = [],
+  createNewDocRequest: CreateNewDocRequest | null = null,
+): Promise<void> {
+  if (!selfImproveEnabled) return;
+  await recordSuccessfulUseOfProbationaryDocs(layer, module.module_id, runtime);
+  await writeProbationaryDocDraft(module, layer, draft, runtime, replacementFor, createNewDocRequest);
+}
+
+export function buildFailureClassifierPrompt(input: FailureClassifierInput): string {
+  return [
+    "You are the `failure_classifier` for nn2rtl.",
+    "Classify the failed module from the evidence below. Return JSON only.",
+    "",
+    "Categories:",
+    "- code_bug: the current contract is still viable; a retry/repair could fix typos, syntax errors, signedness, simple logic mistakes, latency mismatches, indexing bugs, or missing pipeline registers.",
+    "- architectural_fit: the current contract is not viable; a different contract or tiling/resource strategy is needed. Examples: bus width exceeds the configured cap, resource utilization exceeds Artix-7 capacity, DSP/BRAM/LUT/FF overflow, memory cannot map to BRAM, BRAM port/capacity pressure, or an explicit synthesis/place constraint cannot be satisfied by local RTL repair.",
+    "- unknown: evidence is insufficient or contradictory; escalate instead of spending blind retries.",
+    "",
+    "Contract-fit indicators to look for:",
+    "- input/output stream width greater than max_supported_bus_bits.",
+    "- Vivado/resource lines saying over-utilized, exceeds available, cannot place, no legal placement, too many LUT/FF/DSP/BRAM resources, RAMB18/RAMB36 exhausted, DSP48 exhausted, or memory too large for the target.",
+    "- hard timing/resource constraints that imply the contract needs tiling, serialization, banking, or a different architecture rather than a local typo fix.",
+    "- explicit unsupported-mode/capability gates from the orchestrator.",
+    "",
+    "For architectural_fit, set `violated_resource` or `violated_constraint` to the specific resource/constraint named by the logs, for example `DSP`, `BRAM18`, `LUT`, `MAX_SUPPORTED_BUS_BITS`, `FMAX_TARGET_MHZ`, or `weight_memory_bram_capacity`.",
+    "For code_bug or unknown, set both fields to null unless a specific hard constraint is still useful evidence.",
+    "",
+    "Output schema:",
+    JSON.stringify(z.toJSONSchema(failureClassificationZod), null, 2),
+    "",
+    "Evidence JSON:",
+    JSON.stringify(input, null, 2),
+  ].join("\n");
+}
+
+async function invokeFailureClassifier(
+  input: FailureClassifierInput,
+  runtime: OrchestratorRuntime,
+): Promise<AgentRunResult<FailureClassification>> {
+  const messages: SDKMessage[] = [];
+  let finalResult: SDKResultMessage | null = null;
+
+  for await (const message of runtime.queryFn({
+    prompt: buildFailureClassifierPrompt(input),
+    options: {
+      cwd: repoRoot,
+      model: FAILURE_CLASSIFIER_CONFIG.model,
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        append:
+          "You classify hardware-generation failures. Be terse, evidence-based, and return only the requested JSON.",
+      },
+      outputFormat: failureClassificationOutputFormat,
+      maxTurns: FAILURE_CLASSIFIER_CONFIG.maxTurns,
+      tools: [],
+      allowedTools: [],
+      disallowedTools: ["Agent", "Task", "Bash", "Read", "Write"],
+    },
+  })) {
+    messages.push(message);
+    if (isResultMessage(message)) {
+      finalResult = message;
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error("No final result message was received for failure_classifier.");
+  }
+
+  return {
+    payload: requireStructuredOutput<FailureClassification>(
+      finalResult,
+      "failure_classifier",
+      failureClassificationZod,
+    ),
+    result: finalResult,
+    messages,
+  };
+}
+
+function enforceKnownContractBreach(
+  result: VerifResult,
+  classification: FailureClassification,
+): FailureClassification {
+  if (
+    result.failure_class === "architectural_unsupported" &&
+    classification.category !== "architectural_fit"
+  ) {
+    return {
+      category: "architectural_fit",
+      violated_resource: classification.violated_resource ?? null,
+      violated_constraint:
+        classification.violated_constraint ?? "MAX_SUPPORTED_BUS_BITS",
+      rationale:
+        "Orchestrator capability gate already identified this as an unsupported architectural contract.",
+    };
+  }
+  if (
+    classification.category === "architectural_fit" &&
+    !classification.violated_resource &&
+    !classification.violated_constraint
+  ) {
+    return {
+      ...classification,
+      violated_constraint: result.failure_class ?? "architectural_fit_unspecified",
+    };
+  }
+  return classification;
+}
+
+async function classifyFailedModule(
+  manager: PipelineStateManager,
+  result: VerifResult,
+  layer: LayerIR,
+  module: VerilogModule | null,
+  runtime: OrchestratorRuntime,
+  extraLogs: Record<string, unknown> = {},
+): Promise<VerifResult> {
+  if (result.status === "pass") {
+    return result;
+  }
+  if (result.failure_category) {
+    return result;
+  }
+
+  const input: FailureClassifierInput = {
+    module_spec: layer,
+    contract: buildModuleContractSummary(layer),
+    failure_result: result,
+    logs: buildFailureLogs(result, extraLogs),
+    ...(module
+      ? {
+          module: {
+            module_id: module.module_id,
+            spec_hash: module.spec_hash,
+            generated_by: module.generated_by,
+            attempt: module.attempt,
+          },
+        }
+      : {}),
+  };
+
+  let classification: FailureClassification;
+  let classifierResult: SDKResultMessage | null = null;
+  try {
+    const run = await invokeFailureClassifier(input, runtime);
+    classification = enforceKnownContractBreach(result, run.payload);
+    classifierResult = run.result;
+    recordUsageFromResult(manager, run.result);
+  } catch (error: unknown) {
+    classification = enforceKnownContractBreach(result, {
+      category: "unknown",
+      violated_resource: null,
+      violated_constraint: "failure_classifier_unavailable",
+      rationale: `Failure classifier did not return a usable verdict: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+
+  const enriched: VerifResult = {
+    ...result,
+    failure_category: classification.category,
+    violated_resource: classification.violated_resource ?? undefined,
+    violated_constraint: classification.violated_constraint ?? undefined,
+    classifier_reason: classification.rationale,
+  };
+
+  await appendRunLog(
+    {
+      event: "failure_classifier_result",
+      module_id: layer.module_id,
+      classification,
+      failure_class: result.failure_class ?? null,
+      status: result.status,
+      status_class: result.status_class ?? null,
+      ...(classifierResult
+        ? {
+            total_cost_usd: classifierResult.total_cost_usd,
+            modelUsage: classifierResult.modelUsage,
+          }
+        : {}),
+    },
+    runtime,
+  );
+
+  return enriched;
+}
+
+export function buildRetrospectorPrompt(input: RetrospectorInput): string {
+  return [
+    "You are the `retrospector` for nn2rtl.",
+    "Retries for this module/contract have failed. Analyze the evidence and return advisory JSON only.",
+    "",
+    "Your job:",
+    "- Read the original LayerIR spec, the contract, the exact RTL knowledge doc used for this op, every Foundry RTL version, and the failure logs from every attempt.",
+    "- Explain why the attempts are likely failing.",
+    "- Suggest one concrete strategy for Foundry's final resumed attempt.",
+    "- Set `doc_fault: true` only when an active/probationary generated doc used by this module is the likely root cause, rather than an implementation mistake in the RTL attempt.",
+    "- If `doc_fault` is true, set `faulty_doc_paths` to the exact lifecycle doc ids or paths from `knowledge_docs_used` that should be archived. Leave it empty if the specific doc cannot be isolated.",
+    "- Do not write Verilog. Do not ask for more retries. If the current contract appears exhausted or architecturally wrong, say so clearly; the orchestrator owns contract switching.",
+    "",
+    "Output schema:",
+    JSON.stringify(z.toJSONSchema(retrospectorAdviceZod), null, 2),
+    "",
+    "Evidence JSON:",
+    JSON.stringify(input, null, 2),
+  ].join("\n");
+}
+
+async function invokeRetrospector(
+  input: RetrospectorInput,
+  runtime: OrchestratorRuntime,
+): Promise<AgentRunResult<RetrospectorAdvice>> {
+  const messages: SDKMessage[] = [];
+  let finalResult: SDKResultMessage | null = null;
+
+  for await (const message of runtime.queryFn({
+    prompt: buildRetrospectorPrompt(input),
+    options: {
+      cwd: repoRoot,
+      model: RETROSPECTOR_CONFIG.model,
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        append:
+          "You diagnose repeated RTL-generation failures. Return only the requested JSON advisory; do not use tools.",
+      },
+      outputFormat: retrospectorAdviceOutputFormat,
+      maxTurns: RETROSPECTOR_CONFIG.maxTurns,
+      tools: [],
+      allowedTools: [],
+      disallowedTools: ["Agent", "Task", "Bash", "Read", "Write"],
+    },
+  })) {
+    messages.push(message);
+    if (isResultMessage(message)) {
+      finalResult = message;
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error("No final result message was received for retrospector.");
+  }
+
+  return {
+    payload: requireStructuredOutput<RetrospectorAdvice>(
+      finalResult,
+      "retrospector",
+      retrospectorAdviceZod,
+    ),
+    result: finalResult,
+    messages,
+  };
+}
+
+export function buildFoundryRetrospectorInjectionPrompt(input: {
+  layer_ir: LayerIR;
+  expected_spec_hash: string;
+  write_verilog_output_dir: string;
+  retrospector_advice: RetrospectorAdvice;
+  contract_options?: Record<string, unknown>;
+  final_attempt?: number;
+  self_improve_doc_request?: Record<string, unknown>;
+  create_new_doc_request?: CreateNewDocRequest;
+}): string {
+  const finalAttempt = input.final_attempt ?? 1;
+  const wantsDocOutput = input.self_improve_doc_request !== undefined;
+  const wantsNewDoc = input.create_new_doc_request !== undefined;
+  return [
+    "You are continuing the existing `foundry` agent conversation for this same module.",
+    "Do not start over mentally: preserve the working memory from the resumed session, and add the Retrospector's advice below as a new message in that conversation.",
+    "",
+    "Make exactly one final RTL attempt for the same LayerIR and spec_hash.",
+    "Persist the RTL with mcp__nn2rtl-tools__write_verilog exactly once.",
+    wantsDocOutput
+      ? 'The final JSON must contain exactly { "module": VerilogModule, "draft_doc": { "title": string, "pattern_markdown": string, "reference_verilog": string, "notes"?: string } }.'
+      : 'The final JSON must contain exactly { "module_id": string, "spec_hash": string, "verilog_source": string, "generated_by": "Foundry", "attempt": integer >= 1 }.',
+    `Set generated_by to "Foundry" and attempt to ${finalAttempt}.`,
+    "`verilog_source` must be the full Verilog source code as a single string.",
+    wantsDocOutput
+      ? "`draft_doc.reference_verilog` must be the reusable reference Verilog from this final attempt, and `draft_doc.pattern_markdown` must explain the transferable RTL pattern learned."
+      : "",
+    wantsNewDoc
+      ? "This contract has no matching lifecycle doc. Use only the provided closest existing docs plus your model knowledge; do not retrieve external material. The draft_doc must explain the new technique and tag the selected contract."
+      : "",
+    "Keep the public contract unchanged: canonical ports, bus widths, latency, quantization, and spec_hash remain authoritative.",
+    "",
+    "Retrospector advisory JSON:",
+    JSON.stringify(input.retrospector_advice, null, 2),
+    "",
+    "Final-attempt payload JSON:",
+    JSON.stringify(
+      {
+        layer_ir: input.layer_ir,
+        expected_spec_hash: input.expected_spec_hash,
+        ...(input.contract_options ? { contract_options: input.contract_options } : {}),
+        write_verilog_output_dir: input.write_verilog_output_dir,
+        ...(input.self_improve_doc_request
+          ? { self_improve_doc_request: input.self_improve_doc_request }
+          : {}),
+        ...(input.create_new_doc_request
+          ? { create_new_doc_request: input.create_new_doc_request }
+          : {}),
+      },
+      null,
+      2,
+    ),
+  ].join("\n");
+}
+
 export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string {
   // The outer query() IS the agent (see runDelegatedAgent: no Task/Agent
   // dispatch, agent body is attached via systemPrompt.append). This prompt is
@@ -803,16 +2323,37 @@ export function buildDelegationPrompt(slug: AgentSlug, payload: unknown): string
   ];
 
   if (slug === "foundry" || slug === "surgeon") {
+    const wantsDocOutput = isRecord(payload) && isRecord(payload.self_improve_doc_request);
+    const wantsNewDoc = isRecord(payload) && isRecord(payload.create_new_doc_request);
     lines.push(
       "",
       "HARD CONTRACT — do not accept any other output:",
       "1. You MUST call the mcp__nn2rtl-tools__write_verilog tool exactly once to persist the RTL before returning.",
-      "2. Your final message MUST be a single JSON object with exactly these five fields and NOTHING else:",
-      '   { "module_id": string, "spec_hash": string, "verilog_source": string, "generated_by": "Foundry"|"Surgeon", "attempt": integer >= 1 }',
-      "3. `verilog_source` MUST be the full Verilog source code as a single string (the same string passed to write_verilog).",
-      "4. Do NOT invent other keys (no `source_path`, no `port_list`, no `module_name`). Do NOT wrap the JSON in markdown fences.",
-      "5. If you cannot comply, still return the five-field JSON with a best-effort `verilog_source`.",
     );
+    if (wantsDocOutput) {
+      lines.push(
+        "2. Your final message MUST be a single JSON object with exactly `module` and `draft_doc`:",
+        '   { "module": { "module_id": string, "spec_hash": string, "verilog_source": string, "generated_by": "Foundry"|"Surgeon", "attempt": integer >= 1 }, "draft_doc": { "title": string, "pattern_markdown": string, "reference_verilog": string, "notes"?: string } }',
+        "3. `module.verilog_source` MUST be the full Verilog source code as a single string (the same string passed to write_verilog).",
+        "4. `draft_doc.pattern_markdown` MUST describe the reusable RTL pattern, constraints, invariants, and failure lessons. `draft_doc.reference_verilog` MUST be a reusable reference based on this exact successful RTL.",
+        "5. Do NOT invent other top-level keys. Do NOT wrap the JSON in markdown fences.",
+      );
+      if (wantsNewDoc) {
+        lines.push(
+          "6. `create_new_doc_request` means no existing lifecycle doc covers this selected contract/technique.",
+          "7. Use only the provided closest existing docs and your model knowledge. Do NOT use web search, external retrieval, curl, package downloads, or third-party source lookup.",
+          "8. The `draft_doc.pattern_markdown` MUST name the selected `contract_id`, describe why this technique is needed, and state the interface/resource invariants that future modules can reuse.",
+        );
+      }
+    } else {
+      lines.push(
+        "2. Your final message MUST be a single JSON object with exactly these five fields and NOTHING else:",
+        '   { "module_id": string, "spec_hash": string, "verilog_source": string, "generated_by": "Foundry"|"Surgeon", "attempt": integer >= 1 }',
+        "3. `verilog_source` MUST be the full Verilog source code as a single string (the same string passed to write_verilog).",
+        "4. Do NOT invent other keys (no `source_path`, no `port_list`, no `module_name`). Do NOT wrap the JSON in markdown fences.",
+        "5. If you cannot comply, still return the five-field JSON with a best-effort `verilog_source`.",
+      );
+    }
   }
 
   const brief =
@@ -870,6 +2411,7 @@ async function runDelegatedAgent<T>(
   outputFormat: OutputFormat,
   resultSchema: z.ZodType<T>,
   runtime: OrchestratorRuntime,
+  runOptions: DelegatedAgentRunOptions = {},
 ): Promise<AgentRunResult<T>> {
   const agentName = normalizeAgentName(slug);
   // Single-layer dispatch: the agent body runs AS the query()'s main agent,
@@ -886,7 +2428,7 @@ async function runDelegatedAgent<T>(
   let finalResult: SDKResultMessage | null = null;
 
   for await (const message of runtime.queryFn({
-    prompt: buildDelegationPrompt(slug, payload),
+    prompt: runOptions.prompt ?? buildDelegationPrompt(slug, payload),
     options: {
       cwd: repoRoot,
       model: AGENT_CONFIG[agentName].model,
@@ -901,6 +2443,7 @@ async function runDelegatedAgent<T>(
       plugins: [{ type: "local", path: pluginPath }],
       outputFormat,
       maxTurns: AGENT_CONFIG[agentName].maxTurns,
+      ...(runOptions.resumeSessionId ? { resume: runOptions.resumeSessionId } : {}),
       ...(agent.effort ? { effort: agent.effort } : {}),
     },
   })) {
@@ -987,16 +2530,27 @@ function getShapeChannels(shape: number[], fieldName: string, moduleId: string):
 }
 
 function expectedInputBusWidthBits(layer: LayerIR): number {
-  const inputChannels = getShapeChannels(layer.input_shape, "input_shape", layer.module_id);
-  return layer.op_type === "add" ? inputChannels * 16 : inputChannels * 8;
+  if (currentContractId(layer) !== "flat-bus" && layer.channel_tile) {
+    return tiledInputBusWidthBits(layer, layer.channel_tile);
+  }
+  return fullInputBusWidthBits(layer);
 }
 
 function expectedOutputBusWidthBits(layer: LayerIR): number {
-  const outputChannels = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
-  return outputChannels * 8;
+  if (currentContractId(layer) !== "flat-bus" && layer.channel_tile) {
+    return tiledOutputBusWidthBits(layer.channel_tile);
+  }
+  return fullOutputBusWidthBits(layer);
 }
 
 const assayerLayerBusContractZod = layerIrZod.superRefine((layer, ctx) => {
+  if (currentContractId(layer) !== "flat-bus" && !layer.channel_tile) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["channel_tile"],
+      message: `io_mode='${layer.io_mode}' requires channel_tile so the Assayer can derive tiled bus widths.`,
+    });
+  }
   if (layer.input_width_bits % 8 !== 0) {
     ctx.addIssue({
       code: "custom",
@@ -1629,6 +3183,19 @@ const MCP_TOOLS_MODULE_PATH = path.basename(__dirname) === "dist"
   ? pathToFileURL(path.resolve(repoRoot, "mcp", "dist", "tools.js")).href
   : pathToFileURL(path.resolve(repoRoot, "mcp", "tools.ts")).href;
 
+async function loadRetrospectorKnowledgeDoc(layer: LayerIR): Promise<RtlKnowledgeDoc> {
+  const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
+    get_rtl_patterns: (
+      op_type: string,
+      kernel_h?: number,
+      kernel_w?: number,
+    ) => Promise<RtlKnowledgeDoc>;
+  };
+  const kernelH = layer.op_type === "conv2d" ? layer.weight_shape[2] : undefined;
+  const kernelW = layer.op_type === "conv2d" ? layer.weight_shape[3] : undefined;
+  return mcpTools.get_rtl_patterns(layer.op_type, kernelH, kernelW);
+}
+
 async function invokeVivado(module: VerilogModule, layer: LayerIR): Promise<SynthesisReport> {
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
     run_vivado: (
@@ -1659,6 +3226,7 @@ async function processSynthesisOutcome(
   verifiedResult: VerifResult,
   statePath: string,
   runtime: OrchestratorRuntime,
+  selfImproveEnabled = false,
 ): Promise<void> {
   let report: SynthesisReport;
   try {
@@ -1678,8 +3246,31 @@ async function processSynthesisOutcome(
         error instanceof Error ? error.message : String(error),
       ].join("\n\n"),
     };
+    const classifiedSetupFailure = await classifyFailedModule(
+      manager,
+      setupFailure,
+      layer,
+      module,
+      runtime,
+      { synthesis_tool_error: error instanceof Error ? error.stack ?? error.message : String(error) },
+    );
+    recordFailureAttempt(
+      layer,
+      "vivado_tool_error",
+      classifiedSetupFailure,
+      module,
+      { synthesis_tool_error: error instanceof Error ? error.stack ?? error.message : String(error) },
+    );
+    if (selfImproveEnabled) {
+      await archiveProbationaryDocsForFailure(
+        layer,
+        moduleId,
+        "vivado_tool_error",
+        runtime,
+      );
+    }
     const before = manager.getState().modules[moduleId];
-    manager.applyVerifResult(moduleId, setupFailure);
+    manager.applyVerifResult(moduleId, classifiedSetupFailure);
     await logStateTransition(manager, moduleId, before, manager.getState().modules[moduleId], "vivado_tool_error", runtime);
     await manager.saveState(statePath);
     return;
@@ -1706,15 +3297,66 @@ async function processSynthesisOutcome(
     return;
   }
 
+  const classifiedSynthesisFailure = await classifyFailedModule(
+    manager,
+    synthesisFailure,
+    layer,
+    module,
+    runtime,
+    {
+      synthesis_report: report.report,
+      synthesis_metrics: {
+        success: report.success,
+        lut_count: report.lut_count,
+        ff_count: report.ff_count,
+        dsp_count: report.dsp_count,
+        bram18_count: report.bram18_count,
+        bram36_count: report.bram36_count,
+        bram18_equiv: report.bram18_equiv,
+        wns_ns: report.wns_ns,
+        timing_met: report.timing_met,
+        fmax_mhz: report.fmax_mhz,
+      },
+    },
+  );
+  recordFailureAttempt(
+    layer,
+    "vivado_synthesis",
+    classifiedSynthesisFailure,
+    module,
+    {
+      synthesis_report: report.report,
+      synthesis_metrics: {
+        success: report.success,
+        lut_count: report.lut_count,
+        ff_count: report.ff_count,
+        dsp_count: report.dsp_count,
+        bram18_count: report.bram18_count,
+        bram36_count: report.bram36_count,
+        bram18_equiv: report.bram18_equiv,
+        wns_ns: report.wns_ns,
+        timing_met: report.timing_met,
+        fmax_mhz: report.fmax_mhz,
+      },
+    },
+  );
+  if (selfImproveEnabled) {
+    await archiveProbationaryDocsForFailure(
+      layer,
+      moduleId,
+      `vivado_${classifiedSynthesisFailure.failure_class ?? "fail"}`,
+      runtime,
+    );
+  }
   const statusBeforeApply = manager.getState().modules[moduleId];
-  manager.applyVerifResult(moduleId, synthesisFailure);
+  manager.applyVerifResult(moduleId, classifiedSynthesisFailure);
   const statusAfterApply = manager.getState().modules[moduleId];
   await logStateTransition(
     manager,
     moduleId,
     statusBeforeApply,
     statusAfterApply,
-    `vivado_${synthesisFailure.failure_class ?? "fail"}`,
+    `vivado_${classifiedSynthesisFailure.failure_class ?? "fail"}`,
     runtime,
   );
   await manager.saveState(statePath);
@@ -1724,7 +3366,7 @@ async function processSynthesisOutcome(
       {
         event: "module_fail_abort",
         module_id: moduleId,
-        result: synthesisFailure,
+        result: classifiedSynthesisFailure,
       },
       runtime,
     );
@@ -1867,33 +3509,99 @@ async function persistVerilogModule(module: VerilogModule): Promise<void> {
 async function invokeFoundry(
   layerIr: LayerIR,
   runtime: OrchestratorRuntime,
-): Promise<AgentRunResult<VerilogModule>> {
+  options: {
+    resumeSessionId?: string;
+    retrospectorAdvice?: RetrospectorAdvice;
+    selfImproveEnabled?: boolean;
+    replacementForDocIds?: string[];
+    newDocFailureContext?: NewDocFailureContext;
+  } = {},
+): Promise<RtlAgentRunResult> {
   await appendRunLog(
     {
       event: "action",
-      action: "invoke_foundry",
+      action: options.retrospectorAdvice
+        ? "invoke_foundry_after_retrospector"
+        : "invoke_foundry",
       module_id: layerIr.module_id,
+      ...(options.resumeSessionId ? { resume_session_id: options.resumeSessionId } : {}),
     },
     runtime,
   );
+
+  const selfImproveDocRequest = options.selfImproveEnabled
+    ? {
+        enabled: true,
+        destination_tier: "probationary",
+        promotion_successes_required: PIPELINE_CONFIG.doc_promotion_success_threshold,
+        replacement_for_doc_ids: options.replacementForDocIds ?? [],
+        contract_id: currentContractId(layerIr),
+        contract_key: contractStateKeyForLayer(layerIr),
+      }
+    : undefined;
+  const createNewDocRequest = options.selfImproveEnabled
+    ? await maybeBuildCreateNewDocRequest(layerIr, options.newDocFailureContext, runtime)
+    : null;
+  const foundryPayload = {
+    layer_ir: layerIr,
+    expected_spec_hash: computeExpectedSpecHash(layerIr),
+    contract_options: {
+      selected_contract: contractPlanForLayer(layerIr),
+      ordered_contracts: CONTRACT_PLANS,
+      covered_by_existing_doc: createNewDocRequest === null,
+    },
+    write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+    ...(selfImproveDocRequest ? { self_improve_doc_request: selfImproveDocRequest } : {}),
+    ...(createNewDocRequest ? { create_new_doc_request: createNewDocRequest } : {}),
+  };
+  const resumedPrompt = options.retrospectorAdvice
+    ? buildFoundryRetrospectorInjectionPrompt({
+        ...foundryPayload,
+        retrospector_advice: options.retrospectorAdvice,
+        final_attempt: foundryVersionsFor(layerIr).length + 1,
+        self_improve_doc_request: selfImproveDocRequest,
+        create_new_doc_request: createNewDocRequest ?? undefined,
+      })
+    : undefined;
 
   // Foundry occasionally returns a path or bare text as its final message
   // instead of the VerilogModule JSON, even though it correctly called
   // write_verilog.  Recover from disk when the JSON parse / schema validation
   // fails but the .v file is present.
-  let result: AgentRunResult<VerilogModule>;
+  let result: RtlAgentRunResult;
   try {
-    result = await runDelegatedAgent<VerilogModule>(
-      "foundry",
-      {
-        layer_ir: layerIr,
-        expected_spec_hash: computeExpectedSpecHash(layerIr),
-        write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
-      },
-      verilogModuleOutputFormat,
-      verilogModuleZod,
-      runtime,
-    );
+    if (options.selfImproveEnabled) {
+      const withDoc = await runDelegatedAgent<RtlAgentWithDoc>(
+        "foundry",
+        foundryPayload,
+        rtlAgentWithDocOutputFormat,
+        rtlAgentWithDocZod,
+        runtime,
+        {
+          prompt: resumedPrompt,
+          resumeSessionId: options.resumeSessionId,
+        },
+      );
+      result = {
+        payload: withDoc.payload.module,
+        draft_doc: withDoc.payload.draft_doc,
+        doc_request: createNewDocRequest,
+        result: withDoc.result,
+        messages: withDoc.messages,
+      };
+    } else {
+      result = await runDelegatedAgent<VerilogModule>(
+        "foundry",
+        foundryPayload,
+        verilogModuleOutputFormat,
+        verilogModuleZod,
+        runtime,
+        {
+          prompt: resumedPrompt,
+          resumeSessionId: options.resumeSessionId,
+        },
+      );
+    }
   } catch (err) {
     const recovered = await tryRecoverVerilogModuleFromDisk(
       layerIr,
@@ -1916,6 +3624,7 @@ async function invokeFoundry(
     // recovery path but the pipeline doesn't need them for state transition.
     result = {
       payload: recovered,
+      doc_request: createNewDocRequest,
       result: {
         type: "result",
         subtype: "success",
@@ -1934,6 +3643,10 @@ async function invokeFoundry(
     module_id: layerIr.module_id,
     nowIso: runtime.now().toISOString(),
   });
+  recordFoundryVersion(layerIr, result, foundryAudits);
+  if (options.selfImproveEnabled) {
+    await recordDocUsageForAgent(layerIr, layerIr.module_id, foundryAudits, runtime);
+  }
   await appendToolUseAudits(foundryAudits);
   await appendRunLog(
     {
@@ -1952,6 +3665,7 @@ async function invokeFoundry(
       module_id: layerIr.module_id,
       total_cost_usd: result.result.total_cost_usd,
       modelUsage: result.result.modelUsage,
+      session_id: extractSessionId(result.messages, result.result),
       payload: result.payload,
     },
     runtime,
@@ -2297,7 +4011,10 @@ async function invokeSurgeon(
   verifResult: VerifResult,
   layerIr: LayerIR,
   runtime: OrchestratorRuntime,
-): Promise<AgentRunResult<VerilogModule>> {
+  options: {
+    selfImproveEnabled?: boolean;
+  } = {},
+): Promise<RtlAgentRunResult> {
   await appendRunLog(
     {
       event: "action",
@@ -2308,23 +4025,57 @@ async function invokeSurgeon(
   );
 
   const prior_attempts = priorSurgeonAttempts(brokenModule.module_id);
+  const retrySeed = [
+    brokenModule.module_id,
+    brokenModule.spec_hash,
+    prior_attempts.length + 1,
+    runtime.now().toISOString(),
+  ].join(":");
   const trimmedVerif = trimVerifResultForSurgeon(verifResult);
+  const surgeonPayload = {
+    broken_module: brokenModule,
+    verif_result: trimmedVerif,
+    layer_ir: layerIr,
+    prior_attempts,
+    retry_seed: retrySeed,
+    write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+    ...(options.selfImproveEnabled
+      ? {
+          self_improve_doc_request: {
+            enabled: true,
+            destination_tier: "probationary",
+            promotion_successes_required: PIPELINE_CONFIG.doc_promotion_success_threshold,
+            replacement_for_doc_ids: [],
+          },
+        }
+      : {}),
+  };
 
-  let result: AgentRunResult<VerilogModule>;
+  let result: RtlAgentRunResult;
   try {
-    result = await runDelegatedAgent<VerilogModule>(
-      "surgeon",
-      {
-        broken_module: brokenModule,
-        verif_result: trimmedVerif,
-        layer_ir: layerIr,
-        prior_attempts,
-        write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
-      },
-      verilogModuleOutputFormat,
-      verilogModuleZod,
-      runtime,
-    );
+    if (options.selfImproveEnabled) {
+      const withDoc = await runDelegatedAgent<RtlAgentWithDoc>(
+        "surgeon",
+        surgeonPayload,
+        rtlAgentWithDocOutputFormat,
+        rtlAgentWithDocZod,
+        runtime,
+      );
+      result = {
+        payload: withDoc.payload.module,
+        draft_doc: withDoc.payload.draft_doc,
+        result: withDoc.result,
+        messages: withDoc.messages,
+      };
+    } else {
+      result = await runDelegatedAgent<VerilogModule>(
+        "surgeon",
+        surgeonPayload,
+        verilogModuleOutputFormat,
+        verilogModuleZod,
+        runtime,
+      );
+    }
   } catch (err) {
     const recovered = await tryRecoverVerilogModuleFromDisk(
       layerIr,
@@ -2363,6 +4114,9 @@ async function invokeSurgeon(
     module_id: brokenModule.module_id,
     nowIso: runtime.now().toISOString(),
   });
+  if (options.selfImproveEnabled) {
+    await recordDocUsageForAgent(layerIr, brokenModule.module_id, surgeonAudits, runtime);
+  }
   await appendToolUseAudits(surgeonAudits);
   await appendRunLog(
     {
@@ -2387,6 +4141,437 @@ async function invokeSurgeon(
   );
 
   return result;
+}
+
+async function attemptNextContractOrEscalate(input: {
+  manager: PipelineStateManager;
+  moduleId: string;
+  baseLayer: LayerIR;
+  currentLayer: LayerIR;
+  pipelineIr: PipelineIR;
+  activeLayers: Map<string, LayerIR>;
+  newDocFailureContexts: Map<string, NewDocFailureContext>;
+  contractState: ContractResponseState;
+  statePath: string;
+  runtime: OrchestratorRuntime;
+  result: VerifResult;
+  reason: string;
+}): Promise<boolean> {
+  const currentPlan = contractPlanForLayer(input.currentLayer);
+  await flagContractForManualCorrection(
+    input.contractState,
+    input.currentLayer,
+    input.moduleId,
+    input.reason,
+    input.result,
+    input.runtime,
+  );
+
+  const next = selectAvailableContract(
+    input.baseLayer,
+    input.contractState,
+    currentPlan.id,
+  );
+  await saveContractResponseState(input.contractState);
+
+  if (next) {
+    const before = input.manager.getState().modules[input.moduleId];
+    setActiveLayerForModule(
+      input.pipelineIr,
+      input.activeLayers,
+      input.moduleId,
+      next.layer,
+    );
+    input.manager.resetModuleForContractRetry(input.moduleId);
+    input.newDocFailureContexts.set(input.moduleId, {
+      reason: "contract_switch_after_failure",
+      previous_contract_id: currentPlan.id,
+      previous_contract_key: contractStateKeyForLayer(input.currentLayer),
+      failure_result: input.result,
+    });
+    await logStateTransition(
+      input.manager,
+      input.moduleId,
+      before,
+      "pending",
+      `contract_switch_${currentPlan.id}_to_${next.plan.id}`,
+      input.runtime,
+    );
+    await appendRunLog(
+      {
+        event: "contract_alternative_selected",
+        module_id: input.moduleId,
+        previous_contract_id: currentPlan.id,
+        next_contract_id: next.plan.id,
+        previous_contract_key: contractStateKeyForLayer(input.currentLayer),
+        next_contract_key: contractStateKeyForLayer(next.layer),
+        next_layer_ir: next.layer,
+        available_contracts: CONTRACT_PLANS,
+      },
+      input.runtime,
+    );
+    await input.manager.saveState(input.statePath);
+    return true;
+  }
+
+  const manualResult: VerifResult = {
+    ...input.result,
+    module_id: input.moduleId,
+    status: "fail",
+    failure_class: "manual_correction_needed",
+    failure_category: "unknown",
+    violated_constraint: "all_available_contracts_exhausted",
+    classifier_reason:
+      "All available contracts for this structural spec are flagged manual_correction_needed. Manual intervention is required before this contract can run again.",
+  };
+  const before = input.manager.getState().modules[input.moduleId];
+  input.manager.applyVerifResult(input.moduleId, manualResult);
+  await logStateTransition(
+    input.manager,
+    input.moduleId,
+    before,
+    input.manager.getState().modules[input.moduleId],
+    "all_contracts_exhausted",
+    input.runtime,
+  );
+  await input.manager.saveState(input.statePath);
+  await appendRunLog(
+    {
+      event: "human_escalation_required",
+      module_id: input.moduleId,
+      contract_key: contractStateKeyForLayer(input.currentLayer),
+      reason: "all_available_contracts_exhausted",
+      result: manualResult,
+    },
+    input.runtime,
+  );
+  return true;
+}
+
+async function maybeRunRetrospectorFinalAttempt(
+  manager: PipelineStateManager,
+  moduleId: string,
+  layer: LayerIR,
+  baseLayer: LayerIR,
+  pipelineIr: PipelineIR,
+  activeLayers: Map<string, LayerIR>,
+  newDocFailureContexts: Map<string, NewDocFailureContext>,
+  contractState: ContractResponseState,
+  terminalResult: VerifResult,
+  statePath: string,
+  runtime: OrchestratorRuntime,
+  passedModules: Map<string, { module: VerilogModule; layer: LayerIR }>,
+  selfImproveEnabled: boolean,
+): Promise<boolean> {
+  if (!selfImproveEnabled) return false;
+  if (terminalResult.status === "pass") return false;
+
+  const state = manager.getState();
+  if (state.modules[moduleId] !== "fail_abort") return false;
+  const retryBudgetExhausted =
+    terminalResult.failure_category === "code_bug" &&
+    (state.attempts[moduleId] ?? 0) >= state.max_retries;
+  const architecturalFit = terminalResult.failure_category === "architectural_fit";
+  if (!retryBudgetExhausted && !architecturalFit) return false;
+
+  const contractKey = moduleContractKey(layer);
+  if (manager.retrospectorCallCount(contractKey) >= 1) {
+    await appendRunLog(
+      {
+        event: "retrospector_skipped",
+        module_id: moduleId,
+        contract_key: contractKey,
+        reason: "retrospector_already_used_for_module_contract",
+      },
+      runtime,
+    );
+    return attemptNextContractOrEscalate({
+      manager,
+      moduleId,
+      baseLayer,
+      currentLayer: layer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      statePath,
+      runtime,
+      result: terminalResult,
+      reason: "retrospector_already_used_for_module_contract",
+    });
+  }
+
+  const resumeSessionId = latestFoundrySessionId(layer);
+
+  let input: RetrospectorInput;
+  try {
+    const docState = await loadDocLifecycleState();
+    input = {
+      original_spec: layer,
+      contract: buildModuleContractSummary(layer),
+      current_contract: contractPlanForLayer(layer),
+      available_contracts: CONTRACT_PLANS,
+      doc_used: await loadRetrospectorKnowledgeDoc(layer),
+      knowledge_docs_used: lifecycleDocsForLayer(docState, layer, ["active", "probationary"]),
+      foundry_versions: foundryVersionsFor(layer),
+      failure_attempts: failureAttemptsFor(layer),
+    };
+  } catch (error: unknown) {
+    await appendRunLog(
+      {
+        event: "retrospector_failed",
+        module_id: moduleId,
+        contract_key: contractKey,
+        stage: "load_doc",
+        reason: error instanceof Error ? error.message : String(error),
+      },
+      runtime,
+    );
+    return false;
+  }
+
+  manager.recordRetrospectorCall(contractKey);
+  await manager.saveState(statePath);
+
+  let adviceRun: AgentRunResult<RetrospectorAdvice>;
+  try {
+    adviceRun = await invokeRetrospector(input, runtime);
+    recordUsageFromResult(manager, adviceRun.result);
+  } catch (error: unknown) {
+    await appendRunLog(
+      {
+        event: "retrospector_failed",
+        module_id: moduleId,
+        contract_key: contractKey,
+        stage: "invoke_retrospector",
+        reason: error instanceof Error ? error.message : String(error),
+      },
+      runtime,
+    );
+    await manager.saveState(statePath);
+    return false;
+  }
+
+  await appendRunLog(
+    {
+      event: "retrospector_result",
+      module_id: moduleId,
+      contract_key: contractKey,
+      resume_session_id: resumeSessionId,
+      total_cost_usd: adviceRun.result.total_cost_usd,
+      modelUsage: adviceRun.result.modelUsage,
+      advice: adviceRun.payload,
+    },
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  const replacementForDocIds = await archiveActiveDocsConfirmedByRetrospector(
+    layer,
+    moduleId,
+    adviceRun.payload,
+    runtime,
+  );
+
+  if (!resumeSessionId) {
+    await appendRunLog(
+      {
+        event: "retrospector_no_resumable_foundry_session",
+        module_id: moduleId,
+        contract_key: contractKey,
+        reason: "No Foundry session exists for this contract, so the orchestrator will try the next available contract instead of a same-contract final retry.",
+      },
+      runtime,
+    );
+    return attemptNextContractOrEscalate({
+      manager,
+      moduleId,
+      baseLayer,
+      currentLayer: layer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      statePath,
+      runtime,
+      result: terminalResult,
+      reason: "retrospector_no_resumable_foundry_session",
+    });
+  }
+
+  const beforeGenerate = manager.getState().modules[moduleId];
+  manager.setStatus(moduleId, "generating");
+  await logStateTransition(
+    manager,
+    moduleId,
+    beforeGenerate,
+    "generating",
+    "retrospector_advice_injected",
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  let foundryResult: RtlAgentRunResult;
+  try {
+    foundryResult = await invokeFoundry(layer, runtime, {
+      resumeSessionId,
+      retrospectorAdvice: adviceRun.payload,
+      selfImproveEnabled,
+      replacementForDocIds,
+      newDocFailureContext: newDocFailureContexts.get(moduleId),
+    });
+    recordUsageFromResult(manager, foundryResult.result);
+  } catch (error: unknown) {
+    const finalFailure: VerifResult = {
+      module_id: moduleId,
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layer.pipeline_latency_cycles,
+      failure_category: "unknown",
+      violated_constraint: "retrospector_foundry_dispatch_failed",
+      classifier_reason: "Foundry's final post-retrospector attempt failed before producing RTL.",
+      fix_hint: error instanceof Error ? error.message : String(error),
+    };
+    recordFailureAttempt(layer, "retrospector_foundry_dispatch", finalFailure, null);
+    await archiveProbationaryDocsForFailure(
+      layer,
+      moduleId,
+      "retrospector_foundry_dispatch_failed",
+      runtime,
+    );
+    const beforeApply = manager.getState().modules[moduleId];
+    manager.applyVerifResult(moduleId, finalFailure);
+    await logStateTransition(
+      manager,
+      moduleId,
+      beforeApply,
+      manager.getState().modules[moduleId],
+      "retrospector_foundry_dispatch_failed",
+      runtime,
+    );
+    await manager.saveState(statePath);
+    return attemptNextContractOrEscalate({
+      manager,
+      moduleId,
+      baseLayer,
+      currentLayer: layer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      statePath,
+      runtime,
+      result: finalFailure,
+      reason: "retrospector_foundry_dispatch_failed",
+    });
+  }
+
+  await manager.saveState(statePath);
+  const beforeVerify = manager.getState().modules[moduleId];
+  manager.setStatus(moduleId, "verifying");
+  await logStateTransition(
+    manager,
+    moduleId,
+    beforeVerify,
+    "verifying",
+    "retrospector_foundry_completed",
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  const rawVerif = await invokeAssayer(foundryResult.payload, layer, runtime);
+  const finalVerif = await classifyFailedModule(
+    manager,
+    rawVerif,
+    layer,
+    foundryResult.payload,
+    runtime,
+  );
+  if (finalVerif.status !== "pass") {
+    recordFailureAttempt(
+      layer,
+      "retrospector_foundry_assayer",
+      finalVerif,
+      foundryResult.payload,
+    );
+    await archiveProbationaryDocsForFailure(
+      layer,
+      moduleId,
+      `retrospector_assayer_${finalVerif.status}`,
+      runtime,
+    );
+  }
+
+  const beforeApply = manager.getState().modules[moduleId];
+  manager.applyVerifResult(moduleId, finalVerif);
+  const afterApply = manager.getState().modules[moduleId];
+  await logStateTransition(
+    manager,
+    moduleId,
+    beforeApply,
+    afterApply,
+    `retrospector_assayer_${finalVerif.status}`,
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  if (afterApply === "pass") {
+    passedModules.set(moduleId, { module: foundryResult.payload, layer });
+    await processSynthesisOutcome(
+      manager,
+      moduleId,
+      foundryResult.payload,
+      layer,
+      finalVerif,
+      statePath,
+      runtime,
+      selfImproveEnabled,
+    );
+    if (manager.getState().modules[moduleId] === "pass") {
+      await finalizeSuccessfulRtlDocs(
+        foundryResult.payload,
+        layer,
+        foundryResult.draft_doc,
+        runtime,
+        selfImproveEnabled,
+        replacementForDocIds,
+        foundryResult.doc_request ?? null,
+      );
+    } else {
+      const synthesisResult = manager.getState().results[moduleId] ?? finalVerif;
+      return attemptNextContractOrEscalate({
+        manager,
+        moduleId,
+        baseLayer,
+        currentLayer: layer,
+        pipelineIr,
+        activeLayers,
+        newDocFailureContexts,
+        contractState,
+        statePath,
+        runtime,
+        result: synthesisResult,
+        reason: "retrospector_foundry_synthesis_failed",
+      });
+    }
+    return true;
+  }
+
+  return attemptNextContractOrEscalate({
+    manager,
+    moduleId,
+    baseLayer,
+    currentLayer: layer,
+    pipelineIr,
+    activeLayers,
+    newDocFailureContexts,
+    contractState,
+    statePath,
+    runtime,
+    result: finalVerif,
+    reason: "retrospector_final_attempt_failed",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2415,6 +4600,10 @@ function computeExpectedSpecHash(layer: LayerIR): string {
   const ih = layer.input_shape.length >= 3 ? layer.input_shape[2] : 0;
   const iw = layer.input_shape.length >= 4 ? layer.input_shape[3] : 0;
   const spatial = `s${ih}x${iw}`;
+  const contractSuffix =
+    currentContractId(layer) === "flat-bus"
+      ? ""
+      : `_io${currentContractId(layer)}_tile${layer.channel_tile ?? "auto"}`;
   if (layer.op_type === "conv2d" && layer.weight_shape.length >= 4) {
     const kh = layer.weight_shape[2];
     const kw = layer.weight_shape[3];
@@ -2425,7 +4614,7 @@ function computeExpectedSpecHash(layer: LayerIR): string {
     // with identical geometry but different mac_parallelism have structurally
     // different RTL and MUST NOT be clone-substituted for each other.
     const mp = layer.mac_parallelism ? `_mp${layer.mac_parallelism}` : "";
-    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}${mp}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}${mp}_i${layer.input_width_bits}_o${layer.output_width_bits}${contractSuffix}`;
   }
   if (layer.op_type === "maxpool") {
     // The schema's superRefine guarantees these three arrays exist and are
@@ -2439,9 +4628,9 @@ function computeExpectedSpecHash(layer: LayerIR): string {
     const ks = layer.kernel_size.join("x");
     const st = layer.pool_stride.join("x");
     const pd = layer.pool_padding.join("x");
-    return `maxpool_${ic}x${oc}_k${ks}_s${st}_p${pd}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+    return `maxpool_${ic}x${oc}_k${ks}_s${st}_p${pd}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}${contractSuffix}`;
   }
-  return `${layer.op_type}_${ic}x${oc}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}`;
+  return `${layer.op_type}_${ic}x${oc}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}${contractSuffix}`;
 }
 
 /** Choose SCALE_MULT/SCALE_SHIFT that minimise the relative approximation error. */
@@ -2864,8 +5053,12 @@ export async function runPipeline(
   if (moduleIds.length === 0) {
     throw new Error("--except excluded every module; nothing to run.");
   }
+  const baseLayersByModule = new Map(
+    pipelineIr.layers.map((layer) => [layer.module_id, jsonClone(layer)] as const),
+  );
   const statePath = resolveFromSdk(PIPELINE_CONFIG.pipeline_state_path);
   const maxRetries = options.maxRetries ?? PIPELINE_CONFIG.max_retries;
+  const selfImproveEnabled = options.selfImprove ?? PIPELINE_CONFIG.self_improve;
   const manager = new PipelineStateManager(moduleIds, maxRetries);
 
   if (resume && (await pathExists(statePath))) {
@@ -2896,6 +5089,83 @@ export async function runPipeline(
       runtime,
     );
   }
+
+  const contractState = selfImproveEnabled
+    ? await loadContractResponseState()
+    : emptyContractResponseState();
+  const activeLayers = new Map<string, LayerIR>();
+  const newDocFailureContexts = new Map<string, NewDocFailureContext>();
+  for (const moduleId of moduleIds) {
+    const baseLayer = baseLayersByModule.get(moduleId);
+    if (!baseLayer) {
+      throw new Error(`LayerIR for module '${moduleId}' was not found while selecting contracts.`);
+    }
+    if (!selfImproveEnabled) {
+      setActiveLayerForModule(pipelineIr, activeLayers, moduleId, baseLayer);
+      continue;
+    }
+
+    const selected = selectAvailableContract(baseLayer, contractState);
+    if (!selected) {
+      const manualResult: VerifResult = {
+        module_id: moduleId,
+        status: "fail",
+        timing_pass: false,
+        timing_actual_cycles: 0,
+        timing_expected_cycles: baseLayer.pipeline_latency_cycles,
+        failure_class: "manual_correction_needed",
+        failure_category: "unknown",
+        violated_constraint: "all_available_contracts_flagged",
+        classifier_reason:
+          "Every contract variant for this structural spec is flagged manual_correction_needed. Delete or edit output/contract_state.json after manual correction to re-enable it.",
+      };
+      const before = manager.getState().modules[moduleId];
+      manager.applyVerifResult(moduleId, manualResult);
+      await logStateTransition(
+        manager,
+        moduleId,
+        before,
+        manager.getState().modules[moduleId],
+        "contract_skipped_manual_correction_needed",
+        runtime,
+      );
+      await appendRunLog(
+        {
+          event: "contract_skipped_manual_correction_needed",
+          module_id: moduleId,
+          available_contracts: CONTRACT_PLANS,
+          contract_state_path: CONTRACT_STATE_PATH,
+          result: manualResult,
+        },
+        runtime,
+      );
+      setActiveLayerForModule(pipelineIr, activeLayers, moduleId, baseLayer);
+      continue;
+    }
+
+    setActiveLayerForModule(pipelineIr, activeLayers, moduleId, selected.layer);
+    if (selected.plan.id !== "flat-bus") {
+      const flaggedContracts = Object.values(contractState.contracts).filter(
+        (flag) => flag.op_type === selected.layer.op_type && flag.status === "manual_correction_needed",
+      );
+      newDocFailureContexts.set(moduleId, {
+        reason: "selected_after_skipping_flagged_contracts",
+        flagged_contracts: flaggedContracts,
+      });
+      await appendRunLog(
+        {
+          event: "contract_selected_after_skipping_flagged",
+          module_id: moduleId,
+          selected_contract_id: selected.plan.id,
+          selected_contract_key: contractStateKeyForLayer(selected.layer),
+          selected_layer_ir: selected.layer,
+          contract_state_path: CONTRACT_STATE_PATH,
+        },
+        runtime,
+      );
+    }
+  }
+  await manager.saveState(statePath);
 
   // Spec-hash cache: module_id → {module, layer} for every module that passed
   // verification. Keyed by module_id so we can look up the source LayerIR when
@@ -2946,7 +5216,8 @@ export async function runPipeline(
     await manager.saveState(statePath);
 
     if (nextAction.action === "invoke_foundry") {
-      const layer = findLayer(pipelineIr, nextAction.module_id);
+      const layer = activeLayers.get(nextAction.module_id) ?? findLayer(pipelineIr, nextAction.module_id);
+      const baseLayer = baseLayersByModule.get(nextAction.module_id) ?? layer;
 
       // --- Bus-width capability gate -----------------------------------------
       // Fail-fast on layers whose bus widths exceed the pipeline's current
@@ -2965,8 +5236,23 @@ export async function runPipeline(
           failure_class: "architectural_unsupported",
           fix_hint: unsupportedReason,
         };
+        const classifiedArchFail = await classifyFailedModule(
+          manager,
+          archFail,
+          layer,
+          null,
+          runtime,
+          { capability_gate: unsupportedReason },
+        );
+        recordFailureAttempt(
+          layer,
+          "capability_gate",
+          classifiedArchFail,
+          null,
+          { capability_gate: unsupportedReason },
+        );
         const statusBeforeApply = manager.getState().modules[nextAction.module_id];
-        manager.applyVerifResult(nextAction.module_id, archFail);
+        manager.applyVerifResult(nextAction.module_id, classifiedArchFail);
         const statusAfterApply = manager.getState().modules[nextAction.module_id];
         await logStateTransition(
           manager,
@@ -2977,14 +5263,31 @@ export async function runPipeline(
           runtime,
         );
         await manager.saveState(statePath);
-        await appendRunLog(
-          {
-            event: "module_fail_abort",
-            module_id: nextAction.module_id,
-            result: archFail,
-          },
+        const handledByRetrospector = await maybeRunRetrospectorFinalAttempt(
+          manager,
+          nextAction.module_id,
+          layer,
+          baseLayer,
+          pipelineIr,
+          activeLayers,
+          newDocFailureContexts,
+          contractState,
+          classifiedArchFail,
+          statePath,
           runtime,
+          passedModules,
+          selfImproveEnabled,
         );
+        if (!handledByRetrospector) {
+          await appendRunLog(
+            {
+              event: "module_fail_abort",
+              module_id: nextAction.module_id,
+              result: classifiedArchFail,
+            },
+            runtime,
+          );
+        }
         continue;
       }
 
@@ -2992,7 +5295,7 @@ export async function runPipeline(
       // is OFF by default. Pipeline runs (`--only layer*_add` or full
       // pipeline) go through the normal Foundry + Surgeon path so add
       // layers exercise the LLM contract documented in
-      // `knowledge/patterns/05_add_quantized.md` end-to-end.
+      // `knowledge/patterns/protected/05_add_quantized.md` end-to-end.
       //
       // Set `NN2RTL_DETERMINISTIC_ADD=1` to short-circuit Foundry and
       // emit the deterministic template instead. This is intended ONLY
@@ -3028,7 +5331,17 @@ export async function runPipeline(
         );
         await manager.saveState(statePath);
 
-        const addVerif = await invokeAssayer(addModule, layer, runtime);
+        const rawAddVerif = await invokeAssayer(addModule, layer, runtime);
+        const addVerif = await classifyFailedModule(
+          manager,
+          rawAddVerif,
+          layer,
+          addModule,
+          runtime,
+        );
+        if (addVerif.status !== "pass") {
+          recordFailureAttempt(layer, "deterministic_add_assayer", addVerif, addModule);
+        }
         const statusBeforeApply = manager.getState().modules[nextAction.module_id];
         manager.applyVerifResult(nextAction.module_id, addVerif);
         const statusAfterApply = manager.getState().modules[nextAction.module_id];
@@ -3052,6 +5365,7 @@ export async function runPipeline(
             addVerif,
             statePath,
             runtime,
+            selfImproveEnabled,
           );
         }
 
@@ -3097,7 +5411,17 @@ export async function runPipeline(
           await logStateTransition(manager, nextAction.module_id, statusBeforeVerify, "verifying", "template_clone_completed", runtime);
           await manager.saveState(statePath);
 
-          const cloneVerif = await invokeAssayer(cloned, layer, runtime);
+          const rawCloneVerif = await invokeAssayer(cloned, layer, runtime);
+          const cloneVerif = await classifyFailedModule(
+            manager,
+            rawCloneVerif,
+            layer,
+            cloned,
+            runtime,
+          );
+          if (cloneVerif.status !== "pass") {
+            recordFailureAttempt(layer, "template_clone_assayer", cloneVerif, cloned);
+          }
           const statusBeforeApply = manager.getState().modules[nextAction.module_id];
           manager.applyVerifResult(nextAction.module_id, cloneVerif);
           const statusAfterApply = manager.getState().modules[nextAction.module_id];
@@ -3106,7 +5430,7 @@ export async function runPipeline(
 
           if (statusAfterApply === "pass") {
             passedModules.set(nextAction.module_id, { module: cloned, layer });
-            await processSynthesisOutcome(manager, nextAction.module_id, cloned, layer, cloneVerif, statePath, runtime);
+            await processSynthesisOutcome(manager, nextAction.module_id, cloned, layer, cloneVerif, statePath, runtime, selfImproveEnabled);
           }
 
           if (statusAfterApply === "fail_abort") {
@@ -3120,7 +5444,10 @@ export async function runPipeline(
       }
       // ------------------------------------------------------------------------
 
-      const foundryResult = await invokeFoundry(layer, runtime);
+      const foundryResult = await invokeFoundry(layer, runtime, {
+        selfImproveEnabled,
+        newDocFailureContext: newDocFailureContexts.get(nextAction.module_id),
+      });
       recordUsageFromResult(manager, foundryResult.result);
       await manager.saveState(statePath);
 
@@ -3136,7 +5463,25 @@ export async function runPipeline(
       );
       await manager.saveState(statePath);
 
-      const assayerVerif = await invokeAssayer(foundryResult.payload, layer, runtime);
+      const rawAssayerVerif = await invokeAssayer(foundryResult.payload, layer, runtime);
+      const assayerVerif = await classifyFailedModule(
+        manager,
+        rawAssayerVerif,
+        layer,
+        foundryResult.payload,
+        runtime,
+      );
+      if (assayerVerif.status !== "pass") {
+        recordFailureAttempt(layer, "foundry_assayer", assayerVerif, foundryResult.payload);
+        if (selfImproveEnabled) {
+          await archiveProbationaryDocsForFailure(
+            layer,
+            nextAction.module_id,
+            `foundry_assayer_${assayerVerif.status}`,
+            runtime,
+          );
+        }
+      }
       const statusBeforeApply = manager.getState().modules[nextAction.module_id];
       manager.applyVerifResult(nextAction.module_id, assayerVerif);
       const statusAfterApply = manager.getState().modules[nextAction.module_id];
@@ -3160,25 +5505,73 @@ export async function runPipeline(
           assayerVerif,
           statePath,
           runtime,
+          selfImproveEnabled,
         );
+        if (manager.getState().modules[nextAction.module_id] === "pass") {
+          await finalizeSuccessfulRtlDocs(
+            foundryResult.payload,
+            layer,
+            foundryResult.draft_doc,
+            runtime,
+            selfImproveEnabled,
+            [],
+            foundryResult.doc_request ?? null,
+          );
+        }
+        const synthesisResult = manager.getState().results[nextAction.module_id];
+        if (manager.getState().modules[nextAction.module_id] === "fail_abort" && synthesisResult) {
+          await maybeRunRetrospectorFinalAttempt(
+            manager,
+            nextAction.module_id,
+            layer,
+            baseLayer,
+            pipelineIr,
+            activeLayers,
+            newDocFailureContexts,
+            contractState,
+            synthesisResult,
+            statePath,
+            runtime,
+            passedModules,
+            selfImproveEnabled,
+          );
+        }
       }
 
       if (statusAfterApply === "fail_abort") {
-        await appendRunLog(
-          {
-            event: "module_fail_abort",
-            module_id: nextAction.module_id,
-            result: assayerVerif,
-          },
+        const handledByRetrospector = await maybeRunRetrospectorFinalAttempt(
+          manager,
+          nextAction.module_id,
+          layer,
+          baseLayer,
+          pipelineIr,
+          activeLayers,
+          newDocFailureContexts,
+          contractState,
+          assayerVerif,
+          statePath,
           runtime,
+          passedModules,
+          selfImproveEnabled,
         );
+        if (!handledByRetrospector) {
+          await appendRunLog(
+            {
+              event: "module_fail_abort",
+              module_id: nextAction.module_id,
+              result: assayerVerif,
+            },
+            runtime,
+          );
+        }
       }
 
       continue;
     }
 
     if (nextAction.action === "invoke_surgeon") {
-      const layer = findLayer(pipelineIr, nextAction.module_id);
+      const layer = activeLayers.get(nextAction.module_id) ?? findLayer(pipelineIr, nextAction.module_id);
+      const baseLayer = baseLayersByModule.get(nextAction.module_id) ?? layer;
       const brokenModule = await loadPersistedVerilogModule(nextAction.module_id);
       const verifResult = manager.getState().results[nextAction.module_id];
 
@@ -3188,7 +5581,9 @@ export async function runPipeline(
         );
       }
 
-      const surgeonResult = await invokeSurgeon(brokenModule, verifResult, layer, runtime);
+      const surgeonResult = await invokeSurgeon(brokenModule, verifResult, layer, runtime, {
+        selfImproveEnabled,
+      });
       recordUsageFromResult(manager, surgeonResult.result);
 
       // Surgeon regression guard. Without this guard, a Surgeon turn that
@@ -3278,6 +5673,25 @@ export async function runPipeline(
         attemptOutcome = "reverted_functional";
       }
 
+      assayerVerif = await classifyFailedModule(
+        manager,
+        assayerVerif,
+        layer,
+        surgeonResult.payload,
+        runtime,
+      );
+      if (assayerVerif.status !== "pass") {
+        recordFailureAttempt(layer, "surgeon_assayer", assayerVerif, surgeonResult.payload);
+        if (selfImproveEnabled) {
+          await archiveProbationaryDocsForFailure(
+            layer,
+            nextAction.module_id,
+            `surgeon_assayer_${assayerVerif.status}`,
+            runtime,
+          );
+        }
+      }
+
       // Record this Surgeon attempt in the per-module history ring buffer
       // BEFORE applyVerifResult so the next invocation of Surgeon (if
       // another fail_retry is queued) sees the full trajectory.
@@ -3313,18 +5727,63 @@ export async function runPipeline(
           assayerVerif,
           statePath,
           runtime,
+          selfImproveEnabled,
         );
+        if (manager.getState().modules[nextAction.module_id] === "pass") {
+          await finalizeSuccessfulRtlDocs(
+            surgeonResult.payload,
+            layer,
+            surgeonResult.draft_doc,
+            runtime,
+            selfImproveEnabled,
+          );
+        }
+        const synthesisResult = manager.getState().results[nextAction.module_id];
+        if (manager.getState().modules[nextAction.module_id] === "fail_abort" && synthesisResult) {
+          await maybeRunRetrospectorFinalAttempt(
+            manager,
+            nextAction.module_id,
+            layer,
+            baseLayer,
+            pipelineIr,
+            activeLayers,
+            newDocFailureContexts,
+            contractState,
+            synthesisResult,
+            statePath,
+            runtime,
+            passedModules,
+            selfImproveEnabled,
+          );
+        }
       }
 
       if (statusAfterApply === "fail_abort") {
-        await appendRunLog(
-          {
-            event: "module_fail_abort",
-            module_id: nextAction.module_id,
-            result: assayerVerif,
-          },
+        const handledByRetrospector = await maybeRunRetrospectorFinalAttempt(
+          manager,
+          nextAction.module_id,
+          layer,
+          baseLayer,
+          pipelineIr,
+          activeLayers,
+          newDocFailureContexts,
+          contractState,
+          assayerVerif,
+          statePath,
           runtime,
+          passedModules,
+          selfImproveEnabled,
         );
+        if (!handledByRetrospector) {
+          await appendRunLog(
+            {
+              event: "module_fail_abort",
+              module_id: nextAction.module_id,
+              result: assayerVerif,
+            },
+            runtime,
+          );
+        }
       }
 
       continue;

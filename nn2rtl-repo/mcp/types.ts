@@ -38,9 +38,10 @@ export interface LayerIR {
   // Layout is one file per lane; current verified RTL may continue to use the
   // flat weights_path until the banked datapath contract is enabled.
   weight_bank_paths?: string[];
-  // Optional IO-mode hooks for the tiled-channel architecture. packed_full is
-  // the current default when omitted; channel_tiled is for future deep layers.
-  io_mode?: "packed_full" | "channel_tiled";
+  // Optional IO-mode hooks for alternative module contracts. packed_full is
+  // the current default when omitted; channel_tiled / dram_backed are selected
+  // by the failure-response orchestrator when a simpler contract is flagged.
+  io_mode?: "packed_full" | "channel_tiled" | "dram_backed";
   channel_tile?: number;
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
@@ -83,7 +84,24 @@ export type FailureClass =
   | "synthesis_failed"
   | "verilator_timeout"
   | "architectural_unsupported"
-  | "structural_preflight_failed";
+  | "structural_preflight_failed"
+  | "manual_correction_needed";
+
+export type FailureCategory = "code_bug" | "architectural_fit" | "unknown";
+
+export interface FailureClassification {
+  category: FailureCategory;
+  violated_resource?: string | null;
+  violated_constraint?: string | null;
+  rationale: string;
+}
+
+export interface RetrospectorAdvice {
+  analysis: string;
+  suggestion: string;
+  doc_fault?: boolean;
+  faulty_doc_paths?: string[];
+}
 
 export interface VerifResult {
   module_id: string;
@@ -98,6 +116,10 @@ export interface VerifResult {
   mean_error?: number;
   sample_count?: number;
   failure_class?: FailureClass | null;
+  failure_category?: FailureCategory | null;
+  violated_resource?: string | null;
+  violated_constraint?: string | null;
+  classifier_reason?: string;
   fix_hint?: string;
   iverilog_stderr?: string;
   verilator_stderr?: string;
@@ -163,6 +185,7 @@ export interface PipelineState {
   max_retries: number;
   total_cost_usd: number;
   model_usage: Record<string, ModelUsageEntry>;
+  retrospector_calls: Record<string, number>;
 }
 
 export type NextAction =

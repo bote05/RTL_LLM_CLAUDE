@@ -17,6 +17,7 @@ const repoRoot = path.resolve(__dirname, "../..");
 const outputRoot = path.join(repoRoot, "output");
 const reportsDir = path.join(outputRoot, "reports");
 const rtlDir = path.join(outputRoot, "rtl");
+const knowledgeRoot = path.join(repoRoot, "knowledge");
 const outputResetTargets = [
   "reports",
   "rtl",
@@ -25,9 +26,20 @@ const outputResetTargets = [
   "layer_ir.json",
   "layer_ir.json.checkpoint",
   "pipeline_state.json",
+  "contract_state.json",
   "golden_vectors.json",
 ] as const;
+const knowledgeResetTargets = [
+  "knowledge/doc_lifecycle.json",
+  "knowledge/patterns/active",
+  "knowledge/patterns/probationary",
+  "knowledge/patterns/archive",
+  "knowledge/references/active",
+  "knowledge/references/probationary",
+  "knowledge/references/archive",
+] as const;
 let outputBackupRoot: string | null = null;
+let knowledgeBackupRoot: string | null = null;
 
 type MockStep = SDKResultMessage | (() => Promise<SDKResultMessage> | SDKResultMessage);
 type VivadoReport = {
@@ -95,7 +107,7 @@ async function resetOutput(): Promise<void> {
     }
   }
 
-  for (const fileName of ["layer_ir.json", "layer_ir.json.checkpoint", "pipeline_state.json", "golden_vectors.json"]) {
+  for (const fileName of ["layer_ir.json", "layer_ir.json.checkpoint", "pipeline_state.json", "contract_state.json", "golden_vectors.json"]) {
     await rm(path.join(outputRoot, fileName), { force: true });
   }
 }
@@ -134,7 +146,7 @@ async function writePipelineIrFixture(): Promise<unknown> {
   return pipelineIr;
 }
 
-function successResult(structured_output: unknown): SDKResultMessage {
+function successResult(structured_output: unknown, sessionId?: string): SDKResultMessage {
   return {
     type: "result",
     subtype: "success",
@@ -142,23 +154,127 @@ function successResult(structured_output: unknown): SDKResultMessage {
     structured_output,
     total_cost_usd: 1,
     modelUsage: { fixture: { input_tokens: 1, output_tokens: 1 } },
+    ...(sessionId ? { session_id: sessionId } : {}),
   };
 }
 
+function docDraft(title = "Generated RTL note"): Record<string, string> {
+  return {
+    title,
+    pattern_markdown: "Use the same registered pipeline shape and keep LayerIR latency authoritative.",
+    reference_verilog: "module reference_generated; endmodule",
+  };
+}
+
+function successRtlWithDoc(module: unknown, sessionId?: string): SDKResultMessage {
+  return successResult({ module, draft_doc: docDraft() }, sessionId);
+}
+
+async function resetKnowledgeLifecycle(): Promise<void> {
+  if (!knowledgeBackupRoot) return;
+  for (const target of knowledgeResetTargets) {
+    const originalPath = path.join(repoRoot, target);
+    await rm(originalPath, { recursive: true, force: true });
+    await copyPathIfPresent(path.join(knowledgeBackupRoot, target), originalPath);
+  }
+}
+
+async function seedLifecycleDoc(args: {
+  id: string;
+  status: "probationary" | "active";
+  op_type?: string;
+  contract_id?: "flat-bus" | "tiled-streaming" | "dram-backed";
+  used_by_modules?: string[];
+  successful_modules?: string[];
+}): Promise<void> {
+  const opType = args.op_type ?? "conv2d";
+  const contractId = args.contract_id ?? "flat-bus";
+  const patternRel = `knowledge/patterns/${args.status}/${args.id}.md`;
+  const referenceRel = `knowledge/references/${args.status}/${args.id}.v`;
+  await mkdir(path.dirname(path.join(repoRoot, patternRel)), { recursive: true });
+  await mkdir(path.dirname(path.join(repoRoot, referenceRel)), { recursive: true });
+  await writeFile(path.join(repoRoot, patternRel), `# ${args.id}\n\nseed pattern\n`, "utf8");
+  await writeFile(path.join(repoRoot, referenceRel), `module ${args.id}; endmodule\n`, "utf8");
+  await writeFile(
+    path.join(knowledgeRoot, "doc_lifecycle.json"),
+    `${JSON.stringify({
+      version: 1,
+      docs: {
+        [args.id]: {
+          id: args.id,
+          op_type: opType,
+          contract_id: contractId,
+          contract_key: `${contractId}:seed_hash`,
+          spec_hash: "seed_hash",
+          status: args.status,
+          pattern_path: patternRel,
+          reference_path: referenceRel,
+          created_by_module: "seed",
+          created_by_agent: "Foundry",
+          created_at: fixedNow().toISOString(),
+          used_by_modules: args.used_by_modules ?? [],
+          successful_modules: args.successful_modules ?? [],
+          failed_modules: [],
+        },
+      },
+    }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+const fixtureContractKeys = {
+  flat: "flat-bus:conv2d_1x1x1x1_s1x1_i8_o8",
+  tiled: "tiled-streaming:conv2d_1x1x1x1_s1x1_i8_o8_iotiled-streaming_tile1",
+  dram: "dram-backed:conv2d_1x1x1x1_s1x1_i8_o8_iodram-backed_tile1",
+} as const;
+
+async function seedContractFlags(keys: Array<keyof typeof fixtureContractKeys>): Promise<void> {
+  const docs = Object.fromEntries(
+    keys.map((keyName) => {
+      const key = fixtureContractKeys[keyName];
+      const [contractId, specHash] = key.split(":", 2);
+      return [
+        key,
+        {
+          key,
+          contract_id: contractId,
+          spec_hash: specHash,
+          op_type: "conv2d",
+          status: "manual_correction_needed",
+          flagged_at: fixedNow().toISOString(),
+          updated_at: fixedNow().toISOString(),
+          module_ids: ["unit_module"],
+          reason: "seeded test flag",
+        },
+      ];
+    }),
+  );
+  await writeFile(
+    path.join(outputRoot, "contract_state.json"),
+    `${JSON.stringify({ version: 1, contracts: docs }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 function createQueryMock(
-  steps: Partial<Record<"cartographer" | "foundry" | "surgeon", MockStep[]>>,
+  steps: Partial<Record<"cartographer" | "foundry" | "surgeon" | "failure_classifier" | "retrospector", MockStep[]>>,
 ): ReturnType<typeof vi.fn> {
   return vi.fn(async function* ({
     prompt,
+    options,
   }: {
     prompt: string;
+    options?: { resume?: string };
   }): AsyncGenerator<SDKMessage, void> {
     // The collapsed single-layer dispatch (Fix B) puts the prompt in the
     // form "You are the `<slug>` agent. Execute the task described below."
     const key =
       prompt.includes("You are the `cartographer`") ? "cartographer"
         : prompt.includes("You are the `foundry`") ? "foundry"
+        : prompt.includes("existing `foundry` agent conversation") || options?.resume ? "foundry"
         : prompt.includes("You are the `surgeon`") ? "surgeon"
+        : prompt.includes("You are the `failure_classifier`") ? "failure_classifier"
+        : prompt.includes("You are the `retrospector`") ? "retrospector"
         : null;
 
     if (!key) {
@@ -166,6 +282,30 @@ function createQueryMock(
     }
 
     const queue = steps[key];
+    if (key === "failure_classifier" && (!queue || queue.length === 0)) {
+      const evidence = prompt.split("Evidence JSON:").pop() ?? prompt;
+      const architectural =
+        /"failure_class":\s*"architectural_unsupported"|"capability_gate":|requires tiled channel streaming|DSP48 exhausted|resource utilization exceeds available/i.test(evidence);
+      yield successResult(
+        architectural
+          ? {
+              category: "architectural_fit",
+              violated_resource: null,
+              violated_constraint: evidence.includes("MAX_SUPPORTED_BUS_BITS")
+                ? "MAX_SUPPORTED_BUS_BITS"
+                : "resource_or_constraint_from_logs",
+              rationale: "Mock classifier found a contract-fit indicator in the prompt.",
+            }
+          : {
+              category: "code_bug",
+              violated_resource: null,
+              violated_constraint: null,
+              rationale: "Mock classifier defaulted retryable failures to code_bug.",
+            },
+      );
+      return;
+    }
+
     if (!queue || queue.length === 0) {
       throw new Error(`No mock result queued for ${key}.`);
     }
@@ -181,25 +321,41 @@ beforeAll(async () => {
   for (const target of outputResetTargets) {
     await copyPathIfPresent(path.join(outputRoot, target), path.join(outputBackupRoot, target));
   }
+  knowledgeBackupRoot = await mkdtemp(path.join(os.tmpdir(), "nn2rtl-sdk-knowledge-backup-"));
+  for (const target of knowledgeResetTargets) {
+    await copyPathIfPresent(path.join(repoRoot, target), path.join(knowledgeBackupRoot, target));
+  }
 });
 
 beforeEach(async () => {
   await resetOutput();
+  await resetKnowledgeLifecycle();
 });
 
 afterEach(async () => {
   await resetOutput();
+  await resetKnowledgeLifecycle();
 });
 
 afterAll(async () => {
-  if (!outputBackupRoot) return;
-  for (const target of outputResetTargets) {
-    const originalPath = path.join(outputRoot, target);
-    await rm(originalPath, { recursive: true, force: true });
-    await copyPathIfPresent(path.join(outputBackupRoot, target), originalPath);
+  if (outputBackupRoot) {
+    for (const target of outputResetTargets) {
+      const originalPath = path.join(outputRoot, target);
+      await rm(originalPath, { recursive: true, force: true });
+      await copyPathIfPresent(path.join(outputBackupRoot, target), originalPath);
+    }
+    await rm(outputBackupRoot, { recursive: true, force: true });
+    outputBackupRoot = null;
   }
-  await rm(outputBackupRoot, { recursive: true, force: true });
-  outputBackupRoot = null;
+  if (knowledgeBackupRoot) {
+    for (const target of knowledgeResetTargets) {
+      const originalPath = path.join(repoRoot, target);
+      await rm(originalPath, { recursive: true, force: true });
+      await copyPathIfPresent(path.join(knowledgeBackupRoot, target), originalPath);
+    }
+    await rm(knowledgeBackupRoot, { recursive: true, force: true });
+    knowledgeBackupRoot = null;
+  }
 });
 
 describe("runPipeline", () => {
@@ -372,6 +528,429 @@ describe("runPipeline", () => {
     expect(diskMeta.generated_by).toBe("Foundry");
   });
 
+  it("runs one retrospector pass after retry exhaustion and resumes the Foundry session", async () => {
+    await writePipelineIrFixture();
+    await seedLifecycleDoc({
+      id: "auto_test_active_doc_fault",
+      status: "active",
+      used_by_modules: ["unit_module"],
+    });
+    const originalModule = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const surgeonModule = { ...originalModule, generated_by: "Surgeon", attempt: 2 };
+    const finalFoundryModule = {
+      ...originalModule,
+      verilog_source: `${originalModule.verilog_source}\n// post-retrospector final attempt\n`,
+      attempt: 2,
+    };
+    const verifFail = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+    );
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [
+        async () => {
+          await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+          return successRtlWithDoc(originalModule, "foundry-session-1");
+        },
+        async () => {
+          await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(finalFoundryModule, null, 2)}\n`, "utf8");
+          return successRtlWithDoc(finalFoundryModule, "foundry-session-1");
+        },
+      ],
+      surgeon: [
+        async () => {
+          await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(surgeonModule, null, 2)}\n`, "utf8");
+          return successRtlWithDoc(surgeonModule);
+        },
+      ],
+      retrospector: [
+        successResult({
+          analysis: "Both attempts preserved the same bad output schedule.",
+          suggestion: "Keep the contract and rebuild the output counter around the documented latency.",
+          doc_fault: true,
+          faulty_doc_paths: ["auto_test_active_doc_fault"],
+        }),
+      ],
+    });
+    const assayerFn = createAssayerMock([verifFail, verifFail, verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      maxRetries: 1,
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.filter((prompt) => prompt.includes("You are the `retrospector`"))).toHaveLength(1);
+    expect(
+      queryFn.mock.calls.some(([call]) => (call as { options?: { resume?: string } }).options?.resume === "foundry-session-1"),
+    ).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("existing `foundry` agent conversation"))).toBe(true);
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("pass");
+    expect(state.attempts.unit_module).toBe(1);
+    expect(Object.values(state.retrospector_calls)).toEqual([1]);
+    expect(synthesisFn).toHaveBeenCalledTimes(1);
+
+    const lifecycle = JSON.parse(await readFile(path.join(knowledgeRoot, "doc_lifecycle.json"), "utf8"));
+    expect(lifecycle.docs.auto_test_active_doc_fault.status).toBe("archived");
+    expect(lifecycle.docs.auto_test_active_doc_fault.archive_reason).toContain("retrospector_doc_fault");
+    expect(
+      Object.values(lifecycle.docs).some(
+        (doc) =>
+          typeof doc === "object" &&
+          doc !== null &&
+          (doc as { replacement_for?: string[] }).replacement_for?.includes("auto_test_active_doc_fault"),
+      ),
+    ).toBe(true);
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"event":"retrospector_result"');
+    expect(log).toContain('"action":"invoke_foundry_after_retrospector"');
+  });
+
+  it("flags an exhausted contract and switches to the next available contract", async () => {
+    await writePipelineIrFixture();
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const tiledModule = {
+      ...module,
+      spec_hash: "conv2d_1x1x1x1_s1x1_i8_o8_iotiled-streaming_tile1",
+      verilog_source: `${module.verilog_source}\n// tiled contract attempt\n`,
+    };
+    const verifFail = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+    );
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [
+        successRtlWithDoc(module, "flat-session"),
+        successRtlWithDoc(module, "flat-session"),
+        successRtlWithDoc(tiledModule, "tiled-session"),
+      ],
+      retrospector: [
+        successResult({
+          analysis: "The flat-bus contract keeps reproducing the same failure.",
+          suggestion: "Try a channel-tiled interface so the datapath can be rebuilt under a simpler stream width.",
+        }),
+      ],
+    });
+    const assayerFn = createAssayerMock([verifFail, verifFail, verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      maxRetries: 0,
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("contract variant: tiled-streaming"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("create_new_doc_request"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("Do NOT use web search"))).toBe(true);
+
+    const contractState = JSON.parse(await readFile(path.join(outputRoot, "contract_state.json"), "utf8"));
+    expect(contractState.contracts[fixtureContractKeys.flat].status).toBe("manual_correction_needed");
+    expect(contractState.contracts[fixtureContractKeys.tiled]).toBeUndefined();
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("pass");
+
+    const lifecycle = JSON.parse(await readFile(path.join(knowledgeRoot, "doc_lifecycle.json"), "utf8"));
+    const createdDocs = Object.values(lifecycle.docs) as Array<{
+      contract_id?: string;
+      creation_reason?: string;
+      source_doc_ids?: string[];
+      pattern_path: string;
+    }>;
+    const createdTiledDoc = createdDocs.find((doc) => doc.contract_id === "tiled-streaming");
+    expect(createdTiledDoc).toBeDefined();
+    expect(createdTiledDoc?.creation_reason).toBe("create_new_doc");
+    expect(createdTiledDoc?.source_doc_ids?.some((id) => id.includes("protected"))).toBe(true);
+    await expect(readFile(path.join(repoRoot, createdTiledDoc!.pattern_path), "utf8")).resolves.toContain("contract_id: tiled-streaming");
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"event":"contract_alternative_selected"');
+    expect(log).toContain('"event":"create_new_doc_requested"');
+  });
+
+  it("skips persisted flagged contracts on subsequent self-improve runs", async () => {
+    await writePipelineIrFixture();
+    await seedContractFlags(["flat"]);
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [successRtlWithDoc(module, "tiled-session")],
+    });
+    const assayerFn = createAssayerMock([verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const firstFoundryPrompt = queryFn.mock.calls
+      .map(([call]) => (call as { prompt: string }).prompt)
+      .find((prompt) => prompt.includes("You are the `foundry`")) ?? "";
+    expect(firstFoundryPrompt).toContain("contract variant: tiled-streaming");
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("pass");
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"event":"contract_selected_after_skipping_flagged"');
+  });
+
+  it("reuses contract-tagged lifecycle docs instead of creating a duplicate new-doc request", async () => {
+    await writePipelineIrFixture();
+    await seedContractFlags(["flat"]);
+    await seedLifecycleDoc({
+      id: "auto_tiled_existing",
+      status: "active",
+      contract_id: "tiled-streaming",
+    });
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [successRtlWithDoc(module, "tiled-session")],
+    });
+    const assayerFn = createAssayerMock([verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("contract variant: tiled-streaming"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("create_new_doc_request"))).toBe(false);
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).not.toContain('"event":"create_new_doc_requested"');
+  });
+
+  it("requests a new doc when flat-bus has same-family docs but no exact pattern", async () => {
+    const pipelineIr = await writePipelineIrFixture() as { layers: Array<Record<string, unknown>> };
+    pipelineIr.layers[0].weight_shape = [1, 1, 5, 5];
+    pipelineIr.layers[0].num_weights = 25;
+    await writeFile(path.join(outputRoot, "layer_ir.json"), `${JSON.stringify(pipelineIr, null, 2)}\n`, "utf8");
+    const module = {
+      ...JSON.parse(await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8")),
+      spec_hash: "conv2d_1x1x5x5_s1x1_i8_o8",
+    };
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [successRtlWithDoc(module, "flat-session")],
+    });
+    const assayerFn = createAssayerMock([verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("create_new_doc_request"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("protected_02_conv1x1_md"))).toBe(true);
+
+    const lifecycle = JSON.parse(await readFile(path.join(knowledgeRoot, "doc_lifecycle.json"), "utf8"));
+    const createdDocs = Object.values(lifecycle.docs) as Array<{
+      contract_id?: string;
+      creation_reason?: string;
+      source_doc_ids?: string[];
+    }>;
+    const createdFlatDoc = createdDocs.find((doc) => doc.contract_id === "flat-bus");
+    expect(createdFlatDoc?.creation_reason).toBe("create_new_doc");
+    expect(createdFlatDoc?.source_doc_ids?.some((id) => id.includes("protected"))).toBe(true);
+  });
+
+  it("escalates when all available contracts are exhausted", async () => {
+    await writePipelineIrFixture();
+    await seedContractFlags(["flat", "tiled"]);
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const verifFail = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [
+        successRtlWithDoc(module, "dram-session"),
+        successRtlWithDoc(module, "dram-session"),
+      ],
+      retrospector: [
+        successResult({
+          analysis: "The final contract variant still fails.",
+          suggestion: "Escalate with the full failure history for manual correction.",
+        }),
+      ],
+    });
+    const assayerFn = createAssayerMock([verifFail, verifFail]);
+    const synthesisFn = createVivadoMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      maxRetries: 0,
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("fail_abort");
+    expect(state.results.unit_module.failure_class).toBe("manual_correction_needed");
+
+    const contractState = JSON.parse(await readFile(path.join(outputRoot, "contract_state.json"), "utf8"));
+    expect(contractState.contracts[fixtureContractKeys.dram].status).toBe("manual_correction_needed");
+    const reportPath = path.join(repoRoot, contractState.contracts[fixtureContractKeys.dram].report_path);
+    await expect(readFile(reportPath, "utf8")).resolves.toContain("manual_correction_needed");
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"event":"human_escalation_required"');
+  });
+
+  it("writes successful self-improve draft docs to probationary", async () => {
+    await writePipelineIrFixture();
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        return successRtlWithDoc(module);
+      }],
+    });
+    const assayerFn = createAssayerMock([verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const lifecycle = JSON.parse(await readFile(path.join(knowledgeRoot, "doc_lifecycle.json"), "utf8"));
+    const docs = Object.values(lifecycle.docs) as Array<{
+      status: string;
+      created_by_module: string;
+      pattern_path: string;
+      reference_path: string;
+    }>;
+    const created = docs.find((doc) => doc.created_by_module === "unit_module");
+    expect(created).toBeDefined();
+    expect(created?.status).toBe("probationary");
+    expect(created?.pattern_path).toContain("knowledge/patterns/probationary/");
+    expect(created?.reference_path).toContain("knowledge/references/probationary/");
+    await expect(readFile(path.join(repoRoot, created!.pattern_path), "utf8")).resolves.toContain("Generated RTL note");
+    await expect(readFile(path.join(repoRoot, created!.reference_path), "utf8")).resolves.toContain("reference_generated");
+  });
+
+  it("promotes probationary docs after enough successful users", async () => {
+    await writePipelineIrFixture();
+    await seedLifecycleDoc({
+      id: "auto_test_promote",
+      status: "probationary",
+      used_by_modules: ["unit_module"],
+      successful_modules: ["prior_a", "prior_b"],
+    });
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const verifPass = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
+    );
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        return successRtlWithDoc(module);
+      }],
+    });
+    const assayerFn = createAssayerMock([verifPass]);
+    const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
+
+    await runPipeline("checkpoint.pth", {
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const lifecycle = JSON.parse(await readFile(path.join(knowledgeRoot, "doc_lifecycle.json"), "utf8"));
+    expect(lifecycle.docs.auto_test_promote.status).toBe("active");
+    expect(lifecycle.docs.auto_test_promote.successful_modules).toContain("unit_module");
+    expect(lifecycle.docs.auto_test_promote.pattern_path).toContain("knowledge/patterns/active/");
+    await expect(readFile(path.join(repoRoot, "knowledge/patterns/active/auto_test_promote.md"), "utf8")).resolves.toContain("seed pattern");
+  });
+
+  it("archives probationary docs immediately when a module using them fails", async () => {
+    await writePipelineIrFixture();
+    await seedLifecycleDoc({
+      id: "auto_test_archive",
+      status: "probationary",
+      used_by_modules: ["unit_module"],
+    });
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    const verifFail = {
+      module_id: "unit_module",
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: 1,
+      failure_category: "architectural_fit",
+      classifier_reason: "Seeded failure for lifecycle test.",
+    };
+
+    const queryFn = createQueryMock({
+      foundry: [async () => {
+        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        return successRtlWithDoc(module);
+      }],
+    });
+    const assayerFn = createAssayerMock([verifFail]);
+    const synthesisFn = createVivadoMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const lifecycle = JSON.parse(await readFile(path.join(knowledgeRoot, "doc_lifecycle.json"), "utf8"));
+    expect(lifecycle.docs.auto_test_archive.status).toBe("archived");
+    expect(lifecycle.docs.auto_test_archive.failed_modules).toContain("unit_module");
+    expect(lifecycle.docs.auto_test_archive.archived_pattern_path).toContain("knowledge/patterns/archive/");
+    await expect(readFile(path.join(repoRoot, lifecycle.docs.auto_test_archive.archived_pattern_path), "utf8")).resolves.toContain("seed pattern");
+    await expect(readFile(path.join(repoRoot, "knowledge/patterns/probationary/auto_test_archive.md"), "utf8")).rejects.toThrow();
+  });
+
   it("fail-aborts a layer whose bus width exceeds MAX_SUPPORTED_BUS_BITS without invoking Foundry or Surgeon", async () => {
     // Build a custom pipeline IR whose sole layer has a bus width way over
     // the 4096-bit cap. Everything else mirrors the standard fixture so the
@@ -402,13 +981,18 @@ describe("runPipeline", () => {
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
-    expect(queryFn).not.toHaveBeenCalled();
+    const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
+    expect(prompts.some((prompt) => prompt.includes("You are the `foundry`"))).toBe(false);
+    expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(false);
+    expect(prompts.some((prompt) => prompt.includes("You are the `failure_classifier`"))).toBe(true);
     expect(synthesisFn).not.toHaveBeenCalled();
     expect(assayerFn).not.toHaveBeenCalled();
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules[layer.module_id]).toBe("fail_abort");
     expect(state.results[layer.module_id].failure_class).toBe("architectural_unsupported");
+    expect(state.results[layer.module_id].failure_category).toBe("architectural_fit");
+    expect(state.results[layer.module_id].violated_constraint).toBe("MAX_SUPPORTED_BUS_BITS");
 
     const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
     expect(log).toContain('"reason":"architectural_unsupported"');

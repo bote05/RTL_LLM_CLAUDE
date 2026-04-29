@@ -1119,6 +1119,23 @@ export type GetRtlPatternsResult = {
 };
 
 const PATTERN_LIBRARY_ROOT = path.resolve(repoRoot, "knowledge");
+const DOC_LIFECYCLE_STATE_PATH = path.join(PATTERN_LIBRARY_ROOT, "doc_lifecycle.json");
+export const KNOWLEDGE_READ_TIERS = ["protected", "active", "probationary"] as const;
+export const KNOWLEDGE_ARCHIVE_TIER = "archive" as const;
+
+type GeneratedDocTier = "active" | "probationary";
+type GeneratedDocEntry = {
+  id: string;
+  op_type: string;
+  contract_id?: string;
+  contract_key?: string;
+  status: GeneratedDocTier | "archived";
+  pattern_path?: string;
+  reference_path?: string;
+};
+type GeneratedDocState = {
+  docs?: Record<string, GeneratedDocEntry>;
+};
 
 async function tryReadText(absPath: string): Promise<string | null> {
   try {
@@ -1133,27 +1150,99 @@ function resolvePatternPaths(
   kh?: number,
   kw?: number,
 ): string[] {
+  const tieredPatternPaths = (fileName: string): string[] =>
+    KNOWLEDGE_READ_TIERS.map((tier) =>
+      path.join(PATTERN_LIBRARY_ROOT, "patterns", tier, fileName),
+    );
+
   // Always include shared context + common-bugs files (when present).
   const paths: string[] = [
-    path.join(PATTERN_LIBRARY_ROOT, "patterns", "01_context.md"),
-    path.join(PATTERN_LIBRARY_ROOT, "patterns", "08_common_bugs.md"),
+    ...tieredPatternPaths("01_context.md"),
+    ...tieredPatternPaths("08_common_bugs.md"),
   ];
   if (op_type === "conv2d") {
     if (kh === 1 && kw === 1) {
-      paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "02_conv1x1.md"));
+      paths.push(...tieredPatternPaths("02_conv1x1.md"));
     } else if (kh === 3 && kw === 3) {
-      paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "03_conv3x3_pad1.md"));
+      paths.push(...tieredPatternPaths("03_conv3x3_pad1.md"));
     } else if (kh === 7 && kw === 7) {
-      paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "04_conv7x7_pad3.md"));
+      paths.push(...tieredPatternPaths("04_conv7x7_pad3.md"));
     }
   } else if (op_type === "add") {
-    paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "05_add_quantized.md"));
+    paths.push(...tieredPatternPaths("05_add_quantized.md"));
   } else if (op_type === "relu") {
-    paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "06_relu.md"));
+    paths.push(...tieredPatternPaths("06_relu.md"));
   } else if (op_type === "maxpool") {
-    paths.push(path.join(PATTERN_LIBRARY_ROOT, "patterns", "07_maxpool.md"));
+    paths.push(...tieredPatternPaths("07_maxpool.md"));
   }
   return paths;
+}
+
+async function readDocLifecycleState(): Promise<GeneratedDocState> {
+  try {
+    const raw = await readFile(DOC_LIFECYCLE_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === "object" && parsed !== null ? (parsed as GeneratedDocState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function lifecycleDocsFor(
+  state: GeneratedDocState,
+  op_type: string,
+  kind: "pattern" | "reference",
+): Array<{ path: string; contract_id?: string; contract_key?: string }> {
+  const docs = Object.values(state.docs ?? {});
+  const tierOrder: Record<GeneratedDocTier, number> = { active: 0, probationary: 1 };
+  return docs
+    .filter((doc): doc is GeneratedDocEntry & { status: GeneratedDocTier } =>
+      doc.op_type === op_type && (doc.status === "active" || doc.status === "probationary"),
+    )
+    .sort((a, b) => {
+      const tierDelta = tierOrder[a.status] - tierOrder[b.status];
+      return tierDelta !== 0 ? tierDelta : a.id.localeCompare(b.id);
+    })
+    .map((doc) => ({
+      path: kind === "pattern" ? doc.pattern_path : doc.reference_path,
+      contract_id: doc.contract_id,
+      contract_key: doc.contract_key,
+    }))
+    .flatMap((entry) =>
+      typeof entry.path === "string" && entry.path.length > 0
+        ? [{
+            path: path.resolve(repoRoot, entry.path),
+            contract_id: entry.contract_id,
+            contract_key: entry.contract_key,
+          }]
+        : [],
+    );
+}
+
+function resolveReferencePaths(fileName: string): string[] {
+  return KNOWLEDGE_READ_TIERS.map((tier) =>
+    path.join(PATTERN_LIBRARY_ROOT, "references", tier, fileName),
+  );
+}
+
+async function readReferenceVariants(fileName: string, extraPaths: string[] = []): Promise<string | null> {
+  const variants: Array<{ tier: string; text: string }> = [];
+  for (const p of [...resolveReferencePaths(fileName), ...extraPaths]) {
+    const text = await tryReadText(p);
+    if (text !== null) {
+      const rel = path.relative(PATTERN_LIBRARY_ROOT, p);
+      variants.push({ tier: rel || path.basename(path.dirname(p)), text });
+    }
+  }
+  if (variants.length === 0) {
+    return null;
+  }
+  if (variants.length === 1) {
+    return variants[0].text;
+  }
+  return variants
+    .map(({ tier, text }) => `// ---- knowledge/references/${tier}/${fileName} ----\n${text.trim()}\n`)
+    .join("\n");
 }
 
 export async function get_rtl_patterns(
@@ -1161,43 +1250,59 @@ export async function get_rtl_patterns(
   kernel_h?: number,
   kernel_w?: number,
 ): Promise<GetRtlPatternsResult> {
-  const patternPaths = resolvePatternPaths(op_type, kernel_h, kernel_w);
+  const lifecycleState = await readDocLifecycleState();
+  const lifecyclePatternDocs = lifecycleDocsFor(lifecycleState, op_type, "pattern");
+  const patternPaths = [
+    ...resolvePatternPaths(op_type, kernel_h, kernel_w),
+    ...lifecyclePatternDocs.map((doc) => doc.path),
+  ];
   const sections: string[] = [];
   for (const p of patternPaths) {
     const text = await tryReadText(p);
     if (text !== null) {
-      sections.push(`# ${path.basename(p)}\n\n${text.trim()}\n`);
+      const rel = path.relative(PATTERN_LIBRARY_ROOT, p);
+      const tier = path.basename(path.dirname(p));
+      const title =
+        tier === "protected"
+          ? path.basename(p)
+          : rel;
+      sections.push(`# ${title}\n\n${text.trim()}\n`);
     }
   }
 
   let reference_verilog: string | null = null;
   let license_notice: string | null = null;
+  const lifecycleReferenceDocs = lifecycleDocsFor(lifecycleState, op_type, "reference");
+  const lifecycleReferencePaths = lifecycleReferenceDocs.map((doc) => doc.path);
 
   // Concrete worked-example wrappers — one per kernel shape we have a
   // proven reference for. Foundry adapts the localparams + $readmemh
   // paths from the LayerIR; the architecture (FSM / library
   // instantiation / start_pulse) stays identical.
   if (op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
-    const ref = await tryReadText(
-      path.join(PATTERN_LIBRARY_ROOT, "references", "conv1x1_passing_reference.v"),
-    );
+    const ref = await readReferenceVariants("conv1x1_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
     }
   } else if (op_type === "conv2d" && kernel_h === 3 && kernel_w === 3) {
-    const ref = await tryReadText(
-      path.join(PATTERN_LIBRARY_ROOT, "references", "conv3x3_passing_reference.v"),
-    );
+    const ref = await readReferenceVariants("conv3x3_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
     }
   } else if (op_type === "conv2d" && kernel_h === 7 && kernel_w === 7) {
-    const ref = await tryReadText(
-      path.join(PATTERN_LIBRARY_ROOT, "references", "conv7x7_passing_reference.v"),
-    );
+    const ref = await readReferenceVariants("conv7x7_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
     }
+  } else if (lifecycleReferencePaths.length > 0) {
+    const refs: string[] = [];
+    for (const p of lifecycleReferencePaths) {
+      const text = await tryReadText(p);
+      if (text !== null) {
+        refs.push(`// ---- ${path.relative(PATTERN_LIBRARY_ROOT, p)} ----\n${text.trim()}\n`);
+      }
+    }
+    reference_verilog = refs.length > 0 ? refs.join("\n") : null;
   }
 
   const pattern_markdown =
@@ -1240,6 +1345,13 @@ export async function get_rtl_patterns(
     kernel_w: kernel_w ?? null,
     pattern_markdown_chars: pattern_markdown.length,
     reference_verilog_chars: reference_verilog ? reference_verilog.length : 0,
+    lifecycle_docs: lifecyclePatternDocs
+      .concat(lifecycleReferenceDocs)
+      .map((doc) => ({
+        path: path.relative(repoRoot, doc.path),
+        contract_id: doc.contract_id ?? null,
+        contract_key: doc.contract_key ?? null,
+      })),
   };
   try {
     await mkdir(path.dirname(logPath), { recursive: true });

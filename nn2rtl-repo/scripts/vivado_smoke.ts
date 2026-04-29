@@ -23,11 +23,25 @@ import { run_vivado } from "../mcp/tools.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
+const readableReferenceTiers = ["protected", "active", "probationary"] as const;
+
+async function readReference(refStem: string): Promise<{ refPath: string; moduleSource: string }> {
+  for (const tier of readableReferenceTiers) {
+    const refPath = path.join(repoRoot, "knowledge", "references", tier, `${refStem}.v`);
+    try {
+      return { refPath, moduleSource: await readFile(refPath, "utf8") };
+    } catch {
+      // Try the next readable tier. The archive tier is intentionally skipped.
+    }
+  }
+  throw new Error(
+    `Could not find reference '${refStem}.v' in knowledge/references/{protected,active,probationary}.`,
+  );
+}
 
 async function main(): Promise<void> {
   const refStem = process.argv[2] ?? "conv1x1_passing_reference";
-  const refPath = path.join(repoRoot, "knowledge", "references", `${refStem}.v`);
-  const moduleSource = await readFile(refPath, "utf8");
+  const { refPath, moduleSource } = await readReference(refStem);
   const moduleMatch = moduleSource.match(/^\s*module\s+([A-Za-z_][A-Za-z0-9_]*)/m);
   if (!moduleMatch) throw new Error("Could not extract module name from reference Verilog.");
   const moduleName = moduleMatch[1];

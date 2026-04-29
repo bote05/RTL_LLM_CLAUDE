@@ -78,6 +78,52 @@ describe("PipelineStateManager", () => {
     expect(manager.getState().results.m1).toEqual(TB_SETUP_FAIL_RESULT);
   });
 
+  it("retries classifier-confirmed code bugs", () => {
+    const manager = new PipelineStateManager(["m1"], 3);
+    manager.applyVerifResult("m1", {
+      ...FAIL_RESULT,
+      failure_category: "code_bug",
+      classifier_reason: "Syntax and simple logic failures are retryable.",
+    });
+
+    expect(manager.getState().modules.m1).toBe("fail_retry");
+  });
+
+  it("fail-aborts architectural-fit and unknown classifier results", () => {
+    const archManager = new PipelineStateManager(["m1"], 3);
+    archManager.applyVerifResult("m1", {
+      ...FAIL_RESULT,
+      failure_category: "architectural_fit",
+      violated_resource: "BRAM18",
+      classifier_reason: "BRAM18 utilization exceeds device capacity.",
+    });
+    expect(archManager.getState().modules.m1).toBe("fail_abort");
+
+    const unknownManager = new PipelineStateManager(["m1"], 3);
+    unknownManager.applyVerifResult("m1", {
+      ...FAIL_RESULT,
+      failure_category: "unknown",
+      classifier_reason: "Evidence is contradictory.",
+    });
+    expect(unknownManager.getState().modules.m1).toBe("fail_abort");
+  });
+
+  it("loads early classifier fail-aborts even when retries remain", async () => {
+    const statePath = await makeTempPath("pipeline_state.json");
+    const manager = new PipelineStateManager(["m1"], 3);
+    manager.applyVerifResult("m1", {
+      ...FAIL_RESULT,
+      failure_category: "architectural_fit",
+      violated_constraint: "MAX_SUPPORTED_BUS_BITS",
+      classifier_reason: "The bus contract exceeds the configured cap.",
+    });
+    await manager.saveState(statePath);
+
+    const reloaded = new PipelineStateManager(["m1"], 3);
+    await expect(reloaded.loadState(statePath)).resolves.toBeUndefined();
+    expect(reloaded.getState().modules.m1).toBe("fail_abort");
+  });
+
   it("merges nested model usage and total cost", () => {
     const manager = new PipelineStateManager(["m1"]);
 
@@ -101,6 +147,17 @@ describe("PipelineStateManager", () => {
       output_tokens: 3,
       server_tool_use: { read_weights: 3 },
     });
+  });
+
+  it("records retrospector calls by module contract key", () => {
+    const manager = new PipelineStateManager(["m1"]);
+
+    expect(manager.retrospectorCallCount("m1:contract")).toBe(0);
+    manager.recordRetrospectorCall("m1:contract");
+    manager.recordRetrospectorCall("m1:contract");
+
+    expect(manager.retrospectorCallCount("m1:contract")).toBe(2);
+    expect(manager.getState().retrospector_calls["m1:contract"]).toBe(2);
   });
 
   it("returns a stable summary table", () => {
@@ -170,6 +227,7 @@ describe("PipelineStateManager", () => {
       max_retries: 3,
       total_cost_usd: 0,
       model_usage: {},
+      retrospector_calls: {},
     };
 
     await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");

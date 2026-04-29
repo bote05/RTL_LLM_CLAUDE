@@ -34,7 +34,63 @@ export const AGENT_CONFIG = {
 
 export type AgentName = keyof typeof AGENT_CONFIG;
 
+export const FAILURE_CLASSIFIER_CONFIG = {
+  model: "claude-sonnet-4-6" as const,
+  maxTurns: 4,
+  description: "Classifies failed module evidence as code_bug, architectural_fit, or unknown.",
+} as const;
+
+export const RETROSPECTOR_CONFIG = {
+  model: "claude-opus-4-7" as const,
+  maxTurns: 4,
+  description: "Advises Foundry after the normal retry budget is exhausted.",
+} as const;
+
+export function parseBooleanEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: boolean,
+): boolean {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+export function parsePositiveIntEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw.trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const PIPELINE_CONFIG = {
+  // Foundation switch for the self-improving documentation flow. Default OFF
+  // keeps today's pipeline behavior unchanged; later phases should gate any
+  // doc-writing / promotion logic on this flag. The knowledge reader still
+  // loads protected + active + probationary docs in both modes so validated
+  // generated guidance remains available even when new self-improvement writes
+  // are disabled.
+  self_improve: parseBooleanEnv(process.env, "NN2RTL_SELF_IMPROVE", false),
+  doc_promotion_success_threshold: parsePositiveIntEnv(
+    process.env,
+    "NN2RTL_DOC_PROMOTION_SUCCESSES",
+    3,
+  ),
   max_retries: 3,
   // Cap on the number of accumulator lanes in each conv output-channel
   // group. Per-layer mac_parallelism = min(OC, MAX_PARALLEL_MACS). The
@@ -69,5 +125,6 @@ export const PIPELINE_CONFIG = {
   golden_vectors_path: "../output/golden_vectors.json",
   layer_ir_path: "../output/layer_ir.json",
   pipeline_state_path: "../output/pipeline_state.json",
+  contract_state_path: "../output/contract_state.json",
   static_testbench_path: "../tb/static_verilator_tb.cpp",
 } as const;

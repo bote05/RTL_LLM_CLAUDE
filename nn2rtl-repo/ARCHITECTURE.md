@@ -1,6 +1,6 @@
 # nn2rtl — Architecture Reference
 
-Last updated: April 16, 2026
+Last updated: April 29, 2026
 
 This document is a file-by-file tour of the codebase. It complements [README.md](./README.md) (the design spec — *what the project is and why*) by describing *where each decision lives in the code* and *what is still outstanding*.
 
@@ -125,12 +125,14 @@ Canonical TypeScript interfaces for the pipeline data contracts:
 - `VerilogModule` — what Foundry and Surgeon produce.
 - `VerifResult` — what the deterministic Assayer function returns. Includes timing fields, numerical diagnostics, and optional `failure_class`.
 - `VerificationSidecar` — the JSON blob the orchestrator writes for the static testbench to consume; includes all seven signal names and `bus_bytes_per_sample`.
-- `PipelineState` — authoritative run state. Includes `total_cost_usd` and per-model `model_usage`.
+- `PipelineState` — authoritative run state. Includes `total_cost_usd`, per-model `model_usage`, and `retrospector_calls` so the self-improve final-advice path is capped once per module/contract.
 - `ModuleStatus` and `NextAction` — discriminated unions for the state machine.
 - `FailureClass` — the README's repair taxonomy plus `synthesis_failed`, used when a module passes simulation but fails the post-pass Vivado synthesis step.
+- `FailureCategory` / `FailureClassification` — the failure classifier's retry-policy verdict: `code_bug`, `architectural_fit`, or `unknown`, with optional `violated_resource` / `violated_constraint` for architectural-fit failures.
+- `RetrospectorAdvice` — advisory analysis plus a concrete suggestion fed back into Foundry after retry exhaustion when self-improve mode is enabled.
 
 ### `schemas.ts`
-Zod 4 runtime schemas mirroring `types.ts`. Single source of truth for every JSON Schema the SDK or MCP server advertises — those are now derived with `z.toJSONSchema(...)` rather than hand-written. Exports: `failureClassSchema`, `moduleStatusSchema`, `layerIrSchema`, `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`, `synthesisReportSchema`, `modelUsageEntrySchema`, `pipelineStateSchema`.
+Zod 4 runtime schemas mirroring `types.ts`. Single source of truth for every JSON Schema the SDK or MCP server advertises — those are now derived with `z.toJSONSchema(...)` rather than hand-written. Exports: `failureClassSchema`, `failureCategorySchema`, `failureClassificationSchema`, `retrospectorAdviceSchema`, `moduleStatusSchema`, `layerIrSchema`, `pipelineIrSchema`, `verilogModuleSchema`, `verifResultSchema`, `synthesisReportSchema`, `modelUsageEntrySchema`, `pipelineStateSchema`.
 
 Constraint highlights:
 
@@ -141,27 +143,30 @@ Constraint highlights:
   - Every `modules` key has an `attempts` entry and vice versa.
   - Every `results` key refers to a known module.
   - `fail_retry` requires a prior `VerifResult` and `attempts < max_retries`.
-  - `fail_abort` requires a prior `VerifResult` and `attempts >= max_retries`.
+  - `fail_abort` requires a prior `VerifResult` and either `attempts >= max_retries` or an early-abort verdict (`tb_setup_error`, `architectural_unsupported`, `architectural_fit`, or `unknown`).
   - `pass` requires a `VerifResult` whose own `status === "pass"`.
   - Every `results[id].module_id` must equal `id`.
 
 ### `config.ts`
-`AGENT_CONFIG` maps each of the three LLM subagents (Cartographer, Foundry, Surgeon) to its full model ID, per-agent `maxTurns`, and description. There is no Assayer entry — the orchestrator plays both the Conductor and Assayer roles itself via deterministic code. `PIPELINE_CONFIG` pins `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments and paths.
+`AGENT_CONFIG` maps each of the three LLM subagents (Cartographer, Foundry, Surgeon) to its full model ID, per-agent `maxTurns`, and description. `FAILURE_CLASSIFIER_CONFIG` pins the lightweight classifier call (`claude-sonnet-4-6`, maxTurns 4). `RETROSPECTOR_CONFIG` pins the advisory post-retry call (`claude-opus-4-7`, maxTurns 4). There is no Assayer entry — the orchestrator plays both the Conductor and Assayer roles itself via deterministic code. `PIPELINE_CONFIG` pins `self_improve` (default off, override with `NN2RTL_SELF_IMPROVE`), `doc_promotion_success_threshold` (default 3, override with `NN2RTL_DOC_PROMOTION_SUCCESSES`), `max_retries`, all output paths, and the path to the static testbench. Single point of change for model assignments, modes, and paths.
 
 Agent configuration:
 - **Cartographer**: model `claude-sonnet-4-6`, maxTurns 30
 - **Foundry**: model `claude-opus-4-7`, maxTurns 20
 - **Surgeon**: model `claude-opus-4-7`, maxTurns 20
+- **Failure classifier**: model `claude-sonnet-4-6`, maxTurns 4
+- **Retrospector**: model `claude-opus-4-7`, maxTurns 4
 
 ### `claude-agent-sdk-compat.ts`
-Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The published SDK's `AgentDefinition`, `SDKMessage`, and `query()` option types are large and include fields we do not use (`mcpServers`, `source`, `criticalSystemReminder_EXPERIMENTAL`, various policy-settings knobs). This shim re-exports only the fields the orchestrator actually touches (`description`, `prompt`, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` on `AgentDefinition`; `cwd`, `tools`, `allowedTools`, `plugins`, `agents`, `outputFormat`, `maxTurns` on the `query()` options). `model` is kept as a string because the pipeline intentionally passes full model IDs such as `claude-opus-4-7`; tier aliases are avoided because global Claude settings can remap them. The runtime `query` function is cast back to this narrower signature via `as unknown as ...` — since the SDK runtime accepts any superset of our shape, the cast is sound. Upside: adding a field to the SDK's types does not silently change our API, and unsupported fields fail at compile time instead of at runtime. The SDK itself is now fully typed, so the shim is no longer a declarations workaround; removing it would mean accepting the SDK's wider surface, which we do not want.
+Deliberately narrowed facade over `@anthropic-ai/claude-agent-sdk`. The published SDK's `AgentDefinition`, `SDKMessage`, and `query()` option types are large and include fields we do not use (`mcpServers`, `source`, `criticalSystemReminder_EXPERIMENTAL`, various policy-settings knobs). This shim re-exports only the fields the orchestrator actually touches (`description`, `prompt`, `tools`, `disallowedTools`, `model`, `skills`, `maxTurns` on `AgentDefinition`; `cwd`, `tools`, `allowedTools`, `plugins`, `agents`, `outputFormat`, `maxTurns`, `resume`, `sessionId`, `forkSession` on the `query()` options). `SDKResultMessage.session_id` is exposed so the Retrospector path can resume Foundry's prior conversation. `model` is kept as a string because the pipeline intentionally passes full model IDs such as `claude-opus-4-7`; tier aliases are avoided because global Claude settings can remap them. The runtime `query` function is cast back to this narrower signature via `as unknown as ...` — since the SDK runtime accepts any superset of our shape, the cast is sound. Upside: adding a field to the SDK's types does not silently change our API, and unsupported fields fail at compile time instead of at runtime. The SDK itself is now fully typed, so the shim is no longer a declarations workaround; removing it would mean accepting the SDK's wider surface, which we do not want.
 
 ### `pipeline.ts`
 `PipelineStateManager` — the state machine. Constructor seeds all modules as `pending` with zero attempts.
 
 - `tick()` — scans modules in order, returns the next action (`invoke_foundry`, `invoke_surgeon`, or `done`). Mutates in-memory status.
-- `applyVerifResult()` — transitions to `pass`, `fail_retry`, or `fail_abort` based on outcome and retry count.
+- `applyVerifResult()` — transitions to `pass`, `fail_retry`, or `fail_abort` based on outcome, classifier category, and retry count. `code_bug` follows the retry budget; `architectural_fit` and `unknown` fail-abort immediately.
 - `recordAgentUsage()` — accumulates `total_cost_usd` and merges per-model token usage so cost tracking survives resume.
+- `retrospectorCallCount()` / `recordRetrospectorCall()` — persist the one-call cap for the self-improve Retrospector path by module/contract key.
 - `saveState()` / `loadState()` — persist to `output/pipeline_state.json`. `loadState` validates through `pipelineStateSchema` and then **repairs transient statuses** from a crashed prior run:
   - `generating` + no prior result → `pending` (Foundry crashed; re-run from scratch).
   - `generating` + prior result → `fail_retry`, `attempts--` (Surgeon crashed mid-repair; re-run Surgeon without double-billing the retry).
@@ -184,9 +189,15 @@ Library module. Exports `runPipeline`, `runCli`, `handlePipelineError`, plus man
    - `invoke_foundry` → call Foundry for the current `LayerIR`, validate the returned `VerilogModule`, persist it, then invoke the deterministic Assayer on that module.
    - `invoke_surgeon` → load the persisted broken module plus the prior `VerifResult`, call Surgeon, validate/persist the repaired `VerilogModule`, then invoke the deterministic Assayer on the repaired module.
    - Every structured agent return is validated through Zod before it is trusted.
-5. Feed the Assayer's `VerifResult` into `PipelineStateManager.applyVerifResult()`, save state, and append run-log events after each transition.
-6. On a passing module, invoke `run_vivado` via direct MCP import (Artix-7 synth-only flow) and write `output/reports/<module_id>.vivado.json`. If Vivado reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"` and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
-7. On terminal state, write `output/reports/pipeline_summary.json`.
+5. For every failed `VerifResult`, call the failure classifier with the full available error logs, the LayerIR module spec, and a contract summary. The classifier writes `failure_category` plus `violated_resource` / `violated_constraint` when the verdict is `architectural_fit`.
+6. Feed the classified `VerifResult` into `PipelineStateManager.applyVerifResult()`, save state, and append run-log events after each transition.
+7. On a passing module, invoke `run_vivado` via direct MCP import (Artix-7 synth-only flow) and write `output/reports/<module_id>.vivado.json`. If Vivado reports `success: false`, synthesize a `VerifResult` with `failure_class: "synthesis_failed"`, classify it, and feed it back through `PipelineStateManager.applyVerifResult()`, so the module enters the same `fail_retry` / `fail_abort` path as any other failure.
+8. If self-improve mode is enabled and a module passes all checks, persist the RTL agent's `draft_doc` to `knowledge/patterns/probationary/` and `knowledge/references/probationary/`, then update `knowledge/doc_lifecycle.json`.
+9. If the selected contract/technique has no exact protected or generated lifecycle doc coverage, include `create_new_doc_request` in Foundry's payload. Foundry receives the LayerIR, closest same-family local docs/references, and the failure context that required the new approach; external retrieval is disallowed. The successful RTL, markdown doc, and reference Verilog enter the normal probationary lifecycle tagged with the selected contract.
+10. If a probationary doc used by a module fails, move its pattern/reference files to `archive/`. If enough successful modules used it, move it to `active/`.
+11. If self-improve mode is enabled and a `code_bug` failure reaches `fail_abort` after the retry budget, or an `architectural_fit` failure reaches `fail_abort` immediately, run Retrospector once for that module/contract and inject its advice into the existing Foundry session via SDK `resume` for one final Foundry attempt when a session exists. If Retrospector marks an active doc as `doc_fault`, archive it before the final attempt and request a replacement draft.
+12. If the post-Retrospector attempt still fails, flag the selected structural contract in `output/contract_state.json` as `manual_correction_needed`, write a manual-correction report under `output/reports/`, and retry the same module with the next available contract in complexity order (`flat-bus`, `tiled-streaming`, `dram-backed`). If every contract is flagged, leave only that module in `fail_abort`; other modules continue.
+13. On terminal state, write `output/reports/pipeline_summary.json`.
 
 **Deterministic Assayer (`runAssayerDeterministic`).** Verification is no longer an LLM agent. The orchestrator writes the sidecar JSON from LayerIR fields (all signal names are fixed literals, widths and paths copied from the LayerIR), runs a deterministic RTL preflight that parses the ANSI port list to catch port-direction, port-width, and missing-port errors before invoking the toolchain, then calls `run_iverilog` for a fast lint pass followed by `run_verilator` for full simulation — both imported directly from the MCP package. The Verilator testbench produces a structured `VerifResult` JSON validated by Zod. No Haiku, no hallucination — a module has a `VerifResult` iff Verilator produced one.
 
@@ -198,15 +209,25 @@ The sidecar includes `bus_bytes_per_sample` (= `input_width_bits / 8`), which th
 
 **PPA gates (`evaluateSynthesis`).** After Vivado succeeds, `evaluateSynthesis` checks: (1) `timing_met === true`, (2) Fmax >= 50 MHz target (else `failure_class: missing_pipeline_register`), and (3) timing data is present (`wns_ns !== null` and `fmax_mhz > 0`, else `synthesis_failed`). LUT/FF/DSP/BRAM metrics are recorded for thesis analysis but are not hard-failed yet. Reports larger than ~6 KB are summarized as head + ERROR lines + tail so Surgeon sees the actual diagnostics instead of warning spam.
 
+**Failure classifier (`invokeFailureClassifier`).** This is a lightweight LLM call, not a plugin agent. It receives the failed `VerifResult`, full available simulation/synthesis logs, the `LayerIR`, and a contract summary containing bus widths, latency, target part, Fmax target, and Artix-7 resource caps. It returns `code_bug`, `architectural_fit`, or `unknown`; `architectural_fit` must name the violated resource or constraint.
+
+**Retrospector (`invokeRetrospector`).** This is an advisory LLM call, not a plugin agent, and it only runs when `self_improve` is enabled. The orchestrator records failed attempts and Foundry RTL versions in memory during the module run. When retry exhaustion produces a terminal `code_bug`, or the classifier produces an `architectural_fit` fail-abort, Retrospector receives the original `LayerIR`, contract summary, selected contract, ordered available contracts, current RTL knowledge doc, all recorded failure logs, and all Foundry-produced RTL versions. Its JSON `{ analysis, suggestion }` is injected into Foundry's existing conversation with `query({ options: { resume: <foundry_session_id> } })` when a session exists. Foundry gets exactly one final same-contract attempt; if that fails, contract switching begins. The pipeline stores `retrospector_calls[<module_id>:<spec_hash>]` so there are no retrospector-on-retrospector loops.
+
+**Failure response orchestration.** Self-improve mode persists contract health in `output/contract_state.json`. Contract keys are structural (`<contract_id>:<spec_hash>`), so a flagged flat-bus contract can be skipped later without blocking unrelated modules or other contract variants. The available contract order is `flat-bus` -> `tiled-streaming` -> `dram-backed`. When a contract is exhausted, the orchestrator writes a `manual_correction_*.json` report containing the contract summary, selected LayerIR, final result, Foundry versions, and failure attempts, then either retries the module with the next contract or emits `human_escalation_required` if no contract remains.
+
+**Doc lifecycle.** In self-improve mode, Foundry/Surgeon return `{ module, draft_doc }` instead of only `VerilogModule`. The agent still persists RTL through `write_verilog`; the orchestrator only writes the doc draft after the module passes simulation and Vivado. New drafts are written as unique files under `knowledge/patterns/probationary/` and `knowledge/references/probationary/`, never by editing an existing doc. `knowledge/doc_lifecycle.json` tracks generated doc id, tier/status, paths, creator module, modules that used it, successful users, failures, promotions, and archive paths. Probationary docs used by a failing module are archived immediately. Probationary docs with at least `doc_promotion_success_threshold` successful users are moved to `active/`. Protected docs are never moved or edited.
+
+**Create-new-doc flow.** If self-improve mode selects a contract or technique with no matching doc coverage, the orchestrator builds a `create_new_doc_request`. For flat-bus this requires an exact protected op/kernel pattern; for fallback contracts it requires an active or probationary lifecycle doc tagged with the selected `contract_id`. The request gives Foundry the current spec, the closest same-op-family local docs/references, and the failure context that forced the new approach. Foundry must not use web search, package downloads, or external source lookup. On success, the probationary lifecycle entry records `contract_id`, `contract_key`, `creation_reason: "create_new_doc"`, and `source_doc_ids`, which lets later contract selection treat the doc as coverage instead of repeatedly generating replacements.
+
 **Runtime injection** via `OrchestratorRuntime = { now, queryFn, synthesisFn, assayerFn }`: every helper accepts either a full or partial runtime so tests can supply deterministic clocks, a mock `query()` implementation, a mock Vivado invocation, and a mock Assayer function. The default is `{ now: () => new Date(), queryFn: query, synthesisFn: invokeVivado, assayerFn: runAssayerDeterministic }`.
 
-Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resultSchema, runtime)`. Both the SDK `outputFormat` (JSON Schema, generated from Zod via `z.toJSONSchema`) and the local `resultSchema` (Zod) are derived from the same schema export, so drift is structurally impossible.
+Agent dispatch goes through `runDelegatedAgent(slug, payload, outputFormat, resultSchema, runtime)`. Both the SDK `outputFormat` (JSON Schema, generated from Zod via `z.toJSONSchema`) and the local `resultSchema` (Zod) are derived from the same schema export, so drift is structurally impossible. The same helper can pass `options.resume` when the Retrospector path needs to continue a prior Foundry session rather than starting a fresh one.
 
 `invokeFoundry()` and `invokeSurgeon()` also call `persistVerilogModule()` after a successful structured return. This is a defensive fallback: agents are still instructed to use `write_verilog`, but the orchestrator force-persists the returned `{ module_id, verilog_source, ... }` payload so disk state is not lost if a model skips the MCP tool call to save turns.
 
 `requireStructuredOutput` unwraps the SDK's `structured_output`, falls back to `JSON.parse(result.result)` if missing, validates through the supplied Zod schema, and throws a field-level error on mismatch.
 
-Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, and Surgeon. Vivado is deterministic local tooling and is logged separately as synthesis metadata.
+Cost tracking accumulates over every agent call including Cartographer's bootstrap, Foundry, Surgeon, the failure classifier, and Retrospector. Vivado is deterministic local tooling and is logged separately as synthesis metadata.
 
 ---
 
@@ -548,7 +569,7 @@ PASS in run #2 after a hardening pass. Concrete deltas from this session:
   form); WNS regex needed a column-oriented branch for the dashed-header
   table 7-series Vivado emits.
 - **`use_dsp = "yes"` on the registered `mul_q`**: applied to both
-  `knowledge/references/conv1x1_passing_reference.v` and
+  `knowledge/references/protected/conv1x1_passing_reference.v` and
   `rtl_library/conv_datapath.v` so Vivado infers a DSP48E1 for the 8×8
   signed multiply instead of leaving it in LUTs. The current serialized
   lane datapath only uses one multiply per cycle, so this surfaces as 1
@@ -619,7 +640,8 @@ PASS in run #2 after a hardening pass. Concrete deltas from this session:
   `mac_lane_q1` → `mac_lane_q2`, etc.), so per OC pass costs
   `MP*K_TOTAL + 6` cycles instead of `+4` — two extra trailing drain
   cycles for the deeper pipeline. `compute_conv2d_latency_cycles`,
-  `knowledge/patterns/02_conv1x1.md`, `03_conv3x3_pad1.md`, and the
+  `knowledge/patterns/protected/02_conv1x1.md`,
+  `knowledge/patterns/protected/03_conv3x3_pad1.md`, and the
   `test_conv_latency_uses_serialized_mac_lane_contract` test all
   updated atomically (per the saved memory rule). Layer1_0_conv1
   latency goes from 4161 to **4193** cycles — 0.77% slower per pixel,
@@ -715,15 +737,25 @@ in the pipeline (not yet re-measured against the 17-module run):
   and maxpool modules must instantiate it; rolling their own coordinate
   logic is structurally rejected.
 - **`get_rtl_patterns` MCP tool** — dispatches on `op_type` + kernel
-  dimensions to concatenated `knowledge/patterns/*.md` context files,
-  and returns `conv1x1_passing_reference.v` verbatim for 1×1 convs.
+  dimensions to concatenated context files from
+  `knowledge/patterns/{protected,active,probationary}/`. The archive tier
+  is never read. Conv reference RTL is loaded from the same readable tiers
+  under `knowledge/references/`. Generated lifecycle docs are resolved via
+  `knowledge/doc_lifecycle.json`, with `active` entries included before
+  `probationary` entries for the matching op type and carrying their
+  `contract_id` / `contract_key` metadata for self-improve contract coverage.
   Foundry and Surgeon call this before emitting / repairing RTL.
-- **Eight pattern markdown files** in `knowledge/patterns/`:
+- **Eight protected pattern markdown files** in `knowledge/patterns/protected/`:
   01_context, 02_conv1x1, 03_conv3x3_pad1, 04_conv7x7_pad3,
   05_add_quantized, 06_relu, 07_maxpool, 08_common_bugs.
-- **Reference file**: `knowledge/references/conv1x1_passing_reference.v`
-  — the one proven-passing 1×1 module, adapted by Foundry on pointwise
-  convs. No external (out-of-repo) RTL is currently load-bearing.
+- **Knowledge tiers**: `protected/` is hand-written, `active/` is validated
+  auto-generated material, `probationary/` is newly generated material, and
+  `archive/` is write-only history.
+- **Reference files**:
+  `knowledge/references/protected/conv1x1_passing_reference.v`,
+  `conv3x3_passing_reference.v`, and `conv7x7_passing_reference.v`
+  are proven-passing modules adapted by Foundry. No external
+  (out-of-repo) RTL is currently load-bearing.
 
 None of these are ResNet-specific; all apply to any network-any-layer
 composition. The 17-module re-measurement was deferred to a future

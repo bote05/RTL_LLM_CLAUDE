@@ -105,7 +105,7 @@ and `out_frame_done`. Do not re-derive the wrap/stride/padding math.
 ## Reference status
 
 A proven-passing 7×7 reference now exists at
-`knowledge/references/conv7x7_passing_reference.v`. It is a direct
+`knowledge/references/protected/conv7x7_passing_reference.v`. It is a direct
 adaptation of the 3×3 reference -- same split-architecture skeleton
 (`coord_scheduler` + `line_buf_window` + `conv_datapath` instantiation,
 `pending_rearm`+`mac_busy` re-arm gate), only the localparam block

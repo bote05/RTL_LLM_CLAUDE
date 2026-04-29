@@ -8,6 +8,9 @@ import { z } from "zod";
 
 import {
   buildDelegationPrompt,
+  buildFailureClassifierPrompt,
+  buildFoundryRetrospectorInjectionPrompt,
+  buildRetrospectorPrompt,
   checkBusWidthCapability,
   createOrchestratorRuntime,
   findLayer,
@@ -22,6 +25,7 @@ import {
   toStringList,
   writeJsonFile,
 } from "../orchestrate.js";
+import { PIPELINE_CONFIG, parseBooleanEnv, parsePositiveIntEnv } from "../config.js";
 import { layerIrBaseSchema, layerIrSchema } from "../schemas.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -141,6 +145,202 @@ describe("orchestrate helpers", () => {
     expect(prompt).toContain("invariant scope");
   });
 
+  it("builds failure-classifier prompts with logs and contract-fit indicators", () => {
+    const layer = {
+      module_id: "m1",
+      op_type: "conv2d",
+      input_shape: [1, 64, 8, 8],
+      output_shape: [1, 64, 8, 8],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 3, 3],
+      num_weights: 36864,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 100,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk",
+      reset_signal: "rst_n",
+      valid_in_signal: "valid_in",
+      valid_out_signal: "valid_out",
+      ready_in_signal: "ready_in",
+      data_in_signal: "data_in",
+      data_out_signal: "data_out",
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      stride: [1, 1],
+      padding: [1, 1],
+    };
+    const prompt = buildFailureClassifierPrompt({
+      module_spec: layer as never,
+      contract: {
+        interface: {
+          clock: "clk",
+          reset: "rst_n",
+          valid_in: "valid_in",
+          ready_in: "ready_in",
+          valid_out: "valid_out",
+          data_in_bits: 512,
+          data_out_bits: 512,
+        },
+        timing: { pipeline_latency_cycles: 100, clock_period_ns: 20, fmax_target_mhz: 50 },
+        capability_limits: {
+          max_supported_bus_bits: 4096,
+          target_part: "xc7a100tcsg324-1",
+          artix7_100t_capacity: { lut: 63400, ff: 126800, dsp: 240, bram18: 240 },
+        },
+        operation: { op_type: "conv2d" },
+      },
+      failure_result: {
+        module_id: "m1",
+        status: "fail",
+        failure_class: "synthesis_failed",
+        fix_hint: "Vivado failed.",
+      },
+      logs: {
+        synthesis_report: "ERROR: DSP48 exhausted; resource utilization exceeds available DSP.",
+      },
+    });
+
+    expect(prompt).toContain("code_bug");
+    expect(prompt).toContain("architectural_fit");
+    expect(prompt).toContain("unknown");
+    expect(prompt).toContain("Contract-fit indicators");
+    expect(prompt).toContain("DSP48 exhausted");
+    expect(prompt).toContain("violated_resource");
+  });
+
+  it("builds retrospector and resumed Foundry prompts with advisory-only memory injection", () => {
+    const layer = {
+      module_id: "m1",
+      op_type: "add",
+      input_shape: [1, 4, 8, 8],
+      output_shape: [1, 4, 8, 8],
+      weights_path: "/tmp/w.hex",
+      bias_path: null,
+      weight_shape: [1],
+      num_weights: 0,
+      scale_factor: 0.5,
+      lhs_scale_factor: 0.25,
+      rhs_scale_factor: 0.25,
+      zero_point: 0,
+      pipeline_latency_cycles: 3,
+      clock_period_ns: 20,
+      input_width_bits: 64,
+      output_width_bits: 32,
+      clock_signal: "clk",
+      reset_signal: "rst_n",
+      valid_in_signal: "valid_in",
+      valid_out_signal: "valid_out",
+      ready_in_signal: "ready_in",
+      data_in_signal: "data_in",
+      data_out_signal: "data_out",
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    } as const;
+    const advice = {
+      analysis: "The attempts reuse a stale channel index.",
+      suggestion: "Register the channel-local sum with the matching index before saturation.",
+    };
+
+    const retroPrompt = buildRetrospectorPrompt({
+      original_spec: layer as never,
+      contract: {
+        interface: {
+          clock: "clk",
+          reset: "rst_n",
+          valid_in: "valid_in",
+          ready_in: "ready_in",
+          valid_out: "valid_out",
+          data_in_bits: 64,
+          data_out_bits: 32,
+        },
+        timing: { pipeline_latency_cycles: 3, clock_period_ns: 20, fmax_target_mhz: 50 },
+        capability_limits: {
+          max_supported_bus_bits: 4096,
+          target_part: "xc7a100tcsg324-1",
+          artix7_100t_capacity: { lut: 63400, ff: 126800, dsp: 240, bram18: 240 },
+        },
+        operation: { op_type: "add" },
+      },
+      doc_used: { pattern_markdown: "add pattern", reference_verilog: null, license_notice: null },
+      current_contract: {
+        id: "flat-bus",
+        complexity: 0,
+        description: "Full packed activation bus, current default contract.",
+      },
+      available_contracts: [
+        {
+          id: "flat-bus",
+          complexity: 0,
+          description: "Full packed activation bus, current default contract.",
+        },
+        {
+          id: "tiled-streaming",
+          complexity: 1,
+          description: "Channel-tiled stream contract.",
+        },
+      ],
+      knowledge_docs_used: [
+        {
+          id: "auto_add_doc",
+          tier: "active",
+          kind: "pattern",
+          op_type: "add",
+          path: "/repo/knowledge/patterns/active/auto_add_doc.md",
+          relative_path: "knowledge/patterns/active/auto_add_doc.md",
+        },
+      ],
+      foundry_versions: [
+        {
+          version_index: 1,
+          session_id: "session-1",
+          tool_use_summary: {},
+          documents_used: [],
+          module: {
+            module_id: "m1",
+            spec_hash: "add_4x4_s8x8_i64_o32",
+            generated_by: "Foundry",
+            attempt: 1,
+            verilog_source: "module m1; endmodule",
+          },
+        },
+      ],
+      failure_attempts: [
+        {
+          attempt_index: 1,
+          stage: "foundry_assayer",
+          module: { module_id: "m1", spec_hash: "add_4x4_s8x8_i64_o32", generated_by: "Foundry", attempt: 1 },
+          result: { module_id: "m1", status: "fail", failure_category: "code_bug" },
+          logs: { verilator_stderr: "mismatch" },
+        },
+      ],
+    });
+    expect(retroPrompt).toContain("You are the `retrospector`");
+    expect(retroPrompt).toContain("advisory JSON only");
+    expect(retroPrompt).toContain("doc_fault");
+    expect(retroPrompt).toContain("module m1; endmodule");
+    expect(retroPrompt).toContain("add pattern");
+
+    const foundryPrompt = buildFoundryRetrospectorInjectionPrompt({
+      layer_ir: layer as never,
+      expected_spec_hash: "add_4x4_s8x8_i64_o32",
+      write_verilog_output_dir: "/tmp/rtl",
+      retrospector_advice: advice,
+      self_improve_doc_request: {
+        enabled: true,
+        destination_tier: "probationary",
+      },
+    });
+    expect(foundryPrompt).toContain("existing `foundry` agent conversation");
+    expect(foundryPrompt).toContain("preserve the working memory");
+    expect(foundryPrompt).toContain("exactly one final RTL attempt");
+    expect(foundryPrompt).toContain("draft_doc");
+    expect(foundryPrompt).toContain(advice.suggestion);
+  });
+
   it("prefers structured_output and falls back to result JSON", () => {
     const helperSchema = z.object({
       module_id: z.string(),
@@ -246,6 +446,17 @@ describe("orchestrate helpers", () => {
     expect(() => parseCliArgs([])).toThrow("Usage:");
   });
 
+  it("exposes self-improvement mode and parses boolean env toggles", () => {
+    expect(typeof PIPELINE_CONFIG.self_improve).toBe("boolean");
+    expect(PIPELINE_CONFIG.doc_promotion_success_threshold).toBeGreaterThan(0);
+    expect(parseBooleanEnv({}, "NN2RTL_SELF_IMPROVE", false)).toBe(false);
+    expect(parseBooleanEnv({ NN2RTL_SELF_IMPROVE: "on" }, "NN2RTL_SELF_IMPROVE", false)).toBe(true);
+    expect(parseBooleanEnv({ NN2RTL_SELF_IMPROVE: "0" }, "NN2RTL_SELF_IMPROVE", true)).toBe(false);
+    expect(parseBooleanEnv({}, "NN2RTL_SELF_IMPROVE", true)).toBe(true);
+    expect(parsePositiveIntEnv({ NN2RTL_DOC_PROMOTION_SUCCESSES: "5" }, "NN2RTL_DOC_PROMOTION_SUCCESSES", 3)).toBe(5);
+    expect(parsePositiveIntEnv({ NN2RTL_DOC_PROMOTION_SUCCESSES: "0" }, "NN2RTL_DOC_PROMOTION_SUCCESSES", 3)).toBe(3);
+  });
+
   it("loads plugin agent definitions with merged MCP tools and skills", async () => {
     const foundry = await loadPluginAgentDefinition("foundry");
     const cartographer = await loadPluginAgentDefinition("cartographer");
@@ -253,7 +464,7 @@ describe("orchestrate helpers", () => {
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__write_verilog");
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__get_rtl_patterns");
     expect(foundry.prompt).toContain("Knowledge catalog");
-    expect(foundry.prompt).toContain("knowledge/patterns/02_conv1x1.md");
+    expect(foundry.prompt).toContain("knowledge/patterns/protected/02_conv1x1.md");
     expect(foundry.prompt).toContain("rtl_library/coord_scheduler.v");
     expect(foundry.prompt).not.toContain("Supplemental skill reference");
     expect(cartographer.prompt).toContain("Supplemental skill reference");

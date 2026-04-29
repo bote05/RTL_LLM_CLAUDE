@@ -2,12 +2,12 @@
 
 Neural Network to RTL compiler
 
-Last updated: April 14, 2026  
+Last updated: April 29, 2026
 Author: Daniel — University of Twente, Bachelor Thesis
 
 ## Overview
 
-`nn2rtl` is an autonomous multi-agent AI system that takes a trained PyTorch neural network and produces synthesizable Verilog RTL suitable for FPGA implementation. Instead of a human hardware engineer manually writing tens of thousands of lines of RTL, the system coordinates four LLM agents (Cartographer, Foundry, Assayer, Surgeon) around a deterministic TypeScript orchestrator that:
+`nn2rtl` is an autonomous multi-agent AI system that takes a trained PyTorch neural network and produces synthesizable Verilog RTL suitable for FPGA implementation. Instead of a human hardware engineer manually writing tens of thousands of lines of RTL, the system coordinates LLM code-generation/repair agents plus deterministic verification around a TypeScript orchestrator that:
 
 - extract the network structure from a quantized PyTorch checkpoint,
 - generate synthesizable Verilog modules,
@@ -298,20 +298,17 @@ Hard constraints include:
 - signed declarations for weights and activations,
 - no simulation-only constructs in synthesizable modules.
 
-### Assayer
+### Deterministic Assayer
 
-- Model: Haiku
-- Effort: Minimal
-
-Assayer is a tool execution agent. It does not reason deeply or edit files. It:
+Assayer is now TypeScript orchestration code, not an LLM agent. It:
 
 - generates the JSON sidecar for the static testbench,
 - runs `iverilog`,
 - runs `verilator`,
 - parses structured simulator output,
-- and returns a `VerifResult`.
+- and returns a schema-validated `VerifResult`.
 
-It is the most frequently invoked agent in the system.
+It is the most frequently invoked verification path in the system.
 
 ### Surgeon
 
@@ -354,12 +351,20 @@ Human-run one-time steps before the autonomous loop:
 6. Foundry generates Verilog and persists it via `write_verilog`.
 7. The orchestrator marks the module `verifying` and invokes Assayer.
 8. Assayer runs syntax and simulation checks and returns a `VerifResult`.
-9. If the module passes, the orchestrator records success and runs Vivado synth-only for FPGA metrics.
-10. If the module fails and retries remain, the orchestrator invokes Surgeon.
-11. Surgeon repairs the module and returns a replacement `VerilogModule`.
-12. Assayer verifies the repaired module.
-13. If retries are exhausted, the module becomes `fail_abort` and the pipeline continues.
-14. When all modules are terminal, the orchestrator writes `output/reports/pipeline_summary.json`.
+9. If the module fails, the failure classifier reads the full available simulation/synthesis logs, the LayerIR module spec, and the active contract, then labels the failure `code_bug`, `architectural_fit`, or `unknown`.
+10. `code_bug` failures enter the retry loop up to `max_retries`; `architectural_fit` failures skip that loop and go straight to Retrospector/contract response when self-improve mode is enabled. `unknown` failures become `fail_abort`.
+11. If the module passes, the orchestrator records success and runs Vivado synth-only for FPGA metrics.
+12. Vivado failures go through the same classifier before retry/abort is decided.
+13. Surgeon repairs retryable modules and returns a replacement `VerilogModule`; Assayer verifies the repaired module.
+14. If `NN2RTL_SELF_IMPROVE=1`, a successful RTL-writing agent also returns a markdown draft plus reference Verilog. The orchestrator writes those to `knowledge/{patterns,references}/probationary/`.
+15. If the selected contract or technique has no exact protected/generated doc coverage, Foundry receives `create_new_doc_request` with the LayerIR, same-family local docs/references, and the failure context that required the new approach. It must not use external retrieval. Its successful RTL, markdown doc, and reference Verilog are written to `probationary/` and tagged with the selected `contract_id`.
+16. Probationary docs are promoted to `active/` after the configured number of successful module users (`NN2RTL_DOC_PROMOTION_SUCCESSES`, default 3). A probationary doc used by a failing module is archived immediately.
+17. If retries are exhausted, the module normally becomes `fail_abort`.
+18. If `NN2RTL_SELF_IMPROVE=1` and the terminal failure is either retry-exhausted `code_bug` or `architectural_fit`, Retrospector runs once for that module/contract. It reads the original spec, the selected contract, available contracts, the RTL knowledge doc, all recorded failure logs, and all Foundry RTL versions, then injects advisory JSON back into the same resumable Foundry conversation for one final attempt when a session exists.
+19. If Retrospector confirms an active generated doc caused the failure, that doc is archived and the final Foundry attempt is asked to produce a replacement probationary doc.
+20. If the final Foundry attempt still fails, the current contract is written to `output/contract_state.json` as `manual_correction_needed`, a manual-correction report is written under `output/reports/`, and the orchestrator tries the next available contract in complexity order: `flat-bus`, `tiled-streaming`, then `dram-backed`.
+21. If all contracts for that structural spec are flagged, the module is escalated with `failure_class: manual_correction_needed`; other modules continue. Flagged contracts are skipped on later self-improve runs until `output/contract_state.json` is manually cleared.
+22. When all modules are terminal, the orchestrator writes `output/reports/pipeline_summary.json`.
 
 ### Resume Behavior
 
@@ -517,6 +522,24 @@ The acceptance threshold is based on fixed-point tolerance calibrated empiricall
 
 - resources via LUT / FF / DSP / BRAM counts,
 - performance via WNS and Fmax estimate.
+
+### Phase 4: Failure Classification
+
+Every failed module is classified before retry policy is applied:
+
+- `code_bug`: the current contract is viable; retry/Surgeon may fix syntax, signedness, indexing, latency, or simple logic bugs.
+- `architectural_fit`: the contract itself is wrong for the layer/device; the classifier records `violated_resource` or `violated_constraint` such as `MAX_SUPPORTED_BUS_BITS`, `DSP`, `BRAM18`, or `FMAX_TARGET_MHZ`.
+- `unknown`: evidence is insufficient or contradictory; the module is escalated via `fail_abort`.
+
+### Phase 5: Retrospector
+
+When self-improvement mode is enabled (`NN2RTL_SELF_IMPROVE=1`), retry exhaustion on a `code_bug` failure triggers one advisory Retrospector call per module/contract. The Retrospector does not write RTL. Its advice is injected into Foundry with the SDK `resume` option so Foundry keeps its existing conversation memory for one final attempt.
+
+### Phase 6: Doc Lifecycle And New Doc Creation
+
+Self-improve doc writes are append/move only. New generated docs are created in `probationary/`, promoted to `active/` after three successful users by default, and moved to `archive/` on failure. Protected docs are never modified.
+
+When no existing protected/active/probationary doc covers the selected contract, the orchestrator sends Foundry a `create_new_doc_request`. The request includes the spec, closest same-family local docs/references, and the failure context that forced the new approach. Foundry must rely on those local docs plus model knowledge only, then return RTL, a markdown technique doc, and a reference Verilog file. The resulting lifecycle entry records `contract_id`, `contract_key`, `creation_reason: "create_new_doc"`, and `source_doc_ids` so future contract selection can reuse it instead of creating duplicates.
 
 ## Failure Mode Taxonomy
 

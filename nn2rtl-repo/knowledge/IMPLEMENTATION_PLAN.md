@@ -2,11 +2,19 @@
 
 **Goal:** give Foundry and Surgeon a lookup tool that returns op-type-specific RTL patterns + reference implementations, so they adapt proven structures instead of hallucinating them. Covers Tiers 0, 1, 2 — deliberately stops short of handwritten parameterized library (Tier 3).
 
+**Self-improvement status:**
+- Phase 1 foundation is implemented: `PIPELINE_CONFIG.self_improve` / `NN2RTL_SELF_IMPROVE`, and `patterns/` + `references/` are tiered into `protected/`, `active/`, `probationary/`, and `archive/`.
+- Phase 2 failure classifier is implemented: every failed module gets a retry-policy category (`code_bug`, `architectural_fit`, `unknown`) plus violated resource/constraint extraction for architectural-fit failures.
+- Phase 3 Retrospector is implemented behind self-improve mode: after retry exhaustion on a `code_bug`, it reads the full recorded failure history, Foundry RTL versions, the active knowledge doc, and the original spec, then injects advisory JSON back into the same Foundry session via SDK `resume` for one final attempt. One call max per module/contract.
+- Phase 4 doc lifecycle is implemented behind self-improve mode: generated docs and references are written to `probationary/`, promoted after the configured success threshold, archived on probationary failure, and replaced by archive+new-doc rather than in-place edits.
+- Phase 5 failure response is implemented behind self-improve mode: terminal `code_bug` and `architectural_fit` failures run Retrospector, exhausted contracts are flagged in `output/contract_state.json`, alternatives are tried in `flat-bus -> tiled-streaming -> dram-backed` order, and all-contract exhaustion writes a manual-correction report plus human-escalation log.
+- Phase 6 new doc/reference creation is implemented behind self-improve mode: when the selected contract or technique has no doc coverage, Foundry receives `create_new_doc_request` with the spec, closest same-family local docs/references, and failure context; external retrieval is disallowed, and the successful doc/reference enters `probationary/` tagged with `contract_id` / `contract_key`.
+
 **Context to read before starting:**
 - `ARCHITECTURE.md` — especially the "Known Bottleneck — Spatial Convolutions Do Not Close Reliably" section (near the end). Documents what we've tried and the exact failure modes.
 - `nn2rtl-plugin/agents/foundry.md` — current Foundry system prompt and pinned template.
 - `nn2rtl-plugin/agents/surgeon.md` — Surgeon's repair rules, including the retired invariant-tag policy.
-- `knowledge/references/conv1x1_passing_reference.v` — the historical pointwise reference that passed the earlier flow.
+- `knowledge/references/protected/conv1x1_passing_reference.v` — the historical pointwise reference that passed the earlier flow.
 - `scripts/golden_impl.py::compute_conv2d_latency_cycles` — the authoritative latency formula. Do not change; pattern files must be consistent with it.
 - `mcp/tools.ts` + `mcp/server.ts` — existing MCP tools for reference. New tool lives here.
 
@@ -25,7 +33,7 @@
 
 1. **Create MCP tool `get_rtl_patterns`** in `mcp/tools.ts`:
    - Signature: `async function get_rtl_patterns(op_type: string, kernel_h?: number, kernel_w?: number): Promise<{ pattern_markdown: string; reference_verilog: string | null; license_notice: string | null }>`
-   - For Tier 0, hardcode **one** branch: when `op_type === "conv2d"` and `kernel_h === 1 && kernel_w === 1`, read and return `knowledge/references/conv1x1_passing_reference.v` plus a short markdown preamble explaining it's a proven-passing 1×1 pointwise reference.
+   - For Tier 0, hardcode **one** branch: when `op_type === "conv2d"` and `kernel_h === 1 && kernel_w === 1`, read and return `knowledge/references/protected/conv1x1_passing_reference.v` plus a short markdown preamble explaining it's a proven-passing 1×1 pointwise reference.
    - All other op_types return `{ pattern_markdown: "No pattern available for this op_type yet. Proceed with foundry.md rules.", reference_verilog: null, license_notice: null }`.
 
 2. **Register the tool in `mcp/server.ts`** with the name `mcp__nn2rtl-tools__get_rtl_patterns`, a clear JSON-schema description, and Zod validation for the return shape (add a schema to `mcp/schemas.ts`).
@@ -70,11 +78,11 @@
 
 ## Tier 1 — Write pattern markdown files from session knowledge (2–3 days)
 
-**Goal:** build the full `knowledge/patterns/` library without depending on external sources. Use what this repo already knows: `ARCHITECTURE.md`'s failure-mode catalog, `foundry.md`'s pinned FSM template, `conv1x1_passing_reference.v`, and the `golden_impl.py` latency formula.
+**Goal:** build the full protected `knowledge/patterns/` library without depending on external sources. Use what this repo already knows: `ARCHITECTURE.md`'s failure-mode catalog, `foundry.md`'s pinned FSM template, `conv1x1_passing_reference.v`, and the `golden_impl.py` latency formula.
 
 ### File list
 
-Create under `knowledge/patterns/`:
+Create under `knowledge/patterns/protected/`:
 
 ```
 01_context.md               Interface contract, canonical 7-signal ports, packed buses,
@@ -119,16 +127,18 @@ Expand `get_rtl_patterns` to dispatch by `op_type` + kernel dimensions:
 
 ```typescript
 function resolvePatternPath(op_type: string, kh?: number, kw?: number): string[] {
+  const tiers = ["protected", "active", "probationary"];
+  const tiered = (fileName: string) =>
+    tiers.map((tier) => `knowledge/patterns/${tier}/${fileName}`);
   // Always include context + common_bugs
-  const base = ["knowledge/patterns/01_context.md",
-                "knowledge/patterns/08_common_bugs.md"];
+  const base = [...tiered("01_context.md"), ...tiered("08_common_bugs.md")];
   if (op_type === "conv2d") {
-    if (kh === 1 && kw === 1) base.push("knowledge/patterns/02_conv1x1.md");
-    else if (kh === 3 && kw === 3) base.push("knowledge/patterns/03_conv3x3_pad1.md");
-    else if (kh === 7 && kw === 7) base.push("knowledge/patterns/04_conv7x7_pad3.md");
-  } else if (op_type === "add")      base.push("knowledge/patterns/05_add_quantized.md");
-  else if (op_type === "relu")       base.push("knowledge/patterns/06_relu.md");
-  else if (op_type === "maxpool")    base.push("knowledge/patterns/07_maxpool.md");
+    if (kh === 1 && kw === 1) base.push(...tiered("02_conv1x1.md"));
+    else if (kh === 3 && kw === 3) base.push(...tiered("03_conv3x3_pad1.md"));
+    else if (kh === 7 && kw === 7) base.push(...tiered("04_conv7x7_pad3.md"));
+  } else if (op_type === "add")      base.push(...tiered("05_add_quantized.md"));
+  else if (op_type === "relu")       base.push(...tiered("06_relu.md"));
+  else if (op_type === "maxpool")    base.push(...tiered("07_maxpool.md"));
   return base;
 }
 ```
@@ -148,7 +158,7 @@ Compare against the pre-Tier-1 baseline documented in `ARCHITECTURE.md`:
 
 ### Tier 1 deliverables
 
-- 8 markdown pattern files under `knowledge/patterns/`
+- 8 markdown pattern files under `knowledge/patterns/protected/`
 - Expanded `get_rtl_patterns` dispatching to them
 - Measurement report under `knowledge/measurements/tier1_results.md` with per-layer cost, attempts, pass/fail
 
@@ -174,9 +184,9 @@ Compare against the pre-Tier-1 baseline documented in `ARCHITECTURE.md`:
 
 **Procedure for each source:**
 
-1. **Verify license** — fetch `LICENSE` or `LICENSE.md` from the repo root first. Record terms in `knowledge/references/LICENSES.md`.
-2. **Fetch the target files** via WebFetch. Save raw content to `knowledge/references/<source>_<filename>_raw.v`.
-3. **Distill** — write a cleaned-up Verilog file at `knowledge/references/<source>_<op>_distilled.v` with:
+1. **Verify license** — fetch `LICENSE` or `LICENSE.md` from the repo root first. Record terms in `knowledge/references/protected/LICENSES.md`.
+2. **Fetch the target files** via WebFetch. Save raw content to `knowledge/references/probationary/<source>_<filename>_raw.v`.
+3. **Distill** — write a cleaned-up Verilog file at `knowledge/references/probationary/<source>_<op>_distilled.v` with:
    - Project-specific macros (`NV_NVDLA_*`, `SAURIA_*`) replaced with their effective values
    - Bus protocol wrappers stripped (we use our 7-signal canonical interface)
    - INT8 quantization path adapted to our `$readmemh` + scale-factor convention
@@ -195,9 +205,9 @@ Gemmini is Chisel (Scala). Readable for algorithms, not extractable as Verilog w
 
 ### Tier 2 deliverables
 
-- `knowledge/references/LICENSES.md` with source licenses recorded
-- Raw fetched files under `knowledge/references/*_raw.v` (kept for audit/provenance)
-- Distilled adapted files under `knowledge/references/*_distilled.v`
+- `knowledge/references/protected/LICENSES.md` with source licenses recorded
+- Raw fetched files under `knowledge/references/probationary/*_raw.v` (kept for audit/provenance)
+- Distilled adapted files under `knowledge/references/probationary/*_distilled.v`
 - Updated pattern markdown files (03, 04, 07 minimum) with real-world reference sections
 - MCP tool updated to return `reference_verilog` arrays (multiple references per op when available), not just a single file
 
@@ -280,7 +290,7 @@ All four items below are universal, not ResNet-specific. They encode lessons lea
 
 ### CX-4 — License tracking
 
-Maintain `knowledge/references/LICENSES.md` from the start. Record every external source's license and any restrictions relevant to commercial product use.
+Maintain `knowledge/references/protected/LICENSES.md` from the start. Record every external source's license and any restrictions relevant to commercial product use.
 
 ---
 
@@ -364,8 +374,8 @@ Do this **between Tier 1 and Tier 2**, after pattern files are in place but befo
 
 After all three tiers + cross-cutting + coord_scheduler are complete:
 
-1. `knowledge/patterns/*.md` — 8 pattern files
-2. `knowledge/references/*` — raw + distilled external references with license attribution
+1. `knowledge/patterns/protected/*.md` plus readable generated tiers — 8 protected pattern files and any active/probationary successors
+2. `knowledge/references/{protected,active,probationary}/*` — protected references plus generated raw/distilled external references with license attribution
 3. `knowledge/measurements/*.md` — tier-by-tier measurement results
 4. `rtl_library/coord_scheduler.v` + `rtl_library/test/coord_scheduler_tb.cpp` — handwritten coordinate FSM with its own testbench
 5. `mcp/tools.ts::get_rtl_patterns` — production-ready lookup tool

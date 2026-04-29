@@ -42,6 +42,7 @@ export type SDKResultSuccess = {
   total_cost_usd: number;
   modelUsage: Record<string, unknown>;
   structured_output?: unknown;
+  session_id?: string;
 };
 
 export type SDKResultError = {
@@ -55,6 +56,7 @@ export type SDKResultError = {
   total_cost_usd: number;
   modelUsage: Record<string, unknown>;
   structured_output?: unknown;
+  session_id?: string;
 };
 
 export type SDKResultMessage = SDKResultSuccess | SDKResultError;
@@ -83,6 +85,9 @@ type QueryOptions = {
   model?: string;
   systemPrompt?: SystemPromptOption;
   effort?: EffortLevel;
+  resume?: string;
+  sessionId?: string;
+  forkSession?: boolean;
 };
 
 type QueryParams = {

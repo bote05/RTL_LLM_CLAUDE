@@ -21,7 +21,32 @@ export const failureClassSchema = z.enum([
   "verilator_timeout",
   "architectural_unsupported",
   "structural_preflight_failed",
+  "manual_correction_needed",
 ]);
+
+export const failureCategorySchema = z.enum([
+  "code_bug",
+  "architectural_fit",
+  "unknown",
+]);
+
+export const failureClassificationSchema = z
+  .object({
+    category: failureCategorySchema,
+    violated_resource: z.string().nullable().optional(),
+    violated_constraint: z.string().nullable().optional(),
+    rationale: z.string().min(1),
+  })
+  .strict();
+
+export const retrospectorAdviceSchema = z
+  .object({
+    analysis: z.string().min(1),
+    suggestion: z.string().min(1),
+    doc_fault: z.boolean().optional(),
+    faulty_doc_paths: z.array(z.string()).optional(),
+  })
+  .strict();
 
 export const moduleStatusSchema = z.enum([
   "pending",
@@ -72,7 +97,7 @@ export const layerIrBaseSchema = z
     // min(OC, PIPELINE_CONFIG.MAX_PARALLEL_MACS).
     mac_parallelism: z.number().int().positive().optional(),
     weight_bank_paths: z.array(z.string()).optional(),
-    io_mode: z.enum(["packed_full", "channel_tiled"]).optional(),
+    io_mode: z.enum(["packed_full", "channel_tiled", "dram_backed"]).optional(),
     channel_tile: z.number().int().positive().optional(),
     // MaxPool2d geometry — optional at the type level because only present
     // when op_type === "maxpool". The *refined* schema below requires them
@@ -153,6 +178,17 @@ export const verifResultSchema = z
       },
       failureClassSchema.optional(),
     ),
+    failure_category: z.preprocess(
+      (v) => {
+        if (v === null || v === undefined) return undefined;
+        if (typeof v !== "string") return undefined;
+        return failureCategorySchema.safeParse(v).success ? v : undefined;
+      },
+      failureCategorySchema.optional(),
+    ),
+    violated_resource: nullToUndef(z.string()),
+    violated_constraint: nullToUndef(z.string()),
+    classifier_reason: nullToUndef(z.string()),
     fix_hint: nullToUndef(z.string()),
     iverilog_stderr: nullToUndef(z.string()),
     verilator_stderr: nullToUndef(z.string()),
@@ -235,6 +271,7 @@ export const pipelineStateSchema = z
     max_retries: z.number().int().nonnegative(),
     total_cost_usd: z.number().nonnegative(),
     model_usage: z.record(z.string(), modelUsageEntrySchema),
+    retrospector_calls: z.record(z.string(), z.number().int().nonnegative()).default({}),
   })
   .strict()
   .superRefine((state, ctx) => {
@@ -297,7 +334,13 @@ export const pipelineStateSchema = z
             message: `module '${id}' is in 'fail_abort' but has no prior VerifResult in results`,
           });
         }
-        if (attempts !== undefined && attempts < state.max_retries) {
+        const earlyAbort =
+          result?.status_class === "tb_setup_error" ||
+          result?.failure_class === "architectural_unsupported" ||
+          result?.failure_class === "manual_correction_needed" ||
+          result?.failure_category === "architectural_fit" ||
+          result?.failure_category === "unknown";
+        if (attempts !== undefined && attempts < state.max_retries && !earlyAbort) {
           ctx.addIssue({
             code: "custom",
             path: ["attempts", id],

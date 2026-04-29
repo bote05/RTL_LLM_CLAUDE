@@ -67,6 +67,7 @@ export class PipelineStateManager {
       max_retries: maxRetries,
       total_cost_usd: 0,
       model_usage: {},
+      retrospector_calls: {},
     };
   }
 
@@ -122,6 +123,14 @@ export class PipelineStateManager {
       return;
     }
 
+    if (
+      result.failure_category === "architectural_fit" ||
+      result.failure_category === "unknown"
+    ) {
+      this.state.modules[module_id] = "fail_abort";
+      return;
+    }
+
     const attempts = this.state.attempts[module_id] ?? 0;
     this.state.modules[module_id] =
       attempts < this.state.max_retries ? "fail_retry" : "fail_abort";
@@ -142,6 +151,22 @@ export class PipelineStateManager {
         usage as Record<string, unknown>,
       ) as ModelUsageEntry;
     }
+  }
+
+  retrospectorCallCount(contractKey: string): number {
+    return this.state.retrospector_calls[contractKey] ?? 0;
+  }
+
+  recordRetrospectorCall(contractKey: string): void {
+    this.state.retrospector_calls[contractKey] =
+      (this.state.retrospector_calls[contractKey] ?? 0) + 1;
+  }
+
+  resetModuleForContractRetry(module_id: string): void {
+    this.assertKnownModule(module_id);
+    this.state.modules[module_id] = "pending";
+    this.state.attempts[module_id] = 0;
+    delete this.state.results[module_id];
   }
 
   getState(): PipelineState {

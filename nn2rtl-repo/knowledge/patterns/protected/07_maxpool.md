@@ -98,11 +98,13 @@ end
 
 ## Reference status
 
-There is no proven-passing maxpool reference in `knowledge/references/`
-yet; the `layer0_0_maxpool` module of ResNet-50 was excluded from the
-current LayerIR set and so has not exercised the library. Promote a
-passing maxpool to a `maxpool_passing_reference.v` once it lands so
-Foundry can adapt it the same way the conv references work.
+There is no proven-passing maxpool reference in the readable
+`knowledge/references/{protected,active,probationary}/` tiers yet; the
+`layer0_0_maxpool` module of ResNet-50 was excluded from the current
+LayerIR set and so has not exercised the library. Promote a passing
+maxpool to `probationary/maxpool_passing_reference.v`, then to `active/`
+once validated, so Foundry can adapt it the same way the conv references
+work.
 
 ## Known failure modes
 

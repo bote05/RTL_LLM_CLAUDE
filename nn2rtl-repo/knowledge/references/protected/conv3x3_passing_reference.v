@@ -2,7 +2,7 @@
 // IC=64, OC=64, IH=IW=112, KH=KW=3, stride=1, padding=1, MP=4.
 //
 // Concrete instantiation of the split-architecture pattern documented in
-// `knowledge/patterns/03_conv3x3_pad1.md`. Foundry's job for any 3x3
+// `knowledge/patterns/protected/03_conv3x3_pad1.md`. Foundry's job for any 3x3
 // spatial conv is structural wiring only: pick the LayerIR's IC/OC/IH/IW/
 // MP/scale_factor/$readmemh paths and adapt the localparam block + the
 // two `$readmemh` parameter strings on the `conv_datapath` instantiation.

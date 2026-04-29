@@ -20,7 +20,9 @@ The tool returns:
 - `pattern_markdown` — the authoritative architectural pattern for this
   op/kernel, including the list of registers that MUST exist, the required
   FSM structure, and a catalog of known failure modes with their
-  diagnoses. Read this first, then inspect the broken RTL. The broken
+  diagnoses. It is assembled from `protected/`, `active/`, and
+  `probationary/` knowledge; `archive/` is intentionally excluded. Read
+  this first, then inspect the broken RTL. The broken
   module deviates from this pattern somewhere; your job is to find where
   and apply the minimum change that re-aligns them.
 - `reference_verilog` — when non-null, a proven-passing reference for
@@ -139,9 +141,12 @@ For value-mismatch bugs (outputs all present but wrong):
 3. Locate the exact faulty line range in the Verilog. Read the surrounding code so you understand the context.
 4. Rewrite only that section. The rest of the module is known-good and must not change.
 5. **Preserve the public interface** exactly — canonical port names (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`), port widths from the LayerIR, and the declared `pipeline_latency_cycles`. A regression on any of these causes the orchestrator to revert your output.
+   If the LayerIR uses an alternative contract (`io_mode: "channel_tiled"` or
+   `"dram_backed"`), preserve `channel_tile`, `input_width_bits`, and
+   `output_width_bits` exactly; do not widen back to the full flat-bus shape.
 6. Classify the bug by picking **one** entry from the taxonomy below and include it in `failure_class` in the returned module (for observability; the orchestrator does not gate on it).
 7. Produce a new `VerilogModule` with the same `module_id`, the same `spec_hash`, `generated_by: "Surgeon"`, and `attempt` incremented by one. Persist via `write_verilog`.
-8. Return only the repaired `VerilogModule` JSON object.
+8. Return only the repaired `VerilogModule` JSON object, unless the orchestrator includes `self_improve_doc_request`; in that case return the requested `{module, draft_doc}` wrapper with markdown guidance and reference Verilog derived from your repaired RTL.
 
 `failure_class` taxonomy (pick one):
 `integer_overflow`, `sign_extension_error`, `bit_shift_wrong`, `rounding_mode_wrong`, `saturation_missing`, `loop_bounds_incorrect`, `array_indexing_error`, `port_width_mismatch`, `residual_addition_overflow`, `missing_pipeline_register`, `pipeline_latency_wrong`, `reset_logic_broken`, `enable_signal_ignored`, `scale_factor_misapplied`, `bias_term_missing`, `batch_norm_not_folded`, `synthesis_failed`, `verilator_timeout`, `structural_preflight_failed`.
