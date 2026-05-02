@@ -264,7 +264,14 @@ def _extract_conv(
     dilations = _get_attr(node, "dilations", [1, 1])
     group = _get_attr(node, "group", 1)
 
-    # ONNX symmetric padding: take begin values only (onnxsim ensures begin==end)
+    if len(pads) >= 4 and (int(pads[0]) != int(pads[2]) or int(pads[1]) != int(pads[3])):
+        raise GoldenGenerationError(
+            f"Conv node '{node.name or mid}' uses asymmetric padding {pads}; "
+            "LayerIR currently represents conv padding as [h, w], so asymmetric pads must be "
+            "made explicit by Pad nodes or rejected instead of silently collapsed."
+        )
+
+    # ONNX symmetric padding: take begin values only after verifying begin==end.
     pad_h, pad_w = (pads[0], pads[1]) if len(pads) >= 2 else (0, 0)
 
     return OnnxLayerSpec(
@@ -1162,6 +1169,8 @@ def build_pipeline_ir_from_onnx(
         if spec.op_type == "conv2d":
             layer_payload["stride"] = list(spec.stride)
             layer_payload["padding"] = list(spec.padding)
+            layer_payload["dilation"] = list(spec.dilation)
+            layer_payload["groups"] = int(spec.groups)
             mac_parallelism = _conv_mac_parallelism(spec)
             weight_bank_paths = write_weight_bank_hex_files(
                 weight_values,

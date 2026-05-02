@@ -48,13 +48,13 @@ async function main(): Promise<void> {
 
   console.log("[smoke] NN2RTL_VIVADO_BIN =", process.env.NN2RTL_VIVADO_BIN ?? "(unset, falling back to 'vivado' on PATH)");
   console.log(`[smoke] running run_vivado on '${moduleName}' (${refPath})`);
-  console.log("[smoke] target xc7a100tcsg324-1, 20 ns clock (50 MHz)...");
+  console.log("[smoke] target xczu9eg-ffvb1156-2-e (ZCU102), 20 ns clock (50 MHz)...");
   const t0 = Date.now();
   const report = await run_vivado(
     moduleSource,
     moduleName,
     20,                     // 20 ns = 50 MHz target
-    "xc7a100tcsg324-1",
+    "xczu9eg-ffvb1156-2-e",
   );
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 

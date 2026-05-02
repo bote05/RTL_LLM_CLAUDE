@@ -5,6 +5,13 @@ RTL itself lives outside git (gitignored under `output/rtl/`); this file
 captures the metrics and the run conditions so the result is reproducible
 from the same commit hash.
 
+> **Target-part note.** The Layer-1 milestone below was characterised on a
+> Digilent Nexys A7-100T (Xilinx Artix-7 `xc7a100tcsg324-1`). The active
+> build target has since migrated to the Zynq UltraScale+ ZCU102
+> (`xczu9eg-ffvb1156-2-e`); future milestone entries will report numbers
+> against that part. The Artix-7 entries below are kept verbatim for
+> reproducibility from their commit hash.
+
 ---
 
 ## 2026-04-28: Layer 1 (full ResNet-50 first stage, 17 modules)

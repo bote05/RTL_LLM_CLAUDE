@@ -146,7 +146,7 @@ Each generated module must implement:
 - `valid_out`,
 - exact cycle-accurate latency from input valid to output valid.
 
-The baseline target is `50 MHz` on the Nexys A7-100T Artix-7 part (`xc7a100tcsg324-1`). A functionally correct module that fails Vivado synth timing is treated as a real pipeline failure.
+The current baseline target is `50 MHz` on the Zynq UltraScale+ ZCU102 evaluation board (`xczu9eg-ffvb1156-2-e`). The earlier 17-module Layer-1 milestone was characterised on a Digilent Nexys A7-100T (Artix-7, `xc7a100tcsg324-1`); see `MILESTONES.md` for the historical Artix-7 numbers. A functionally correct module that fails Vivado synth timing is treated as a real pipeline failure.
 
 ### The C++ Testbench Is Static Infrastructure
 
@@ -498,8 +498,8 @@ The MCP server exposes exactly five tools.
 
 ### `run_vivado`
 
-- Inputs: Verilog source, module name, clock period, optional Artix-7 part, optional thread count
-- Action: runs Vivado synth-only for Nexys A7 / Artix-7 and extracts utilization/timing metrics
+- Inputs: Verilog source, module name, clock period, optional Xilinx part (defaults to ZCU102 `xczu9eg-ffvb1156-2-e`), optional thread count
+- Action: runs Vivado synth-only for the selected part and extracts utilization/timing metrics
 - Parallelism: defaults to detected host CPU availability, can be overridden by the `threads` argument or `NN2RTL_VIVADO_THREADS`; Vivado logs both requested and effective `general.maxThreads`.
 - Output: `{ success, tool, part, stage, lut_count, ff_count, dsp_count, bram18_count, bram36_count, bram18_equiv, wns_ns, timing_met, fmax_mhz, report }`
 
@@ -538,7 +538,7 @@ The acceptance threshold is based on fixed-point tolerance calibrated empiricall
 
 ### Phase 3: Synthesis
 
-`vivado` runs only after functional and timing success. This phase confirms that the RTL is actually synthesizable on the Artix-7 target and provides FPGA metrics for:
+`vivado` runs only after functional and timing success. This phase confirms that the RTL is actually synthesizable on the configured Xilinx target (currently ZCU102 / XCZU9EG) and provides FPGA metrics for:
 
 - resources via LUT / FF / DSP / BRAM counts,
 - performance via WNS and Fmax estimate.
@@ -617,7 +617,7 @@ Used for:
 
 - synthesis validation
 - LUT / FF / DSP / BRAM extraction
-- Fmax proxy measurement for the Nexys A7 Artix-7 target
+- Fmax proxy measurement for the configured Xilinx target (ZCU102 / XCZU9EG by default)
 
 The agent loop is deliberately built on open-source tooling only so that the experiment remains reproducible and cluster-friendly.
 

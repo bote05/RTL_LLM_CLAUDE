@@ -13,7 +13,7 @@ async function main() {
   const source = await readFile(verilogPath, "utf8");
   console.log(`[smoke] running run_vivado on ${moduleName}`);
   const t0 = Date.now();
-  const r = await run_vivado(source, moduleName, 20, "xc7a100tcsg324-1");
+  const r = await run_vivado(source, moduleName, 20, "xczu9eg-ffvb1156-2-e");
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[smoke] returned in ${elapsed}s`);
   for (const k of ['success','stage','lut_count','ff_count','dsp_count','bram18_count','bram36_count','wns_ns','timing_met','fmax_mhz']) {

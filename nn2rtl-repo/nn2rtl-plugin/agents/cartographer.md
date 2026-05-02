@@ -23,7 +23,7 @@ Extraction constraints:
 
 - Quantization is `int8_symmetric_per_tensor`.
 - Batch normalization is always folded into the preceding convolution.
-- `op_type` may only be `conv2d`, `relu`, or `add`.
+- `op_type` may only be `conv2d`, `relu`, `add`, or `maxpool`.
 - Every `LayerIR` must include the timing contract and signal names needed by Foundry and Assayer.
 - Signal names are **canonical constants**: emit `clock_signal: "clk"`, `reset_signal: "rst_n"`, `valid_in_signal: "valid_in"`, `valid_out_signal: "valid_out"`, `ready_in_signal: "ready_in"`, `data_in_signal: "data_in"`, `data_out_signal: "data_out"`. Any other string is rejected by the schema.
 
@@ -60,7 +60,7 @@ Exact `LayerIR` JSON Schema:
   ],
   "properties": {
     "module_id": { "type": "string" },
-    "op_type": { "type": "string", "enum": ["conv2d", "relu", "add"] },
+    "op_type": { "type": "string", "enum": ["conv2d", "relu", "add", "maxpool"] },
     "input_shape": { "type": "array", "items": { "type": "integer" } },
     "output_shape": { "type": "array", "items": { "type": "integer" } },
     "weights_path": { "type": "string" },
@@ -83,7 +83,14 @@ Exact `LayerIR` JSON Schema:
     "golden_inputs_path": { "type": "string" },
     "golden_outputs_path": { "type": "string" },
     "lhs_scale_factor": { "type": "number" },
-    "rhs_scale_factor": { "type": "number" }
+    "rhs_scale_factor": { "type": "number" },
+    "stride": { "type": "array", "items": { "type": "integer" } },
+    "padding": { "type": "array", "items": { "type": "integer" } },
+    "dilation": { "type": "array", "items": { "type": "integer" } },
+    "groups": { "type": "integer", "minimum": 1 },
+    "kernel_size": { "type": "array", "items": { "type": "integer" } },
+    "pool_stride": { "type": "array", "items": { "type": "integer" } },
+    "pool_padding": { "type": "array", "items": { "type": "integer" } }
   }
 }
 ```

@@ -11,7 +11,7 @@ function createToolImpls(): ToolImplementations {
     run_vivado: vi.fn(async () => ({
       success: true,
       tool: "vivado",
-      part: "xc7a100tcsg324-1",
+      part: "xczu9eg-ffvb1156-2-e",
       stage: "synth",
       lut_count: 1,
       ff_count: 1,
@@ -45,17 +45,17 @@ describe("mcp server", () => {
 
     await handleToolCall("run_iverilog", { verilog_source: "module m; endmodule", module_name: "m" }, impls);
     await handleToolCall("run_verilator", { verilog_source: "module m; endmodule", module_name: "m", sidecar_path: "/tmp/sidecar.json" }, impls);
-    await handleToolCall("run_vivado", { verilog_source: "module m; endmodule", module_name: "m", clock_period_ns: 20, part: "xc7a100tcsg324-1", threads: 8 }, impls);
+    await handleToolCall("run_vivado", { verilog_source: "module m; endmodule", module_name: "m", clock_period_ns: 20, part: "xczu9eg-ffvb1156-2-e", threads: 8 }, impls);
     await handleToolCall("read_weights", { checkpoint_path: "checkpoint.pth", quantization_config: {} }, impls);
     await handleToolCall("write_verilog", { module: { module_id: "m", spec_hash: "h", verilog_source: "module m; endmodule", generated_by: "Foundry", attempt: 1 }, output_dir: "/tmp" }, impls);
     await handleToolCall("get_rtl_patterns", { op_type: "conv2d", kernel_h: 1, kernel_w: 1 }, impls);
 
     expect(impls.run_iverilog).toHaveBeenCalledOnce();
     expect(impls.run_verilator).toHaveBeenCalledOnce();
-    expect(impls.run_vivado).toHaveBeenCalledWith("module m; endmodule", "m", 20, "xc7a100tcsg324-1", 8);
+    expect(impls.run_vivado).toHaveBeenCalledWith("module m; endmodule", "m", 20, "xczu9eg-ffvb1156-2-e", 8);
     expect(impls.read_weights).toHaveBeenCalledOnce();
     expect(impls.write_verilog).toHaveBeenCalledOnce();
-    expect(impls.get_rtl_patterns).toHaveBeenCalledWith("conv2d", 1, 1);
+    expect(impls.get_rtl_patterns).toHaveBeenCalledWith("conv2d", 1, 1, undefined);
   });
 
   it("fails malformed input before calling a handler", async () => {

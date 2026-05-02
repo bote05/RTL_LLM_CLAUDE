@@ -31,7 +31,7 @@ export const RTL_LIBRARY_SOURCES: readonly string[] = [
   path.resolve(repoRoot, "rtl_library", "line_buf_window.v"),
   path.resolve(repoRoot, "rtl_library", "conv_datapath.v"),
 ];
-export const VIVADO_DEFAULT_PART = "xc7a100tcsg324-1";
+export const VIVADO_DEFAULT_PART = "xczu9eg-ffvb1156-2-e";
 export const VIVADO_TIMEOUT_MS = 30 * 60 * 1000;
 export const VIVADO_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 // Sim-threading default is 0 (= no `--threads` flag, single-threaded
@@ -125,8 +125,8 @@ function resolveTmpDirRoot(): string {
   // Windows cross-env TMPDIR=/tmp workaround in the vitest scripts), but fall
   // through to os.tmpdir() for anything else rather than hardcoding "/tmp".
   const override = process.env.TMPDIR;
-  if (override && path.isAbsolute(override)) {
-    return override;
+  if (override && (path.isAbsolute(override) || isWindowsAbsolutePath(override))) {
+    return normalizePathForCurrentHost(override);
   }
   return os.tmpdir();
 }
@@ -145,10 +145,10 @@ function resolveTmpDirRoot(): string {
 function resolveOssCadSuiteRoot(env: NodeJS.ProcessEnv): string | null {
   const override = env.NN2RTL_YOSYSHQ_ROOT;
   if (override) {
-    return path.resolve(override);
+    return normalizePathForCurrentHost(override);
   }
   if (env.YOSYSHQ_ROOT) {
-    return path.resolve(env.YOSYSHQ_ROOT);
+    return normalizePathForCurrentHost(env.YOSYSHQ_ROOT);
   }
   const pathVar = env.PATH ?? env.Path ?? "";
   const sep = process.platform === "win32" ? ";" : ":";
@@ -449,18 +449,21 @@ function toolFailureDiagnostic(
 
   const message = error instanceof Error ? error.message.trim() : "";
   const summary = processErrorSummary(error);
-  if (message.length > 0 && message !== summary) {
-    return summary ? `${message}\n\nprocess: ${summary}` : message;
-  }
 
   const command = [toolName, ...args].join(" ");
-  return [
+  const lines = [
     `${toolName} exited non-zero without diagnostic output.`,
     `command: ${command}`,
     `cwd: ${cwd}`,
+  ];
+  if (message.length > 0 && message !== summary) {
+    lines.push(`node_error: ${message}`);
+  }
+  lines.push(
     summary ? `process: ${summary}` : "process: no exit metadata was provided by Node.",
     "Treat this as a toolchain/runtime setup failure unless the same source produces a real compiler diagnostic when replayed.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 export type VivadoSynthesisReport = {
@@ -474,7 +477,20 @@ export type VivadoSynthesisReport = {
   bram18_count: number;
   bram36_count: number;
   bram18_equiv: number;
+  // Setup-path Worst Negative Slack from `report_timing_summary`. This is
+  // what determines whether the design can run at the configured clock
+  // frequency. `wns_ns` is the historical name kept for backward
+  // compatibility; it always meant Setup WNS. `setup_wns_ns` is provided as
+  // the explicit name so downstream code does not have to rely on the
+  // historical convention.
   wns_ns: number | null;
+  setup_wns_ns: number | null;
+  // Hold-path Worst Hold Slack (Vivado's "WHS(ns)" column). On synth-only
+  // flows this is reported against a pre-placement netlist where most small
+  // hold violations get fixed automatically by `place_design` /
+  // `opt_design`. We surface the number for visibility but do NOT gate
+  // pass/fail on it — that is a P&R-stage concern, not synthesis.
+  hold_wns_ns: number | null;
   timing_met: boolean;
   fmax_mhz: number;
   report: string;
@@ -520,12 +536,46 @@ function parseVivadoWns(report: string): number | null {
   return null;
 }
 
+/**
+ * Extract Vivado's "Worst Hold Slack" (WHS) from `report_timing_summary`.
+ *
+ * The Design Timing Summary table puts the values for all timing checks on
+ * a single whitespace-separated row whose columns are, in order:
+ *   WNS(ns)  TNS(ns)  TNS Failing  TNS Total  WHS(ns)  THS(ns)  THS Failing  THS Total  WPWS(ns)  ...
+ *
+ * Setup WNS is column 1; Hold WHS is column 5. We anchor on the dashed
+ * separator below the header line and read the 5th whitespace-separated
+ * numeric token. Returns null when no hold information is present (e.g. a
+ * trivial pass-through with no inter-FF paths).
+ */
+function parseVivadoHoldWns(report: string): number | null {
+  const inline = report.match(/\bWHS(?:\(ns\))?\s*[:=]\s*(-?[0-9]+(?:\.[0-9]+)?)/i);
+  if (inline) return Number(inline[1]);
+
+  // Anchor on the dashed separator under the table header. The values row
+  // immediately follows. We grab the first 5 whitespace-separated tokens
+  // (col 1 = setup WNS, cols 2-4 = setup TNS / failing / total, col 5 = WHS).
+  const tableValues = report.match(
+    /WHS\(ns\)[^\n]*\n[^\n]*-{2,}[^\n]*\n\s+(-?[0-9]+(?:\.[0-9]+)?)\s+(-?[0-9]+(?:\.[0-9]+)?)\s+(-?[0-9]+)\s+(-?[0-9]+)\s+(-?[0-9]+(?:\.[0-9]+)?)/i,
+  );
+  if (tableValues) return Number(tableValues[5]);
+
+  return null;
+}
+
 export function parseVivadoReport(
   report: string,
   clock_period_ns: number,
   part: string = VIVADO_DEFAULT_PART,
 ): VivadoSynthesisReport {
-  const lut_count = firstVivadoTableValue(report, [/Slice LUTs\*?/, /CLB LUTs/]);
+  // Vivado labels these resources differently per device family:
+  //   - Artix-7 / Kintex-7 7-series: `Slice LUTs*` and `Slice Registers`
+  //   - UltraScale / UltraScale+: `CLB LUTs*` and `CLB Registers`
+  // The trailing `*` is a literal asterisk Vivado prints (with a footnote
+  // about post-implementation count); make it optional in the regex so we
+  // match both column variants. `Register as Flip Flop` is the safe
+  // fallback when the high-level rollup row is absent.
+  const lut_count = firstVivadoTableValue(report, [/Slice LUTs\*?/, /CLB LUTs\*?/]);
   const ff_count = firstVivadoTableValue(report, [/Slice Registers/, /CLB Registers/, /Register as Flip Flop/]);
   const dsp_count = firstVivadoTableValue(report, [/DSPs/, /DSP48E1/]);
   const bram36_count = firstVivadoTableValue(report, [/RAMB36\/FIFO\*?/, /RAMB36/]);
@@ -535,9 +585,8 @@ export function parseVivadoReport(
     bram18_count > 0 || bram36_count > 0
       ? bram18_count + bram36_count * 2
       : block_ram_tiles * 2;
-  const wns_ns = parseVivadoWns(report);
-  const hasTimingViolation =
-    /timing constraints are not met|timing constraints are not satisfied|VIOLATED/i.test(report);
+  const setup_wns_ns = parseVivadoWns(report);
+  const hold_wns_ns = parseVivadoHoldWns(report);
   // Vivado's Design Timing Summary prints `WNS = NA` for designs that have
   // no inter-FF setup paths -- typically a 1-cycle pass-through where every
   // register is driven only from primary inputs. The report still asserts
@@ -547,12 +596,31 @@ export function parseVivadoReport(
   // ReLU) get classified as synth failures.
   const timingExplicitlyMet =
     /All user specified timing constraints are met/i.test(report);
+  // Setup-only `timing_met` for synth-only flows. The "Timing constraints
+  // are not met." string and per-path "Slack (VIOLATED)" labels Vivado
+  // prints when HOLD is failing are not pass/fail signals at this stage —
+  // synth runs against a pre-placement netlist where small hold violations
+  // (typically tens of picoseconds) are routinely absorbed by
+  // `place_design` and `opt_design`. We extract hold_wns_ns and surface it
+  // for visibility, but the gate is setup. Real silicon hold validation
+  // requires the implementation flow.
+  //
+  // The setup gate is the sign of setup_wns_ns alone: positive → passes
+  // setup at the configured frequency. A NEGATIVE setup WNS would mean the
+  // critical path can't make timing at the target clock — that is a real
+  // problem P&R can't fix without RTL changes (more pipeline registers).
+  //
+  // We deliberately do NOT search the report text for "VIOLATED": Vivado
+  // stamps `Slack (VIOLATED) : -0.033ns` against every individual hold
+  // path that fails, which would re-introduce the synth-only hold-gate bug.
   const timing_met =
-    wns_ns !== null
-      ? wns_ns >= 0 && !hasTimingViolation
-      : timingExplicitlyMet && !hasTimingViolation;
+    setup_wns_ns !== null
+      ? setup_wns_ns >= 0
+      : timingExplicitlyMet;
   const critical_path_ns =
-    wns_ns !== null && clock_period_ns > 0 ? clock_period_ns - wns_ns : 0;
+    setup_wns_ns !== null && clock_period_ns > 0
+      ? clock_period_ns - setup_wns_ns
+      : 0;
   const fmax_mhz =
     critical_path_ns > 0 ? 1_000 / critical_path_ns : 0;
 
@@ -567,7 +635,9 @@ export function parseVivadoReport(
     bram18_count,
     bram36_count,
     bram18_equiv,
-    wns_ns,
+    wns_ns: setup_wns_ns,
+    setup_wns_ns,
+    hold_wns_ns,
     timing_met,
     fmax_mhz,
     report,
@@ -586,12 +656,15 @@ export function toVivadoPath(inputPath: string): string {
 }
 
 export function resolveOutputRoot(outputDir: string): string {
-  return path.resolve(process.cwd(), outputDir);
+  const hostPath = normalizePathForCurrentHost(outputDir);
+  return path.isAbsolute(hostPath) || isWindowsAbsolutePath(hostPath)
+    ? hostPath
+    : path.resolve(process.cwd(), hostPath);
 }
 
 export function resolveRepoRootFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.NN2RTL_REPO_ROOT;
-  return override ? path.resolve(override) : repoRoot;
+  return override ? normalizePathForCurrentHost(override) : repoRoot;
 }
 
 function requireAbsoluteSidecarPaths(sidecar: VerificationSidecar): void {
@@ -603,12 +676,48 @@ function requireAbsoluteSidecarPaths(sidecar: VerificationSidecar): void {
   ] as const;
 
   for (const field of pathFields) {
-    if (!path.isAbsolute(sidecar[field])) {
+    if (!isAbsoluteHostPath(sidecar[field])) {
       throw new Error(
         `run_verilator: sidecar field '${field}' must be an absolute path; got '${sidecar[field]}'.`,
       );
     }
   }
+}
+
+function isWindowsAbsolutePath(inputPath: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(inputPath);
+}
+
+function isAbsoluteHostPath(inputPath: string): boolean {
+  return path.isAbsolute(inputPath) || isWindowsAbsolutePath(inputPath);
+}
+
+function normalizePathForCurrentHost(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, "/");
+  if (process.platform !== "win32") {
+    const drivePath = normalized.match(/^([a-zA-Z]):\/(.*)$/);
+    if (drivePath) {
+      return `/mnt/${drivePath[1].toLowerCase()}/${drivePath[2]}`;
+    }
+  }
+  if (process.platform === "win32") {
+    const wslPath = normalized.match(/^\/mnt\/([a-zA-Z])(?:\/(.*))?$/);
+    if (wslPath) {
+      const rest = wslPath[2] ?? "";
+      return rest ? `${wslPath[1].toUpperCase()}:/${rest}` : `${wslPath[1].toUpperCase()}:/`;
+    }
+  }
+  return normalized;
+}
+
+function normalizeSidecarPathsForCurrentHost(sidecar: VerificationSidecar): VerificationSidecar {
+  return {
+    ...sidecar,
+    golden_inputs_path: normalizePathForCurrentHost(sidecar.golden_inputs_path),
+    golden_outputs_path: normalizePathForCurrentHost(sidecar.golden_outputs_path),
+    results_path: normalizePathForCurrentHost(sidecar.results_path),
+    testbench_template_path: normalizePathForCurrentHost(sidecar.testbench_template_path),
+  };
 }
 
 async function readVerilatorResults(resultsPath: string): Promise<VerifResult> {
@@ -649,11 +758,13 @@ export async function run_iverilog(
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     await writeFile(verilogPath, verilog_source, "utf8");
     const libraryPaths = await copyRtlLibrarySources(tempDir);
-    const args = ["-o", os.devNull, "-g2012", verilogPath, ...libraryPaths];
+    const outputPath = path.join(tempDir, `${module_name}.ivvp`);
+    const args = ["-o", outputPath, "-g2012", verilogPath, ...libraryPaths];
+    const iverilogCommand = runtime.env.NN2RTL_IVERILOG_BIN || "iverilog";
 
     try {
       await runtime.commandRunner(
-        "iverilog",
+        iverilogCommand,
         args,
         {
           cwd: tempDir,
@@ -667,7 +778,7 @@ export async function run_iverilog(
       }
       return {
         success: false,
-        stderr: toolFailureDiagnostic("iverilog", args, tempDir, error),
+        stderr: toolFailureDiagnostic(iverilogCommand, args, tempDir, error),
       };
     }
   }, runtime);
@@ -681,10 +792,11 @@ export async function run_verilator(
 ): Promise<VerifResult> {
   const runtime = createToolsRuntime(runtimeOverrides);
   return withTempDir("nn2rtl-verilator-", async (tempDir) => {
-    const sidecar = await readSidecarIfPresent(sidecar_path);
-    if (!sidecar) {
+    const rawSidecar = await readSidecarIfPresent(sidecar_path);
+    if (!rawSidecar) {
       throw new Error(`run_verilator: sidecar '${sidecar_path}' was not found.`);
     }
+    const sidecar = normalizeSidecarPathsForCurrentHost(rawSidecar);
     requireAbsoluteSidecarPaths(sidecar);
 
     // The sidecar carries `module_name` and `module_id` fields that the bench
@@ -699,10 +811,12 @@ export async function run_verilator(
 
     const verilogPath = path.join(tempDir, `${module_name}.v`);
     const tempTbPath = path.join(tempDir, "static_verilator_tb.cpp");
+    const tempSidecarPath = path.join(tempDir, "sidecar.host.json");
     const tempJsonDir = path.join(tempDir, "third_party");
     const tempJsonPath = path.join(tempJsonDir, "json.hpp");
 
     await writeFile(verilogPath, verilog_source, "utf8");
+    await writeFile(tempSidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, "utf8");
     await mkdir(tempJsonDir, { recursive: true });
     await copyFile(sidecar.testbench_template_path || TB_SOURCE_PATH, tempTbPath);
     await copyFile(TB_SOURCE_PATH, path.join(tempDir, "contract_tb_runtime.cpp"));
@@ -795,7 +909,7 @@ export async function run_verilator(
     let simulationTimedOut = false;
 
     try {
-      await runtime.commandRunner(binaryPath, [sidecar_path], {
+      await runtime.commandRunner(binaryPath, [tempSidecarPath], {
         cwd: tempDir,
         env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)),
         timeout: VERILATOR_SIM_TIMEOUT_MS,
@@ -1036,6 +1150,8 @@ export async function run_vivado(
         bram36_count: 0,
         bram18_equiv: 0,
         wns_ns: null,
+        setup_wns_ns: null,
+        hold_wns_ns: null,
         timing_met: false,
         fmax_mhz: 0,
         report: [stdout, stderr].filter(Boolean).join("\n"),
@@ -1151,6 +1267,7 @@ function resolvePatternPaths(
   op_type: string,
   kh?: number,
   kw?: number,
+  contract_id = "flat-bus",
 ): string[] {
   const tieredPatternPaths = (fileName: string): string[] =>
     KNOWLEDGE_READ_TIERS.map((tier) =>
@@ -1162,6 +1279,9 @@ function resolvePatternPaths(
     ...tieredPatternPaths("01_context.md"),
     ...tieredPatternPaths("08_common_bugs.md"),
   ];
+  if (contract_id !== "flat-bus") {
+    return paths;
+  }
   if (op_type === "conv2d") {
     if (kh === 1 && kw === 1) {
       paths.push(...tieredPatternPaths("02_conv1x1.md"));
@@ -1194,12 +1314,15 @@ function lifecycleDocsFor(
   state: GeneratedDocState,
   op_type: string,
   kind: "pattern" | "reference",
+  contract_id?: string,
 ): Array<{ path: string; contract_id?: string; contract_key?: string }> {
   const docs = Object.values(state.docs ?? {});
   const tierOrder: Record<GeneratedDocTier, number> = { active: 0, probationary: 1 };
   return docs
     .filter((doc): doc is GeneratedDocEntry & { status: GeneratedDocTier } =>
-      doc.op_type === op_type && (doc.status === "active" || doc.status === "probationary"),
+      doc.op_type === op_type &&
+      (doc.status === "active" || doc.status === "probationary") &&
+      (contract_id === undefined || (doc.contract_id ?? "flat-bus") === contract_id),
     )
     .sort((a, b) => {
       const tierDelta = tierOrder[a.status] - tierOrder[b.status];
@@ -1251,11 +1374,12 @@ export async function get_rtl_patterns(
   op_type: string,
   kernel_h?: number,
   kernel_w?: number,
+  contract_id?: string,
 ): Promise<GetRtlPatternsResult> {
   const lifecycleState = await readDocLifecycleState();
-  const lifecyclePatternDocs = lifecycleDocsFor(lifecycleState, op_type, "pattern");
+  const lifecyclePatternDocs = lifecycleDocsFor(lifecycleState, op_type, "pattern", contract_id);
   const patternPaths = [
-    ...resolvePatternPaths(op_type, kernel_h, kernel_w),
+    ...resolvePatternPaths(op_type, kernel_h, kernel_w, contract_id ?? "flat-bus"),
     ...lifecyclePatternDocs.map((doc) => doc.path),
   ];
   const sections: string[] = [];
@@ -1274,24 +1398,25 @@ export async function get_rtl_patterns(
 
   let reference_verilog: string | null = null;
   let license_notice: string | null = null;
-  const lifecycleReferenceDocs = lifecycleDocsFor(lifecycleState, op_type, "reference");
+  const lifecycleReferenceDocs = lifecycleDocsFor(lifecycleState, op_type, "reference", contract_id);
   const lifecycleReferencePaths = lifecycleReferenceDocs.map((doc) => doc.path);
 
   // Concrete worked-example wrappers — one per kernel shape we have a
   // proven reference for. Foundry adapts the localparams + $readmemh
   // paths from the LayerIR; the architecture (FSM / library
   // instantiation / start_pulse) stays identical.
-  if (op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
+  const includeFlatBusProtectedReferences = (contract_id ?? "flat-bus") === "flat-bus";
+  if (includeFlatBusProtectedReferences && op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
     const ref = await readReferenceVariants("conv1x1_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
     }
-  } else if (op_type === "conv2d" && kernel_h === 3 && kernel_w === 3) {
+  } else if (includeFlatBusProtectedReferences && op_type === "conv2d" && kernel_h === 3 && kernel_w === 3) {
     const ref = await readReferenceVariants("conv3x3_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
     }
-  } else if (op_type === "conv2d" && kernel_h === 7 && kernel_w === 7) {
+  } else if (includeFlatBusProtectedReferences && op_type === "conv2d" && kernel_h === 7 && kernel_w === 7) {
     const ref = await readReferenceVariants("conv7x7_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
@@ -1330,8 +1455,9 @@ export async function get_rtl_patterns(
   ].filter((v): v is string => typeof v === "string" && v.length > 0);
   let outputRoot = path.resolve(repoRoot, "output");
   for (const candidate of candidateOutputRoots) {
-    const resolved = path.isAbsolute(candidate)
-      ? candidate
+    const hostCandidate = normalizePathForCurrentHost(candidate);
+    const resolved = path.isAbsolute(hostCandidate) || isWindowsAbsolutePath(hostCandidate)
+      ? hostCandidate
       : path.resolve(repoRoot, candidate);
     if (existsSync(resolved)) {
       outputRoot = resolved;
@@ -1345,6 +1471,7 @@ export async function get_rtl_patterns(
     op_type,
     kernel_h: kernel_h ?? null,
     kernel_w: kernel_w ?? null,
+    contract_id: contract_id ?? null,
     pattern_markdown_chars: pattern_markdown.length,
     reference_verilog_chars: reference_verilog ? reference_verilog.length : 0,
     lifecycle_docs: lifecyclePatternDocs
@@ -1374,8 +1501,9 @@ export async function readSidecarIfPresent(
   filePath: string,
 ): Promise<VerificationSidecar | null> {
   let raw: string;
+  const hostPath = normalizePathForCurrentHost(filePath);
   try {
-    raw = await readFile(filePath, "utf8");
+    raw = await readFile(hostPath, "utf8");
   } catch (error: unknown) {
     if (
       typeof error === "object" &&

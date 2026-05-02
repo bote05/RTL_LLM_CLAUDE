@@ -9,10 +9,9 @@
 // undetected for weeks of runs.
 //
 // Why each pick:
-//   - Cartographer: runs once per pipeline to produce layer_ir.json from a
-//     PyTorch checkpoint (it is bypassed entirely on the ONNX path). Pure
-//     extraction + formatting, no complex reasoning. Sonnet 4.6 is cheaper
-//     and plenty. Running Opus here is waste.
+//   - Cartographer: legacy fallback agent for PipelineIR formatting. The
+//     production orchestrator now calls deterministic read_weights directly
+//     so extraction does not depend on an LLM rewriting tool output.
 //   - Foundry: one-shot Verilog codegen from a 25 KB spec with correctness
 //     requirements (line buffers, padding drain, sign extension, scale-
 //     factor derivation). Opus 4.7 is the current coding-best model
@@ -27,7 +26,7 @@
 // `maxTurns` caps the agentic turn count per subagent call; the outer
 // query() also sets a parent cap that applies on top of these.
 export const AGENT_CONFIG = {
-  Cartographer: { model: "claude-sonnet-4-6" as const, maxTurns: 30, description: "Model extractor. Runs once at pipeline start. Emits output/layer_ir.json." },
+  Cartographer: { model: "claude-sonnet-4-6" as const, maxTurns: 30, description: "Legacy PipelineIR formatter fallback; production extraction calls read_weights directly." },
   Foundry:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
   Surgeon:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
 } as const;
@@ -37,7 +36,7 @@ export type AgentName = keyof typeof AGENT_CONFIG;
 export const FAILURE_CLASSIFIER_CONFIG = {
   model: "claude-sonnet-4-6" as const,
   maxTurns: 4,
-  description: "Classifies failed module evidence as code_bug, architectural_fit, or unknown.",
+  description: "Classifies failed module evidence as code_bug, architectural_fit, toolchain_infra, or unknown.",
 } as const;
 
 export const RETROSPECTOR_CONFIG = {
@@ -98,7 +97,7 @@ export const PIPELINE_CONFIG = {
   // cycle; MP controls OC grouping and amortizes bias/scale/output overhead,
   // but it is not yet MP cycle-parallel throughput. 4 is the current
   // frontend value and keeps the serialized weight-memory structure small
-  // enough for Artix-7/Vivado while leaving a clean migration path to future
+  // enough for ZCU102/Vivado while leaving a clean migration path to future
   // banked BRAM datapaths. Python
   // frontends must read this same value when computing mac_parallelism and
   // pipeline_latency_cycles.

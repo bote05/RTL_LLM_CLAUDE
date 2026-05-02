@@ -1345,8 +1345,11 @@ def build_fx_pipeline_ir_payload(
         if op_type == "conv2d":
             conv_weight_shape = coerce_shape(metadata["weight_shape"], f"{module_id}.weight_shape")
             conv_input_shape = coerce_shape(metadata["input_shape"], f"{module_id}.input_shape")
-            conv_stride = list(operation_map.get(module_id, {}).get("stride", [1, 1]))
-            conv_padding = list(operation_map.get(module_id, {}).get("padding", [0, 0]))
+            conv_operation = operation_map.get(module_id, {})
+            conv_stride = list(conv_operation.get("stride", [1, 1]))
+            conv_padding = list(conv_operation.get("padding", [0, 0]))
+            conv_dilation = list(conv_operation.get("dilation", [1, 1]))
+            conv_groups = int(conv_operation.get("groups", 1))
             conv_oc = int(conv_weight_shape[0]) if conv_weight_shape else 0
             conv_mp = conv_mac_parallelism(conv_oc)
             weight_bank_paths = write_weight_bank_hex_files(
@@ -1358,6 +1361,8 @@ def build_fx_pipeline_ir_payload(
             )
             layer_payload["stride"] = conv_stride
             layer_payload["padding"] = conv_padding
+            layer_payload["dilation"] = conv_dilation
+            layer_payload["groups"] = conv_groups
             layer_payload["mac_parallelism"] = conv_mp
             layer_payload["weight_bank_paths"] = [
                 bank_path.resolve().as_posix() for bank_path in weight_bank_paths

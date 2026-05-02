@@ -121,8 +121,12 @@ describe("mcp tools", () => {
   });
 
   it("resolves repo root overrides from the environment", () => {
+    // The override is normalized to forward-slash form (and `/mnt/c/...` is
+    // translated to `C:/...` on Windows), preserving the user's intended
+    // absolute location regardless of which shell launched the process.
+    // See `normalizePathForCurrentHost` in mcp/tools.ts.
     expect(resolveRepoRootFromEnv({ NN2RTL_REPO_ROOT: "/tmp/override" })).toBe(
-      path.resolve("/tmp/override"),
+      "/tmp/override",
     );
     expect(resolveRepoRootFromEnv({})).toBe(repoRoot);
   });
@@ -196,11 +200,11 @@ describe("mcp tools", () => {
       "| WNS(ns) | TNS(ns) |",
       "| 2.500   | 0.000   |",
     ].join("\n");
-    const parsed = parseVivadoReport(report, 20, "xc7a100tcsg324-1");
+    const parsed = parseVivadoReport(report, 20, "xczu9eg-ffvb1156-2-e");
     expect(parsed).toMatchObject({
       success: true,
       tool: "vivado",
-      part: "xc7a100tcsg324-1",
+      part: "xczu9eg-ffvb1156-2-e",
       stage: "synth",
       lut_count: 1234,
       ff_count: 567,
@@ -238,7 +242,7 @@ describe("mcp tools", () => {
       const tcl = await readFile(path.join(cwd, "synth.tcl"), "utf8");
       const rtl = await readFile(path.join(cwd, "passthrough.v"), "utf8");
       expect(tcl).toContain("set_param general.maxThreads");
-      expect(tcl).toContain("synth_design -top passthrough -part xc7a100tcsg324-1");
+      expect(tcl).toContain("synth_design -top passthrough -part xczu9eg-ffvb1156-2-e");
       expect(rtl).toContain('$readmemh("C:/Users/User/weights.hex", weights)');
       await writeFile(path.join(cwd, "post_synth_utilization.rpt"), "| Slice LUTs* | 4 |\n| Slice Registers | 2 |\n| DSPs | 1 |", "utf8");
       await writeFile(path.join(cwd, "post_synth_ram_utilization.rpt"), "| RAMB36/FIFO* | 1 |\n| RAMB18 | 0 |", "utf8");
@@ -269,7 +273,7 @@ describe("mcp tools", () => {
     expect(result).toMatchObject({
       success: false,
       tool: "vivado",
-      part: "xc7a100tcsg324-1",
+      part: "xczu9eg-ffvb1156-2-e",
       stage: "synth",
       lut_count: 0,
       ff_count: 0,
@@ -336,7 +340,9 @@ describe("mcp tools", () => {
 
     const writtenPath = await write_verilog(module, tempDir);
 
-    expect(resolveOutputRoot(tempDir)).toBe(path.resolve(process.cwd(), tempDir));
+    expect(resolveOutputRoot(tempDir)).toBe(
+      path.resolve(process.cwd(), tempDir).replace(/\\/g, "/"),
+    );
     expect(await readFile(writtenPath, "utf8")).toContain("module unit_module");
     expect(
       JSON.parse(await readFile(path.join(tempDir, "rtl", "unit_module.meta.json"), "utf8")),

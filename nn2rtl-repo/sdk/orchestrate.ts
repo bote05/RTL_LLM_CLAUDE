@@ -113,11 +113,20 @@ export type AssayerFn = (
   layer: LayerIR,
 ) => Promise<VerifResult>;
 
+export type ReadWeightsFn = (
+  checkpoint_path: string,
+  quantization_config: object,
+) => Promise<PipelineIR>;
+
 export type OrchestratorRuntime = {
   now: () => Date;
   queryFn: typeof query;
   synthesisFn: SynthesisFn;
   assayerFn: AssayerFn;
+  // Deterministic LayerIR extraction. Defaults to a dynamic import of
+  // `mcp/tools.ts::read_weights` (which shells out to Python). Tests inject
+  // a stub so they don't need a real .pth file or a Python install.
+  readWeightsFn: ReadWeightsFn;
 };
 
 export type RunPipelineOptions = {
@@ -142,6 +151,12 @@ const DEFAULT_ORCHESTRATOR_RUNTIME: OrchestratorRuntime = {
   queryFn: query,
   synthesisFn: (module, layer) => invokeVivado(module, layer),
   assayerFn: (module, layer) => runAssayerDeterministic(module, layer),
+  readWeightsFn: async (checkpoint_path, quantization_config) => {
+    const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
+      read_weights: ReadWeightsFn;
+    };
+    return mcpTools.read_weights(checkpoint_path, quantization_config);
+  },
 };
 
 function toOutputFormat(schema: z.ZodType): OutputFormat {
@@ -216,6 +231,66 @@ export function resolveFromSdk(relativePath: string): string {
   return path.resolve(sdkRoot, relativePath);
 }
 
+function isWindowsAbsolutePath(inputPath: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(inputPath);
+}
+
+function normalizePathForCurrentHost(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, "/");
+  if (process.platform !== "win32") {
+    const drivePath = normalized.match(/^([a-zA-Z]):\/(.*)$/);
+    if (drivePath) {
+      return `/mnt/${drivePath[1].toLowerCase()}/${drivePath[2]}`;
+    }
+  }
+  if (process.platform === "win32") {
+    const wslPath = normalized.match(/^\/mnt\/([a-zA-Z])(?:\/(.*))?$/);
+    if (wslPath) {
+      const rest = wslPath[2] ?? "";
+      return rest ? `${wslPath[1].toUpperCase()}:/${rest}` : `${wslPath[1].toUpperCase()}:/`;
+    }
+  }
+  return normalized;
+}
+
+function resolveInputPathForCurrentHost(inputPath: string): string {
+  const normalized = normalizePathForCurrentHost(inputPath);
+  return path.isAbsolute(normalized) || isWindowsAbsolutePath(normalized)
+    ? normalized
+    : path.resolve(normalized);
+}
+
+function pathFingerprintKey(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, "/");
+  const drivePath = normalized.match(/^([a-zA-Z]):\/(.*)$/);
+  if (drivePath) {
+    return `/${drivePath[1].toLowerCase()}/${drivePath[2]}`.toLowerCase();
+  }
+  const wslPath = normalized.match(/^\/mnt\/([a-zA-Z])(?:\/(.*))?$/);
+  if (wslPath) {
+    return `/${wslPath[1].toLowerCase()}/${wslPath[2] ?? ""}`.toLowerCase();
+  }
+  return path.resolve(normalized).replace(/\\/g, "/").toLowerCase();
+}
+
+function normalizeLayerFilePathsForCurrentHost(layer: LayerIR): LayerIR {
+  return {
+    ...layer,
+    weights_path: normalizePathForCurrentHost(layer.weights_path),
+    bias_path: layer.bias_path ? normalizePathForCurrentHost(layer.bias_path) : null,
+    golden_inputs_path: normalizePathForCurrentHost(layer.golden_inputs_path),
+    golden_outputs_path: normalizePathForCurrentHost(layer.golden_outputs_path),
+    weight_bank_paths: layer.weight_bank_paths?.map(normalizePathForCurrentHost),
+  };
+}
+
+function normalizePipelineIrForCurrentHost(pipelineIr: PipelineIR): PipelineIR {
+  return {
+    ...pipelineIr,
+    layers: pipelineIr.layers.map(normalizeLayerFilePathsForCurrentHost),
+  };
+}
+
 // PPA gates — a module that passes functional verification but fails these
 // is treated as a real hardware failure and routed back to Surgeon via a
 // synthesized VerifResult. Thresholds come from the README's FPGA targets.
@@ -275,7 +350,7 @@ function evaluateSynthesis(
       failure_class: "synthesis_failed",
       fix_hint: [
         "Vivado synthesis failed after functional verification passed.",
-        "Repair the RTL so Nexys A7 Artix-7 synth_design succeeds.",
+        "Repair the RTL so ZCU102 (xczu9eg-ffvb1156-2-e) synth_design succeeds.",
         "Look at the HEAD and DIAGNOSTICS sections below for the root cause; the TAIL is usually table/log noise.",
         "Vivado output summary (head + diagnostics + tail):",
         capSynthesisReport(report.report),
@@ -427,6 +502,168 @@ export async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+type GoldenVectorFile = {
+  numVectors: number;
+  samplesPerVector: number;
+  bytesPerSample: number;
+  wordsPerSample: number;
+  vectors: number[][];
+};
+
+const GOLDEN_MAGIC = "NN2V";
+const GOLDEN_VERSION = 2;
+const GOLDEN_HEADER_BYTES = 20;
+
+function wordsPerSampleForBytes(bytesPerSample: number): number {
+  return Math.ceil(bytesPerSample / 4);
+}
+
+async function readGoldenVectorFile(filePath: string): Promise<GoldenVectorFile> {
+  const hostPath = normalizePathForCurrentHost(filePath);
+  const buffer = await readFile(hostPath);
+  if (buffer.length < GOLDEN_HEADER_BYTES) {
+    throw new Error(`Golden vector file '${hostPath}' is truncated.`);
+  }
+  if (buffer.subarray(0, 4).toString("ascii") !== GOLDEN_MAGIC) {
+    throw new Error(`Golden vector file '${hostPath}' has wrong magic; expected '${GOLDEN_MAGIC}'.`);
+  }
+  const version = buffer.readUInt32LE(4);
+  if (version !== GOLDEN_VERSION) {
+    throw new Error(`Golden vector file '${hostPath}' has unsupported version ${version}.`);
+  }
+  const numVectors = buffer.readUInt32LE(8);
+  const samplesPerVector = buffer.readUInt32LE(12);
+  const bytesPerSample = buffer.readUInt32LE(16);
+  const wordsPerSample = wordsPerSampleForBytes(bytesPerSample);
+  const expectedWords = numVectors * samplesPerVector * wordsPerSample;
+  const expectedBytes = GOLDEN_HEADER_BYTES + expectedWords * 4;
+  if (buffer.length < expectedBytes) {
+    throw new Error(
+      `Golden vector file '${hostPath}' data is truncated; expected ${expectedBytes} bytes, found ${buffer.length}.`,
+    );
+  }
+
+  const vectors: number[][] = [];
+  let offset = GOLDEN_HEADER_BYTES;
+  for (let vectorIndex = 0; vectorIndex < numVectors; vectorIndex += 1) {
+    const row: number[] = [];
+    for (let word = 0; word < samplesPerVector * wordsPerSample; word += 1) {
+      row.push(buffer.readInt32LE(offset));
+      offset += 4;
+    }
+    vectors.push(row);
+  }
+
+  return { numVectors, samplesPerVector, bytesPerSample, wordsPerSample, vectors };
+}
+
+async function writeGoldenVectorFile(filePath: string, file: GoldenVectorFile): Promise<void> {
+  const totalWords = file.vectors.reduce((sum, row) => sum + row.length, 0);
+  const buffer = Buffer.alloc(GOLDEN_HEADER_BYTES + totalWords * 4);
+  buffer.write(GOLDEN_MAGIC, 0, "ascii");
+  buffer.writeUInt32LE(GOLDEN_VERSION, 4);
+  buffer.writeUInt32LE(file.numVectors, 8);
+  buffer.writeUInt32LE(file.samplesPerVector, 12);
+  buffer.writeUInt32LE(file.bytesPerSample, 16);
+  let offset = GOLDEN_HEADER_BYTES;
+  for (const row of file.vectors) {
+    for (const word of row) {
+      buffer.writeInt32LE(word | 0, offset);
+      offset += 4;
+    }
+  }
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, buffer);
+}
+
+function unpackSampleBytes(words: readonly number[], bytesPerSample: number): number[] {
+  const bytes: number[] = [];
+  for (let byteIndex = 0; byteIndex < bytesPerSample; byteIndex += 1) {
+    const word = words[Math.floor(byteIndex / 4)] >>> 0;
+    bytes.push((word >>> (8 * (byteIndex % 4))) & 0xff);
+  }
+  return bytes;
+}
+
+function packSampleBytes(bytes: readonly number[], bytesPerSample: number): number[] {
+  const padded = [...bytes];
+  while (padded.length < bytesPerSample) {
+    padded.push(0);
+  }
+  const words: number[] = [];
+  for (let byteStart = 0; byteStart < bytesPerSample; byteStart += 4) {
+    let word = 0;
+    for (let byteOffset = 0; byteOffset < 4 && byteStart + byteOffset < bytesPerSample; byteOffset += 1) {
+      word |= (padded[byteStart + byteOffset] & 0xff) << (8 * byteOffset);
+    }
+    words.push(word | 0);
+  }
+  return words;
+}
+
+function retileGoldenVectors(source: GoldenVectorFile, targetBytesPerSample: number): GoldenVectorFile {
+  if (targetBytesPerSample <= 0) {
+    throw new Error(`targetBytesPerSample must be positive, got ${targetBytesPerSample}.`);
+  }
+  if (source.bytesPerSample === targetBytesPerSample) {
+    return source;
+  }
+
+  const targetWordsPerSample = wordsPerSampleForBytes(targetBytesPerSample);
+  const tilesPerSourceSample = Math.max(1, Math.ceil(source.bytesPerSample / targetBytesPerSample));
+  const vectors = source.vectors.map((row) => {
+    const out: number[] = [];
+    for (let sample = 0; sample < source.samplesPerVector; sample += 1) {
+      const wordStart = sample * source.wordsPerSample;
+      const sampleWords = row.slice(wordStart, wordStart + source.wordsPerSample);
+      const sampleBytes = unpackSampleBytes(sampleWords, source.bytesPerSample);
+      for (let byteStart = 0; byteStart < source.bytesPerSample; byteStart += targetBytesPerSample) {
+        const tileBytes = sampleBytes.slice(byteStart, byteStart + targetBytesPerSample);
+        out.push(...packSampleBytes(tileBytes, targetBytesPerSample));
+      }
+    }
+    return out;
+  });
+
+  return {
+    numVectors: source.numVectors,
+    samplesPerVector: source.samplesPerVector * tilesPerSourceSample,
+    bytesPerSample: targetBytesPerSample,
+    wordsPerSample: targetWordsPerSample,
+    vectors,
+  };
+}
+
+async function materializeContractGoldenFile(inputPath: string, outputPath: string, targetBusBits: number): Promise<string> {
+  const targetBytes = targetBusBits / 8;
+  const source = await readGoldenVectorFile(inputPath);
+  if (source.bytesPerSample === targetBytes) {
+    return normalizePathForCurrentHost(inputPath);
+  }
+  const transformed = retileGoldenVectors(source, targetBytes);
+  await writeGoldenVectorFile(outputPath, transformed);
+  return outputPath;
+}
+
+async function materializeContractGoldens(layer: LayerIR): Promise<{
+  goldenInputsPath: string;
+  goldenOutputsPath: string;
+}> {
+  const key = sanitizePathPart(`${layer.module_id}_${contractStateKeyForLayer(layer)}`);
+  const dir = path.join(resolveFromSdk(PIPELINE_CONFIG.output_dir), "goldens", "contracts", key);
+  const goldenInputsPath = await materializeContractGoldenFile(
+    layer.golden_inputs_path,
+    path.join(dir, `${layer.module_id}.goldin`),
+    layer.input_width_bits,
+  );
+  const goldenOutputsPath = await materializeContractGoldenFile(
+    layer.golden_outputs_path,
+    path.join(dir, `${layer.module_id}.goldout`),
+    layer.output_width_bits,
+  );
+  return { goldenInputsPath, goldenOutputsPath };
 }
 
 export async function readJsonFile<T>(
@@ -698,17 +935,19 @@ function buildFoundryGenerationBrief(payload: unknown): string | null {
     typeof payload.expected_spec_hash === "string"
       ? payload.expected_spec_hash
       : computeExpectedSpecHash(layer);
+  const effectiveLatency = expectedLatencyCyclesForContract(layer, contractSidecarFields(layer));
   const lines = [
     "Compact generation brief:",
     `- op_type=${layer.op_type}; module_id=${layer.module_id}; return spec_hash=${expectedSpecHash} exactly.`,
     `- bus contract: data_in=${layer.input_width_bits} bits, data_out=${layer.output_width_bits} bits.`,
-    `- pipeline_latency_cycles=${layer.pipeline_latency_cycles} from LayerIR is authoritative; do not override it with a hand-derived formula.`,
+    `- base pipeline_latency_cycles=${layer.pipeline_latency_cycles}; Assayer expects valid_out after ${effectiveLatency} cycle(s) for the selected contract.`,
   ];
   const contractSelection = contractSelectionForLayer(layer);
   lines.push(
     `- selected contract: ${contractSelection.selected.name} (rank ${contractSelection.selected.complexity_rank}).`,
     `- contract template: ${contractTestbenchTemplatePath(contractSelection.selected.name)}.`,
     `- contract constraints: max_bus_width_bits=${contractSelection.selected.fit_constraints.max_bus_width_bits}; dependencies=${contractSelection.selected.dependencies.join(", ") || "none"}.`,
+    "- use `preloaded_rtl_patterns` from the payload as the authoritative local knowledge context; it is already filtered by selected contract.",
   );
   if (currentContractId(layer) !== "flat-bus") {
     lines.push(
@@ -723,8 +962,13 @@ function buildFoundryGenerationBrief(payload: unknown): string | null {
     const pointwise = kh === 1 && kw === 1;
     const padding = layer.padding;
     lines.push(
-      `- conv geometry: kernel=${kh}x${kw}; pointwise=${pointwise ? "yes" : "no"}; stride=${formatIntVector(layer.stride)}; padding=${formatIntVector(padding)}.`,
+      `- conv geometry: kernel=${kh}x${kw}; pointwise=${pointwise ? "yes" : "no"}; stride=${formatIntVector(layer.stride)}; padding=${formatIntVector(padding)}; dilation=${formatIntVector(layer.dilation)}; groups=${layer.groups ?? 1}.`,
     );
+    if ((layer.groups ?? 1) !== 1 || (layer.dilation && layer.dilation.some((value) => value !== 1))) {
+      lines.push(
+        "- conv variant warning: grouped/depthwise/dilated conv semantics are explicit in LayerIR. Do not silently treat them as ordinary dense dilation=1 convolution.",
+      );
+    }
     if (!pointwise) {
       const needsDrain =
         padding !== undefined &&
@@ -761,6 +1005,7 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   const layer = payload.layer_ir as unknown as LayerIR;
   const verif = payload.verif_result as unknown as VerifResult;
   const retrySeed = typeof payload.retry_seed === "string" ? payload.retry_seed : null;
+  const effectiveLatency = expectedLatencyCyclesForContract(layer, contractSidecarFields(layer));
 
   // Distinguish the sim-passed / synth-only failure from a full functional
   // failure. When sim passed, the datapath is already correct by evidence —
@@ -774,8 +1019,9 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   const lines = [
     "Compact repair brief:",
     `- op_type=${layer.op_type}; bus contract=data_in ${layer.input_width_bits} bits, data_out ${layer.output_width_bits} bits; preserve the public interface exactly.`,
-    `- authoritative latency contract: pipeline_latency_cycles=${layer.pipeline_latency_cycles}.`,
+    `- authoritative latency contract: base pipeline_latency_cycles=${layer.pipeline_latency_cycles}; Assayer expected latency=${effectiveLatency}.`,
     `- selected contract: ${resolveLayerContractId(layer)}. Preserve every metadata-declared interface signal for that contract.`,
+    "- use `preloaded_rtl_patterns` from the payload as the authoritative local knowledge context; it is already filtered by selected contract.",
     `- current failure: status=${verif.status}; status_class=${verif.status_class ?? "n/a"}; failure_class=${verif.failure_class ?? "n/a"}.`,
     "- compiler-first rule: if status=syntax_error or compiler stderr is populated, read iverilog/verilator stderr before touching datapath logic.",
     "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
@@ -786,6 +1032,11 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   if (currentContractId(layer) !== "flat-bus") {
     lines.push(
       `- contract variant: ${currentContractId(layer)}; io_mode=${layer.io_mode}; channel_tile=${layer.channel_tile ?? "n/a"}. Preserve this interface variant exactly.`,
+    );
+  }
+  if (layer.op_type === "conv2d") {
+    lines.push(
+      `- conv semantics: stride=${formatIntVector(layer.stride)}; padding=${formatIntVector(layer.padding)}; dilation=${formatIntVector(layer.dilation)}; groups=${layer.groups ?? 1}. Preserve these exactly.`,
     );
   }
 
@@ -893,12 +1144,16 @@ export type ModuleContractSummary = {
   };
   capability_limits: {
     max_supported_bus_bits: number;
-    target_part: "xc7a100tcsg324-1";
-    artix7_100t_capacity: {
-      lut: 63400;
-      ff: 126800;
-      dsp: 240;
-      bram18: 240;
+    target_part: "xczu9eg-ffvb1156-2-e";
+    // XCZU9EG / ZCU102 fabric numbers from AMD Zynq UltraScale+ MPSoC
+    // Product Selection Guide (XMP104 v2.8), ZU9 column. The ZU9 device
+    // does NOT include UltraRAM — it is unique to ZU3T/4/5/7 in the CG/EG
+    // families and to selected EV variants — so no `uram` field here.
+    zcu102_capacity: {
+      lut: 274080;
+      ff: 548160;
+      dsp: 2520;
+      bram18: 1824;
     };
   };
   operation: Record<string, unknown>;
@@ -1027,6 +1282,16 @@ const CONTRACT_PLANS: ContractPlan[] = [
     complexity: 2,
     description: "External-memory-backed weights contract for layers that cannot fit the simpler streaming contracts.",
   },
+  {
+    id: "activation-double-buffering",
+    complexity: 3,
+    description: "Ping-pong activation buffers for overlapping activation load and compute.",
+  },
+  {
+    id: "weight-tiling",
+    complexity: 4,
+    description: "Weight-tiled execution with external weight reads and partial-sum accumulation.",
+  },
 ];
 
 const CONTRACT_STATE_PATH = resolveFromSdk(PIPELINE_CONFIG.contract_state_path);
@@ -1077,11 +1342,37 @@ function fullOutputBusWidthBits(layer: LayerIR): number {
   return outputChannels * 8;
 }
 
-function chooseContractChannelTile(layer: LayerIR): number {
+/**
+ * Pick a `channel_tile` for the chosen tiled-style contract such that the
+ * resulting per-beat bus width fits BOTH the global pipeline cap
+ * (`PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS`) AND the target contract's own
+ * `fit_constraints.max_bus_width_bits` from its metadata. Without this the
+ * orchestrator could pick a tile that overshoots a contract's own spec
+ * (e.g. tiled-streaming caps at 256 bits/beat, so a 512-channel tile at
+ * 4096 bits would be rejected by tiled-streaming's own bus-width gate
+ * before Foundry ever ran).
+ *
+ * For `op_type=add` data_in is the packed `lhs|rhs` pair (16 bits per
+ * channel-pair on the input side), so the cap is divided by 16 instead of
+ * by 8 for that op.
+ */
+function chooseContractChannelTile(layer: LayerIR, plan: ContractPlan): number {
   const inputChannels = getShapeChannels(layer.input_shape, "input_shape", layer.module_id);
   const outputChannels = getShapeChannels(layer.output_shape, "output_shape", layer.module_id);
   const maxChannels = Math.max(inputChannels, outputChannels);
-  const capChannels = Math.max(1, Math.floor(PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS / 8));
+  const metadata = loadContractMetadata(plan.id);
+  const contractCapBits = metadata.fit_constraints.max_bus_width_bits;
+  const globalCapBits = PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS;
+  const defaultBeatBits = metadata.fit_constraints.default_beat_width_bits;
+  const capBits = Math.max(
+    1,
+    Math.min(contractCapBits, globalCapBits, defaultBeatBits ?? Number.POSITIVE_INFINITY),
+  );
+  // tiledInputBusWidthBits packs 2 bytes per add-operand-pair channel and
+  // 1 byte per channel for every other op. Output bus is always 1 byte per
+  // channel (single int8 stream), so input is the binding side here.
+  const bytesPerInputChannel = layer.op_type === "add" ? 2 : 1;
+  const capChannels = Math.max(1, Math.floor(capBits / (bytesPerInputChannel * 8)));
   return Math.max(1, Math.min(maxChannels, capChannels));
 }
 
@@ -1093,20 +1384,42 @@ function tiledOutputBusWidthBits(channelTile: number): number {
   return channelTile * 8;
 }
 
+function ioModeForContract(contractId: ContractId): LayerIR["io_mode"] {
+  switch (contractId) {
+    case "flat-bus":
+      return "packed_full";
+    case "tiled-streaming":
+      return "channel_tiled";
+    case "dram-backed-weights":
+      return "dram_backed_weights";
+    case "activation-double-buffering":
+      return "activation_double_buffered";
+    case "weight-tiling":
+      return "weight_tiled";
+  }
+}
+
 function applyContractPlan(baseLayer: LayerIR, plan: ContractPlan): LayerIR {
   const layer = jsonClone(baseLayer);
+  layer.contract_id = plan.id;
+  layer.io_mode = ioModeForContract(plan.id);
   if (plan.id === "flat-bus") {
-    layer.io_mode = "packed_full";
     delete layer.channel_tile;
+    delete layer.contract_params;
     layer.input_width_bits = fullInputBusWidthBits(layer);
     layer.output_width_bits = fullOutputBusWidthBits(layer);
     return layer;
   }
 
-  const channelTile = chooseContractChannelTile(baseLayer);
-  layer.io_mode = plan.id === "tiled-streaming" ? "channel_tiled" : "dram_backed_weights";
-  layer.contract_id = plan.id;
+  const channelTile = chooseContractChannelTile(baseLayer, plan);
+  const metadata = loadContractMetadata(plan.id);
   layer.channel_tile = channelTile;
+  layer.contract_params = {
+    ...(currentContractId(baseLayer) === plan.id ? baseLayer.contract_params ?? {} : {}),
+    ...(metadata.fit_constraints.default_beat_width_bits
+      ? { beat_width_bits: metadata.fit_constraints.default_beat_width_bits }
+      : {}),
+  };
   layer.input_width_bits = tiledInputBusWidthBits(baseLayer, channelTile);
   layer.output_width_bits = tiledOutputBusWidthBits(channelTile);
   return layer;
@@ -1132,9 +1445,12 @@ function selectAvailableContract(
 ): { plan: ContractPlan; layer: LayerIR } | null {
   const startIndex = afterContractId
     ? CONTRACT_PLANS.findIndex((plan) => plan.id === afterContractId) + 1
-    : 0;
+    : CONTRACT_PLANS.findIndex((plan) => plan.id === currentContractId(baseLayer));
   for (const plan of CONTRACT_PLANS.slice(Math.max(0, startIndex))) {
     const layer = applyContractPlan(baseLayer, plan);
+    if (contractFitFailure(layer)) {
+      continue;
+    }
     if (!isContractFlagged(state, layer)) {
       return { plan, layer };
     }
@@ -1246,6 +1562,8 @@ function buildModuleContractSummary(layer: LayerIR): ModuleContractSummary {
   if (layer.op_type === "conv2d") {
     operation.stride = layer.stride;
     operation.padding = layer.padding;
+    operation.dilation = layer.dilation ?? [1, 1];
+    operation.groups = layer.groups ?? 1;
     operation.mac_parallelism = layer.mac_parallelism;
     operation.io_mode = layer.io_mode ?? "packed_full";
     operation.channel_tile = layer.channel_tile ?? null;
@@ -1277,12 +1595,12 @@ function buildModuleContractSummary(layer: LayerIR): ModuleContractSummary {
     },
     capability_limits: {
       max_supported_bus_bits: PIPELINE_CONFIG.MAX_SUPPORTED_BUS_BITS,
-      target_part: "xc7a100tcsg324-1",
-      artix7_100t_capacity: {
-        lut: 63400,
-        ff: 126800,
-        dsp: 240,
-        bram18: 240,
+      target_part: "xczu9eg-ffvb1156-2-e",
+      zcu102_capacity: {
+        lut: 274080,
+        ff: 548160,
+        dsp: 2520,
+        bram18: 1824,
       },
     },
     operation,
@@ -1300,6 +1618,74 @@ function buildFailureLogs(
     verif_result_json: result,
     ...extraLogs,
   };
+}
+
+function failureText(result: VerifResult): string {
+  return [
+    result.iverilog_stderr,
+    result.verilator_stderr,
+    result.fix_hint,
+    result.classifier_reason,
+    result.violated_constraint,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+}
+
+function isToolchainInfrastructureFailure(result: VerifResult): boolean {
+  if (result.status_class === "tb_setup_error") return true;
+  const text = failureText(result);
+  return (
+    /exited non-zero without diagnostic output/i.test(text) ||
+    /exit_code=3221225794/i.test(text) ||
+    /0xC0000002/i.test(text) ||
+    /STATUS_NOT_IMPLEMENTED/i.test(text) ||
+    /toolchain|runtime setup failure|Assayer runner crashed|Vivado failed before producing/i.test(text)
+  );
+}
+
+function deterministicFailureClassification(result: VerifResult): FailureClassification | null {
+  if (isToolchainInfrastructureFailure(result)) {
+    return {
+      category: "toolchain_infra",
+      violated_resource: null,
+      violated_constraint: result.violated_constraint ?? result.failure_class ?? "toolchain_or_testbench_setup",
+      rationale:
+        "Deterministic evidence says the RTL did not receive a trustworthy compiler/simulation verdict because the local toolchain or testbench setup failed.",
+    };
+  }
+
+  if (result.failure_class === "architectural_unsupported") {
+    return {
+      category: "architectural_fit",
+      violated_resource: result.violated_resource ?? null,
+      violated_constraint: result.violated_constraint ?? "architectural_unsupported",
+      rationale: "The deterministic capability gate reported an unsupported architecture/contract fit.",
+    };
+  }
+
+  if (result.status === "syntax_error") {
+    return {
+      category: "code_bug",
+      violated_resource: null,
+      violated_constraint: result.failure_class ?? "verilog_syntax",
+      rationale: "The compiler produced a real syntax/elaboration failure for the generated RTL.",
+    };
+  }
+
+  return null;
+}
+
+function isTransientAgentOrQuotaFailure(reason: string, result: VerifResult): boolean {
+  const text = `${reason}\n${failureText(result)}`;
+  return /dispatch_failed|classifier_unavailable|rate limit|usage limit|quota|You've hit your limit|API|overloaded|timeout/i.test(text);
+}
+
+function shouldPersistContractManualCorrection(reason: string, result: VerifResult): boolean {
+  if (isToolchainInfrastructureFailure(result)) return false;
+  if (result.failure_category === "toolchain_infra") return false;
+  if (isTransientAgentOrQuotaFailure(reason, result)) return false;
+  return true;
 }
 
 const FOUNDRY_HISTORY = new Map<string, FoundryVersionRecord[]>();
@@ -1621,17 +2007,86 @@ async function closestDocsForNewDoc(
   return snippets.slice(0, 10);
 }
 
-function contractHasDocCoverage(state: DocLifecycleState, layer: LayerIR): boolean {
+type CoveringDoc = {
+  tier: "protected" | "active" | "probationary";
+  path: string;
+  doc_id?: string;
+};
+
+/**
+ * Locate any existing pattern doc that covers the layer's
+ * (contract_id, op_type, kernel signature). Walks all three live tiers
+ * (`protected`, `active`, `probationary`) and returns the first match in
+ * priority order, or `null` when no doc covers this layer.
+ *
+ * Used by:
+ *   - `maybeBuildCreateNewDocRequest` to decide whether Foundry needs
+ *     `create_new_doc_request` context with closest-family docs.
+ *   - The `self_improve_doc_request` guard: when coverage exists we do not
+ *     ask Foundry to emit a `draft_doc`, so the probationary tier does not
+ *     accumulate redundant timestamped duplicates of contracts that already
+ *     have a stable doc.
+ */
+function findCoveringDoc(state: DocLifecycleState, layer: LayerIR): CoveringDoc | null {
+  // Tier 1: protected. Flat-bus is the only contract with file-based
+  // protected coverage today (`02_conv1x1.md`, `03_conv3x3_pad1.md`,
+  // `04_conv7x7_pad3.md`, `05_add_quantized.md`, `06_relu.md`, `07_maxpool.md`).
+  // Other contracts inherit no protected coverage by design.
   if (currentContractId(layer) === "flat-bus") {
     const coveragePath = protectedPatternCoveragePath(layer);
-    return coveragePath !== null && existsSync(absFromRepo(coveragePath));
+    if (coveragePath !== null && existsSync(absFromRepo(coveragePath))) {
+      return { tier: "protected", path: coveragePath };
+    }
   }
-  return Object.values(state.docs).some(
-    (doc) =>
-      doc.status !== "archived" &&
-      doc.op_type === layer.op_type &&
-      docContractId(doc) === currentContractId(layer),
-  );
+
+  // Tier 2 + 3: active / probationary. Match by op_type + contract_id, with
+  // an extra kernel-signature gate for flat-bus convs so a probationary 1x1
+  // doc cannot claim to cover a 5x5 layer. Non-flat-bus contracts are
+  // themselves the discriminator so a single doc per (op, contract) is the
+  // granularity the lifecycle has historically tracked there.
+  const layerKernelSignature =
+    layer.op_type === "conv2d" && layer.weight_shape.length >= 4
+      ? `${layer.weight_shape[2]}x${layer.weight_shape[3]}`
+      : null;
+  const requireFlatBusKernelMatch =
+    currentContractId(layer) === "flat-bus" && layerKernelSignature !== null;
+
+  const tierRank: Record<"active" | "probationary", number> = { active: 0, probationary: 1 };
+  const candidates = Object.values(state.docs)
+    .filter((doc) => {
+      if (doc.status !== "active" && doc.status !== "probationary") return false;
+      if (!docAppliesToLayer(doc, layer)) return false;
+      if (!requireFlatBusKernelMatch) return true;
+      // Flat-bus + conv2d: require the doc's spec_hash to mention the same
+      // kernel signature. Spec hashes follow `conv2d_<ic>x<oc>x<kh>x<kw>_...`
+      // so we look for both the canonical infix and the maxpool-style
+      // `_k<kh>x<kw>_` form. Seeded docs with synthetic hashes (test
+      // fixtures) fail this check, which is the desired behaviour — they
+      // should not silently claim coverage for kernels they were never
+      // tagged with.
+      if (layerKernelSignature === null) return true;
+      return (
+        doc.spec_hash.includes(`x${layerKernelSignature}_`) ||
+        doc.spec_hash.includes(`_k${layerKernelSignature}_`)
+      );
+    })
+    .sort((a, b) => {
+      const ta = tierRank[a.status as "active" | "probationary"];
+      const tb = tierRank[b.status as "active" | "probationary"];
+      return ta !== tb ? ta - tb : a.id.localeCompare(b.id);
+    });
+
+  if (candidates.length === 0) return null;
+  const match = candidates[0];
+  return {
+    tier: match.status === "active" ? "active" : "probationary",
+    path: match.pattern_path,
+    doc_id: match.id,
+  };
+}
+
+function contractHasDocCoverage(state: DocLifecycleState, layer: LayerIR): boolean {
+  return findCoveringDoc(state, layer) !== null;
 }
 
 async function maybeBuildCreateNewDocRequest(
@@ -1912,6 +2367,13 @@ async function writeProbationaryDocDraft(
   createNewDocRequest: CreateNewDocRequest | null = null,
 ): Promise<void> {
   if (!draft) {
+    // Suppress the "draft missing" warning when the doc-coverage guard
+    // intentionally suppressed the wrapper schema for this layer — there
+    // is no agent contract for `draft_doc` to honour in that case.
+    const coverageState = await loadDocLifecycleState();
+    if (findCoveringDoc(coverageState, layer) !== null) {
+      return;
+    }
     await appendRunLog(
       {
         event: "doc_lifecycle_draft_missing",
@@ -2019,7 +2481,8 @@ export function buildFailureClassifierPrompt(input: FailureClassifierInput): str
     "",
     "Categories:",
     "- code_bug: the current contract is still viable; a retry/repair could fix typos, syntax errors, signedness, simple logic mistakes, latency mismatches, indexing bugs, or missing pipeline registers.",
-    "- architectural_fit: the current contract is not viable; a different contract or tiling/resource strategy is needed. Examples: bus width exceeds the configured cap, resource utilization exceeds Artix-7 capacity, DSP/BRAM/LUT/FF overflow, memory cannot map to BRAM, BRAM port/capacity pressure, or an explicit synthesis/place constraint cannot be satisfied by local RTL repair.",
+    "- architectural_fit: the current contract is not viable; a different contract or tiling/resource strategy is needed. Examples: bus width exceeds the configured cap, resource utilization exceeds ZCU102 / XCZU9EG capacity, DSP48E2/BRAM/LUT/FF overflow, memory cannot map to BRAM (the XCZU9EG has no UltraRAM), BRAM port/capacity pressure, or an explicit synthesis/place constraint cannot be satisfied by local RTL repair.",
+    "- toolchain_infra: the RTL did not receive a trustworthy verdict because the compiler, simulator, Vivado runner, sidecar paths, Windows/WSL path translation, or API/tool dispatch failed before useful RTL diagnostics existed.",
     "- unknown: evidence is insufficient or contradictory; escalate instead of spending blind retries.",
     "",
     "Contract-fit indicators to look for:",
@@ -2029,6 +2492,7 @@ export function buildFailureClassifierPrompt(input: FailureClassifierInput): str
     "- explicit unsupported-mode/capability gates from the orchestrator.",
     "",
     "For architectural_fit, set `violated_resource` or `violated_constraint` to the specific resource/constraint named by the logs, for example `DSP`, `BRAM18`, `LUT`, `MAX_SUPPORTED_BUS_BITS`, `FMAX_TARGET_MHZ`, or `weight_memory_bram_capacity`.",
+    "For toolchain_infra, set `violated_constraint` to the failing setup surface, for example `iverilog_no_diagnostics`, `windows_path_translation`, `vivado_tool_error`, or `agent_dispatch_failed`.",
     "For code_bug or unknown, set both fields to null unless a specific hard constraint is still useful evidence.",
     "",
     "Output schema:",
@@ -2130,6 +2594,30 @@ async function classifyFailedModule(
     return result;
   }
 
+  const deterministic = deterministicFailureClassification(result);
+  if (deterministic) {
+    const enriched: VerifResult = {
+      ...result,
+      failure_category: deterministic.category,
+      violated_resource: deterministic.violated_resource ?? undefined,
+      violated_constraint: deterministic.violated_constraint ?? undefined,
+      classifier_reason: deterministic.rationale,
+    };
+    await appendRunLog(
+      {
+        event: "failure_classifier_result",
+        module_id: layer.module_id,
+        classification: deterministic,
+        failure_class: result.failure_class ?? null,
+        status: result.status,
+        status_class: result.status_class ?? null,
+        deterministic: true,
+      },
+      runtime,
+    );
+    return enriched;
+  }
+
   const input: FailureClassifierInput = {
     module_spec: layer,
     contract: buildModuleContractSummary(layer),
@@ -2155,12 +2643,15 @@ async function classifyFailedModule(
     classifierResult = run.result;
     recordUsageFromResult(manager, run.result);
   } catch (error: unknown) {
-    classification = enforceKnownContractBreach(result, {
-      category: "unknown",
-      violated_resource: null,
-      violated_constraint: "failure_classifier_unavailable",
-      rationale: `Failure classifier did not return a usable verdict: ${error instanceof Error ? error.message : String(error)}`,
-    });
+    classification =
+      deterministicFailureClassification(result) ??
+      enforceKnownContractBreach(result, {
+        category: "code_bug",
+        violated_resource: null,
+        violated_constraint: "failure_classifier_unavailable",
+        rationale:
+          `Failure classifier did not return a usable verdict; using code_bug as the retryable fallback for a structured RTL failure: ${error instanceof Error ? error.message : String(error)}`,
+      });
   }
 
   const enriched: VerifResult = {
@@ -3110,7 +3601,7 @@ export async function ensureLayerIr(
 }> {
   const layerIrPath = resolveFromSdk(PIPELINE_CONFIG.layer_ir_path);
   const layerIrFingerprintPath = `${layerIrPath}.checkpoint`;
-  const checkpointAbs = path.resolve(checkpointPath);
+  const checkpointAbs = resolveInputPathForCurrentHost(checkpointPath);
 
   if (await pathExists(layerIrPath)) {
     // Only reuse layer_ir.json if it was generated from the same checkpoint
@@ -3119,12 +3610,14 @@ export async function ensureLayerIr(
     let fingerprintMatches = false;
     try {
       const prior = (await readFile(layerIrFingerprintPath, "utf8")).trim();
-      fingerprintMatches = prior === checkpointAbs;
+      fingerprintMatches = pathFingerprintKey(prior) === pathFingerprintKey(checkpointAbs);
     } catch {
       fingerprintMatches = false;
     }
     if (fingerprintMatches) {
-      const pipelineIr = await readJsonFile<PipelineIR>(layerIrPath, pipelineIrZod);
+      const pipelineIr = normalizePipelineIrForCurrentHost(
+        await readJsonFile<PipelineIR>(layerIrPath, pipelineIrZod),
+      );
       validateAddModulePacking(pipelineIr);
       return { pipelineIr };
     }
@@ -3145,56 +3638,30 @@ export async function ensureLayerIr(
   await appendRunLog(
     {
       event: "action",
-      action: "invoke_cartographer",
+      action: "read_weights_deterministic",
       payload,
     },
     runtime,
   );
 
-  const result = await runDelegatedAgent<PipelineIR>(
-    "cartographer",
-    payload,
-    pipelineIrOutputFormat,
-    pipelineIrZod,
-    runtime,
-  );
-
-  const cartographerAudits = extractToolUseAudits(result.messages, {
-    agent: "Cartographer",
-    module_id: null,
-    nowIso: runtime.now().toISOString(),
-  });
-  await appendToolUseAudits(cartographerAudits);
-  await appendRunLog(
-    {
-      event: "agent_tool_use_summary",
-      agent: "Cartographer",
-      module_id: null,
-      ...summarizeToolUse(cartographerAudits),
-    },
-    runtime,
+  const pipelineIr = normalizePipelineIrForCurrentHost(
+    await runtime.readWeightsFn(checkpointAbs, payload.quantization_config),
   );
 
   await appendRunLog(
     {
-      event: "agent_result",
-      agent: "Cartographer",
-      total_cost_usd: result.result.total_cost_usd,
-      modelUsage: result.result.modelUsage,
-      payload: result.payload,
+      event: "cartographer_bypassed_deterministic_read_weights",
+      checkpoint_path: checkpointAbs,
+      layer_count: pipelineIr.layers.length,
     },
     runtime,
   );
 
-  validateAddModulePacking(result.payload);
-  await writeJsonFile(layerIrPath, result.payload);
+  validateAddModulePacking(pipelineIr);
+  await writeJsonFile(layerIrPath, pipelineIr);
   await writeFile(layerIrFingerprintPath, `${checkpointAbs}\n`, "utf8");
   return {
-    pipelineIr: result.payload,
-    bootstrapUsage: {
-      total_cost_usd: result.result.total_cost_usd,
-      modelUsage: result.result.modelUsage as Record<string, ModelUsageEntry>,
-    },
+    pipelineIr,
   };
 }
 
@@ -3213,17 +3680,42 @@ const MCP_TOOLS_MODULE_PATH = path.basename(__dirname) === "dist"
   ? pathToFileURL(path.resolve(repoRoot, "mcp", "dist", "tools.js")).href
   : pathToFileURL(path.resolve(repoRoot, "mcp", "tools.ts")).href;
 
+function expectedLatencyCyclesForContract(layer: LayerIR, sidecarFields: Record<string, unknown>): number {
+  const contractId = currentContractId(layer);
+  const params = layer.contract_params ?? {};
+  switch (contractId) {
+    case "tiled-streaming":
+      return layer.pipeline_latency_cycles + Math.max(1, Number(sidecarFields.beats_per_input_sample) || 1) - 1;
+    case "dram-backed-weights":
+      return (
+        layer.pipeline_latency_cycles +
+        (Number(params.weight_prefetch_latency_cycles) || 0) +
+        (Number(params.prefetch_underrun_slack_cycles) || 0)
+      );
+    case "activation-double-buffering":
+      return layer.pipeline_latency_cycles + (Number(params.activation_buffer_fill_cycles) || 0);
+    case "weight-tiling": {
+      const tileCount = Math.max(1, Number(params.weight_tile_count) || 1);
+      const tileLoadLatency = Number(params.weight_tile_load_cycles) || 0;
+      return layer.pipeline_latency_cycles * tileCount + tileLoadLatency * tileCount;
+    }
+    case "flat-bus":
+      return layer.pipeline_latency_cycles;
+  }
+}
+
 async function loadRetrospectorKnowledgeDoc(layer: LayerIR): Promise<RtlKnowledgeDoc> {
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
     get_rtl_patterns: (
       op_type: string,
       kernel_h?: number,
       kernel_w?: number,
+      contract_id?: ContractId,
     ) => Promise<RtlKnowledgeDoc>;
   };
   const kernelH = layer.op_type === "conv2d" ? layer.weight_shape[2] : undefined;
   const kernelW = layer.op_type === "conv2d" ? layer.weight_shape[3] : undefined;
-  return mcpTools.get_rtl_patterns(layer.op_type, kernelH, kernelW);
+  return mcpTools.get_rtl_patterns(layer.op_type, kernelH, kernelW, currentContractId(layer));
 }
 
 async function invokeVivado(module: VerilogModule, layer: LayerIR): Promise<SynthesisReport> {
@@ -3320,6 +3812,12 @@ async function processSynthesisOutcome(
         dsp_count: report.dsp_count,
         bram18_equiv: report.bram18_equiv,
         fmax_mhz: report.fmax_mhz,
+        // Surface both setup and hold WNS for visibility. Hold is not a
+        // pass/fail signal at synth-only stage but a negative value tells
+        // you the design will need P&R-stage attention (place_design /
+        // opt_design hold-fixing) before bitstream.
+        setup_wns_ns: report.setup_wns_ns ?? report.wns_ns,
+        hold_wns_ns: report.hold_wns_ns,
       },
       runtime,
     );
@@ -3344,6 +3842,8 @@ async function processSynthesisOutcome(
         bram36_count: report.bram36_count,
         bram18_equiv: report.bram18_equiv,
         wns_ns: report.wns_ns,
+        setup_wns_ns: report.setup_wns_ns ?? report.wns_ns,
+        hold_wns_ns: report.hold_wns_ns,
         timing_met: report.timing_met,
         fmax_mhz: report.fmax_mhz,
       },
@@ -3365,6 +3865,8 @@ async function processSynthesisOutcome(
         bram36_count: report.bram36_count,
         bram18_equiv: report.bram18_equiv,
         wns_ns: report.wns_ns,
+        setup_wns_ns: report.setup_wns_ns ?? report.wns_ns,
+        hold_wns_ns: report.hold_wns_ns,
         timing_met: report.timing_met,
         fmax_mhz: report.fmax_mhz,
       },
@@ -3559,25 +4061,58 @@ async function invokeFoundry(
     runtime,
   );
 
-  const selfImproveDocRequest = options.selfImproveEnabled
-    ? {
-        enabled: true,
-        destination_tier: "probationary",
-        promotion_successes_required: PIPELINE_CONFIG.doc_promotion_success_threshold,
-        replacement_for_doc_ids: options.replacementForDocIds ?? [],
+  // Doc-coverage guard. When self-improve is enabled we only ask Foundry to
+  // emit a `draft_doc` if no existing pattern doc already covers this
+  // layer's (contract_id, op_type, kernel) tuple. This prevents the
+  // probationary tier from accumulating redundant timestamped duplicates
+  // every time a covered contract runs successfully, and lets the wrapper
+  // schema (`{module, draft_doc}`) be replaced by the simpler `{module}`
+  // shape on covered runs — which materially reduces Foundry's
+  // malformed-final-message rate.
+  const docLifecycleStateForGuard = options.selfImproveEnabled
+    ? await loadDocLifecycleState()
+    : null;
+  const coveringDocForLayer = docLifecycleStateForGuard
+    ? findCoveringDoc(docLifecycleStateForGuard, layerIr)
+    : null;
+  const selfImproveDocRequest =
+    options.selfImproveEnabled && coveringDocForLayer === null
+      ? {
+          enabled: true,
+          destination_tier: "probationary",
+          promotion_successes_required: PIPELINE_CONFIG.doc_promotion_success_threshold,
+          replacement_for_doc_ids: options.replacementForDocIds ?? [],
+          contract_id: currentContractId(layerIr),
+          contract_key: contractStateKeyForLayer(layerIr),
+        }
+      : undefined;
+  if (options.selfImproveEnabled && coveringDocForLayer !== null) {
+    await appendRunLog(
+      {
+        event: "self_improve_doc_request_skipped",
+        module_id: layerIr.module_id,
         contract_id: currentContractId(layerIr),
         contract_key: contractStateKeyForLayer(layerIr),
-      }
-    : undefined;
+        covering_doc_tier: coveringDocForLayer.tier,
+        covering_doc_path: coveringDocForLayer.path,
+        ...(coveringDocForLayer.doc_id ? { covering_doc_id: coveringDocForLayer.doc_id } : {}),
+        reason: "existing_doc_covers_contract_op_kernel",
+      },
+      runtime,
+    );
+  }
   const createNewDocRequest = options.selfImproveEnabled
     ? await maybeBuildCreateNewDocRequest(layerIr, options.newDocFailureContext, runtime)
     : null;
+  const preloadedRtlPatterns = await loadRetrospectorKnowledgeDoc(layerIr);
   const foundryPayload = {
     layer_ir: layerIr,
     expected_spec_hash: computeExpectedSpecHash(layerIr),
+    preloaded_rtl_patterns: preloadedRtlPatterns,
     contract_options: {
       selected_contract: contractPlanForLayer(layerIr),
       ordered_contracts: CONTRACT_PLANS,
+      expected_latency_cycles: expectedLatencyCyclesForContract(layerIr, contractSidecarFields(layerIr)),
       covered_by_existing_doc: createNewDocRequest === null,
     },
     write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
@@ -3598,9 +4133,15 @@ async function invokeFoundry(
   // instead of the VerilogModule JSON, even though it correctly called
   // write_verilog.  Recover from disk when the JSON parse / schema validation
   // fails but the .v file is present.
+  // Use the `{module, draft_doc}` wrapper schema only when we are actually
+  // asking Foundry for a draft. On self-improve runs whose contract+kernel
+  // is already covered (selfImproveDocRequest === undefined), the wrapper is
+  // unnecessary surface area and noticeably more likely to come back
+  // malformed — fall back to the plain `{VerilogModule}` schema then.
+  const useDraftDocWrapperSchema = selfImproveDocRequest !== undefined;
   let result: RtlAgentRunResult;
   try {
-    if (options.selfImproveEnabled) {
+    if (useDraftDocWrapperSchema) {
       const withDoc = await runDelegatedAgent<RtlAgentWithDoc>(
         "foundry",
         foundryPayload,
@@ -3780,6 +4321,9 @@ async function runAssayerDeterministic(
     resolveFromSdk(PIPELINE_CONFIG.reports_dir),
     `${module.module_id}.results.json`,
   );
+  const contractFields = contractSidecarFields(layer);
+  const contractGoldens = await materializeContractGoldens(layer);
+  const expectedLatencyCycles = expectedLatencyCyclesForContract(layer, contractFields);
   const sidecar = {
     module_name: module.module_id,
     module_id: module.module_id,
@@ -3793,13 +4337,13 @@ async function runAssayerDeterministic(
     bus_bytes_per_sample: layer.input_width_bits / 8,
     input_width_bits: layer.input_width_bits,
     output_width_bits: layer.output_width_bits,
-    pipeline_latency_cycles: layer.pipeline_latency_cycles,
+    pipeline_latency_cycles: expectedLatencyCycles,
     clock_period_ns: layer.clock_period_ns,
-    golden_inputs_path: layer.golden_inputs_path,
-    golden_outputs_path: layer.golden_outputs_path,
+    golden_inputs_path: contractGoldens.goldenInputsPath,
+    golden_outputs_path: contractGoldens.goldenOutputsPath,
     results_path: resultsPath,
     testbench_template_path: contractTestbenchTemplatePath(resolveLayerContractId(layer)),
-    ...contractSidecarFields(layer),
+    ...contractFields,
   };
   await mkdir(path.dirname(sidecarPath), { recursive: true });
   await mkdir(path.dirname(resultsPath), { recursive: true });
@@ -3811,7 +4355,9 @@ async function runAssayerDeterministic(
   const iverilog = await mcpTools.run_iverilog(module.verilog_source, module.module_id);
   if (!iverilog.success) {
     const noDiagnosticIverilogFailure =
-      /iverilog exited non-zero without diagnostic output/i.test(iverilog.stderr);
+      /iverilog exited non-zero without diagnostic output|exit_code=3221225794|0xC0000002|STATUS_NOT_IMPLEMENTED/i.test(
+        iverilog.stderr,
+      );
     if (noDiagnosticIverilogFailure) {
       return {
         module_id: module.module_id,
@@ -3819,7 +4365,7 @@ async function runAssayerDeterministic(
         status_class: "tb_setup_error",
         timing_pass: false,
         timing_actual_cycles: -1,
-        timing_expected_cycles: layer.pipeline_latency_cycles,
+        timing_expected_cycles: expectedLatencyCycles,
         iverilog_stderr: iverilog.stderr,
         fix_hint: [
           "iverilog exited non-zero without compiler diagnostics.",
@@ -3837,7 +4383,7 @@ async function runAssayerDeterministic(
       status: "syntax_error",
       timing_pass: false,
       timing_actual_cycles: 0,
-      timing_expected_cycles: layer.pipeline_latency_cycles,
+      timing_expected_cycles: expectedLatencyCycles,
       iverilog_stderr: iverilog.stderr,
       fix_hint: [
         "iverilog lint rejected the RTL before Verilator could run.",
@@ -4063,14 +4609,45 @@ async function invokeSurgeon(
     runtime.now().toISOString(),
   ].join(":");
   const trimmedVerif = trimVerifResultForSurgeon(verifResult);
+
+  // Mirror the doc-coverage guard from `invokeFoundry`: only ask Surgeon for
+  // a `draft_doc` when no existing pattern doc already covers this layer's
+  // contract+op+kernel. See `findCoveringDoc`.
+  const surgeonDocLifecycleState = options.selfImproveEnabled
+    ? await loadDocLifecycleState()
+    : null;
+  const surgeonCoveringDoc = surgeonDocLifecycleState
+    ? findCoveringDoc(surgeonDocLifecycleState, layerIr)
+    : null;
+  const surgeonAsksForDraftDoc =
+    options.selfImproveEnabled === true && surgeonCoveringDoc === null;
+  if (options.selfImproveEnabled && surgeonCoveringDoc !== null) {
+    await appendRunLog(
+      {
+        event: "self_improve_doc_request_skipped",
+        agent: "Surgeon",
+        module_id: layerIr.module_id,
+        contract_id: currentContractId(layerIr),
+        contract_key: contractStateKeyForLayer(layerIr),
+        covering_doc_tier: surgeonCoveringDoc.tier,
+        covering_doc_path: surgeonCoveringDoc.path,
+        ...(surgeonCoveringDoc.doc_id ? { covering_doc_id: surgeonCoveringDoc.doc_id } : {}),
+        reason: "existing_doc_covers_contract_op_kernel",
+      },
+      runtime,
+    );
+  }
+
+  const preloadedRtlPatterns = await loadRetrospectorKnowledgeDoc(layerIr);
   const surgeonPayload = {
     broken_module: brokenModule,
     verif_result: trimmedVerif,
     layer_ir: layerIr,
+    preloaded_rtl_patterns: preloadedRtlPatterns,
     prior_attempts,
     retry_seed: retrySeed,
     write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
-    ...(options.selfImproveEnabled
+    ...(surgeonAsksForDraftDoc
       ? {
           self_improve_doc_request: {
             enabled: true,
@@ -4084,7 +4661,7 @@ async function invokeSurgeon(
 
   let result: RtlAgentRunResult;
   try {
-    if (options.selfImproveEnabled) {
+    if (surgeonAsksForDraftDoc) {
       const withDoc = await runDelegatedAgent<RtlAgentWithDoc>(
         "surgeon",
         surgeonPayload,
@@ -4189,6 +4766,44 @@ async function attemptNextContractOrEscalate(input: {
   reason: string;
 }): Promise<boolean> {
   const currentPlan = contractPlanForLayer(input.currentLayer);
+  if (!shouldPersistContractManualCorrection(input.reason, input.result)) {
+    const before = input.manager.getState().modules[input.moduleId];
+    const nonContractResult: VerifResult = {
+      ...input.result,
+      module_id: input.moduleId,
+      status: "fail",
+      failure_category:
+        input.result.failure_category ??
+        (isToolchainInfrastructureFailure(input.result) ? "toolchain_infra" : "unknown"),
+      violated_constraint: input.result.violated_constraint ?? input.reason,
+      classifier_reason:
+        input.result.classifier_reason ??
+        "Failure was not persisted as contract manual-correction state because it was classified as infrastructure, tool/API availability, or quota-related.",
+    };
+    input.manager.applyVerifResult(input.moduleId, nonContractResult);
+    await logStateTransition(
+      input.manager,
+      input.moduleId,
+      before,
+      input.manager.getState().modules[input.moduleId],
+      "contract_manual_correction_suppressed",
+      input.runtime,
+    );
+    await input.manager.saveState(input.statePath);
+    await appendRunLog(
+      {
+        event: "contract_manual_correction_suppressed",
+        module_id: input.moduleId,
+        contract_id: currentPlan.id,
+        contract_key: contractStateKeyForLayer(input.currentLayer),
+        reason: input.reason,
+        result: nonContractResult,
+      },
+      input.runtime,
+    );
+    return true;
+  }
+
   await flagContractForManualCorrection(
     input.contractState,
     input.currentLayer,
@@ -4548,7 +5163,6 @@ async function maybeRunRetrospectorFinalAttempt(
   await manager.saveState(statePath);
 
   if (afterApply === "pass") {
-    passedModules.set(moduleId, { module: foundryResult.payload, layer });
     await processSynthesisOutcome(
       manager,
       moduleId,
@@ -4560,6 +5174,7 @@ async function maybeRunRetrospectorFinalAttempt(
       selfImproveEnabled,
     );
     if (manager.getState().modules[moduleId] === "pass") {
+      passedModules.set(moduleId, { module: foundryResult.payload, layer });
       await finalizeSuccessfulRtlDocs(
         foundryResult.payload,
         layer,
@@ -4641,11 +5256,14 @@ function computeExpectedSpecHash(layer: LayerIR): string {
     const stride = layer.stride && layer.stride.length >= 2 ? `_st${layer.stride[0]}x${layer.stride[1]}` : "";
     const padding =
       layer.padding && layer.padding.length >= 2 ? `_p${layer.padding[0]}x${layer.padding[1]}` : "";
+    const dilation =
+      layer.dilation && layer.dilation.length >= 2 ? `_d${layer.dilation[0]}x${layer.dilation[1]}` : "";
+    const groups = layer.groups ? `_g${layer.groups}` : "";
     // mac_parallelism affects the FSM's OC-group iteration, so two layers
     // with identical geometry but different mac_parallelism have structurally
     // different RTL and MUST NOT be clone-substituted for each other.
     const mp = layer.mac_parallelism ? `_mp${layer.mac_parallelism}` : "";
-    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}${mp}_i${layer.input_width_bits}_o${layer.output_width_bits}${contractSuffix}`;
+    return `conv2d_${ic}x${oc}x${kh}x${kw}_${spatial}${stride}${padding}${dilation}${groups}${mp}_i${layer.input_width_bits}_o${layer.output_width_bits}${contractSuffix}`;
   }
   if (layer.op_type === "maxpool") {
     // The schema's superRefine guarantees these three arrays exist and are
@@ -4666,6 +5284,9 @@ function computeExpectedSpecHash(layer: LayerIR): string {
 
 /** Choose SCALE_MULT/SCALE_SHIFT that minimise the relative approximation error. */
 function computeScaleApprox(scaleFactor: number): { mult: number; shift: number } {
+  if (scaleFactor <= 0) {
+    throw new Error(`Scale factor must be positive; got ${scaleFactor}.`);
+  }
   let best = { mult: 1, shift: 8, err: Infinity };
   for (let shift = 8; shift <= 23; shift++) {
     const mult = Math.round(scaleFactor * Math.pow(2, shift));
@@ -4675,6 +5296,11 @@ function computeScaleApprox(scaleFactor: number): { mult: number; shift: number 
         best = { mult, shift, err };
       }
     }
+  }
+  if (!Number.isFinite(best.err)) {
+    throw new Error(
+      `Scale factor ${scaleFactor} is outside the representable SCALE_MULT/SCALE_SHIFT range.`,
+    );
   }
   return { mult: best.mult, shift: best.shift };
 }
@@ -4707,6 +5333,11 @@ function computeAddFusedScaleApprox(
         best = { mult, shift, err };
       }
     }
+  }
+  if (!Number.isFinite(best.err)) {
+    throw new Error(
+      `Add scale ratio ${ratio} is outside the representable fused multiplier range.`,
+    );
   }
   return { mult: best.mult, shift: best.shift };
 }
@@ -5387,7 +6018,6 @@ export async function runPipeline(
         await manager.saveState(statePath);
 
         if (statusAfterApply === "pass") {
-          passedModules.set(nextAction.module_id, { module: addModule, layer });
           await processSynthesisOutcome(
             manager,
             nextAction.module_id,
@@ -5398,6 +6028,9 @@ export async function runPipeline(
             runtime,
             selfImproveEnabled,
           );
+          if (manager.getState().modules[nextAction.module_id] === "pass") {
+            passedModules.set(nextAction.module_id, { module: addModule, layer });
+          }
         }
 
         if (statusAfterApply === "fail_abort") {
@@ -5460,8 +6093,10 @@ export async function runPipeline(
           await manager.saveState(statePath);
 
           if (statusAfterApply === "pass") {
-            passedModules.set(nextAction.module_id, { module: cloned, layer });
             await processSynthesisOutcome(manager, nextAction.module_id, cloned, layer, cloneVerif, statePath, runtime, selfImproveEnabled);
+            if (manager.getState().modules[nextAction.module_id] === "pass") {
+              passedModules.set(nextAction.module_id, { module: cloned, layer });
+            }
           }
 
           if (statusAfterApply === "fail_abort") {
@@ -5527,7 +6162,6 @@ export async function runPipeline(
       await manager.saveState(statePath);
 
       if (statusAfterApply === "pass") {
-        passedModules.set(nextAction.module_id, { module: foundryResult.payload, layer });
         await processSynthesisOutcome(
           manager,
           nextAction.module_id,
@@ -5539,6 +6173,7 @@ export async function runPipeline(
           selfImproveEnabled,
         );
         if (manager.getState().modules[nextAction.module_id] === "pass") {
+          passedModules.set(nextAction.module_id, { module: foundryResult.payload, layer });
           await finalizeSuccessfulRtlDocs(
             foundryResult.payload,
             layer,
@@ -5761,6 +6396,7 @@ export async function runPipeline(
           selfImproveEnabled,
         );
         if (manager.getState().modules[nextAction.module_id] === "pass") {
+          passedModules.set(nextAction.module_id, { module: surgeonResult.payload, layer });
           await finalizeSuccessfulRtlDocs(
             surgeonResult.payload,
             layer,

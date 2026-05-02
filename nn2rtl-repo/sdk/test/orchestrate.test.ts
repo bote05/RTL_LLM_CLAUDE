@@ -188,8 +188,8 @@ describe("orchestrate helpers", () => {
         timing: { pipeline_latency_cycles: 100, clock_period_ns: 20, fmax_target_mhz: 50 },
         capability_limits: {
           max_supported_bus_bits: 4096,
-          target_part: "xc7a100tcsg324-1",
-          artix7_100t_capacity: { lut: 63400, ff: 126800, dsp: 240, bram18: 240 },
+          target_part: "xczu9eg-ffvb1156-2-e",
+          zcu102_capacity: { lut: 274080, ff: 548160, dsp: 2520, bram18: 1824 },
         },
         operation: { op_type: "conv2d" },
       },
@@ -260,8 +260,8 @@ describe("orchestrate helpers", () => {
         timing: { pipeline_latency_cycles: 3, clock_period_ns: 20, fmax_target_mhz: 50 },
         capability_limits: {
           max_supported_bus_bits: 4096,
-          target_part: "xc7a100tcsg324-1",
-          artix7_100t_capacity: { lut: 63400, ff: 126800, dsp: 240, bram18: 240 },
+          target_part: "xczu9eg-ffvb1156-2-e",
+          zcu102_capacity: { lut: 274080, ff: 548160, dsp: 2520, bram18: 1824 },
         },
         operation: { op_type: "add" },
       },

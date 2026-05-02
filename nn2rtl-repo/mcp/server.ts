@@ -94,7 +94,7 @@ export const toolDefinitions = [
     name: "get_rtl_patterns",
     description:
       "Look up architectural-pattern markdown and an optional proven reference " +
-      "Verilog for an op_type (+ kernel dims for conv2d). Call this before " +
+      "Verilog for an op_type (+ kernel dims for conv2d), optionally filtered by contract_id. Call this before " +
       "emitting any Verilog (Foundry) or when diagnosing a synth / sim failure " +
       "(Surgeon). Returns { pattern_markdown, reference_verilog, license_notice }.",
     inputSchema: toJsonSchema(getRtlPatternsInput),
@@ -166,6 +166,7 @@ async function handleGetRtlPatterns(
     input.op_type,
     input.kernel_h,
     input.kernel_w,
+    input.contract_id,
   );
   return toToolResult(result as unknown as Record<string, unknown>);
 }

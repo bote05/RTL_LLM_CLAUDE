@@ -41,6 +41,8 @@ export interface LayerIR {
   // Conv2d geometry — populated by the modern frontends when op_type == "conv2d"
   stride?: number[];
   padding?: number[];
+  dilation?: number[];
+  groups?: number;
   // Number of accumulator lanes in each output-channel group. In the current
   // serialized-read conv contract, only one lane issues a weight read / MAC
   // per cycle, selected by lane_counter; MP still controls OC_PASSES and the
@@ -100,7 +102,7 @@ export type FailureClass =
   | "structural_preflight_failed"
   | "manual_correction_needed";
 
-export type FailureCategory = "code_bug" | "architectural_fit" | "unknown";
+export type FailureCategory = "code_bug" | "architectural_fit" | "toolchain_infra" | "unknown";
 
 export interface FailureClassification {
   category: FailureCategory;

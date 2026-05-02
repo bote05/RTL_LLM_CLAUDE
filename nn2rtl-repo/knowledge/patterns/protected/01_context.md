@@ -4,6 +4,15 @@ Every module generated for nn2rtl MUST satisfy the contract below. This file
 is prepended to every `get_rtl_patterns` response regardless of op_type, so the
 op-specific files below can assume it already applies.
 
+> **Target part note.** The active synthesis target is ZCU102 / XCZU9EG
+> (`xczu9eg-ffvb1156-2-e`): 274,080 LUT, 548,160 FF, 2,520 DSP48E2,
+> 1,824 BRAM18-equivalent, **no UltraRAM on ZU9**. Where this and other
+> protected pattern docs mention "Artix-7", "Nexys A7", or "240 Artix-7
+> DSPs" they are explaining the historical Layer-1 milestone (see
+> `MILESTONES.md`) and the design choices it forced — the synthesizable
+> patterns (BRAM inference hints, DSP48 idioms, registered-MAC pipelines)
+> still apply on ZCU102 because the same Vivado infers them the same way.
+
 ## Canonical top-level ports
 
 Exactly these seven signals. No more, no fewer. Names and directions are fixed.

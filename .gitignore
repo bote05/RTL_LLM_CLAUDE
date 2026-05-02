@@ -21,3 +21,14 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Vitis / Vivado / DFx tool droppings (created in CWD by the EDA tools)
+*.log
+*.jou
+*.str
+vivado*.log
+vivado*.jou
+vitis_hls.log
+vitis_hls.jou
+dfx_runtime.txt
+.Xil/

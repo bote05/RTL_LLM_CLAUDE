@@ -16,6 +16,22 @@
 Each folder owns metadata, a testbench template, a golden-vector adapter, and
 a latency checker. `sdk/contracts.ts` is the shared selection logic.
 
+**Phase 8 status:** Phase 8.1 doc-coverage guard is implemented. Foundry and
+Surgeon are now only asked to emit `draft_doc` (the `{module, draft_doc}`
+wrapper schema) when no existing pattern doc covers the layer's
+`(contract_id, op_type, kernel)` tuple. The shared lookup is
+`findCoveringDoc(state, layer)` in `sdk/orchestrate.ts`, used by both the
+guard and `maybeBuildCreateNewDocRequest` so the two stay in lockstep.
+On covered runs the orchestrator logs `self_improve_doc_request_skipped`
+with the covering doc's tier and path. Side effects: (a) probationary docs
+no longer accumulate one timestamp-suffixed duplicate per successful run on
+a covered contract+kernel — so promotion-by-N-uses can finally trigger;
+(b) Foundry's malformed-final-message rate drops on covered runs because
+the wrapper schema is not requested. Phase 8.2 (full-pipeline regression
+across all 17 layer-1 modules with self-improve ON vs OFF) is still
+outstanding; the 3-module spike on `auto-approve` post-merge produced
+identical Vivado synthesis numbers (LUT/FF/DSP/BRAM/Fmax) on both passes.
+
 **Context to read before starting:**
 - `ARCHITECTURE.md` — especially the "Known Bottleneck — Spatial Convolutions Do Not Close Reliably" section (near the end). Documents what we've tried and the exact failure modes.
 - `nn2rtl-plugin/agents/foundry.md` — current Foundry system prompt and pinned template.

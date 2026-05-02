@@ -27,6 +27,7 @@ export const failureClassSchema = z.enum([
 export const failureCategorySchema = z.enum([
   "code_bug",
   "architectural_fit",
+  "toolchain_infra",
   "unknown",
 ]);
 
@@ -94,6 +95,8 @@ export const layerIrBaseSchema = z
     // Conv2d geometry — emitted by the frontends for op-aware generation/repair.
     stride: z.array(z.number().int().positive()).optional(),
     padding: z.array(z.number().int().nonnegative()).optional(),
+    dilation: z.array(z.number().int().positive()).optional(),
+    groups: z.number().int().positive().optional(),
     mac_parallelism: z.number().int().positive().optional(),
     weight_bank_paths: z.array(z.string()).optional(),
     contract_id: contractIdSchema.optional(),
@@ -300,7 +303,7 @@ export const runVivadoOutput = z
   .object({
     success: z.boolean(),
     tool: z.literal("vivado").default("vivado"),
-    part: z.string().default("xc7a100tcsg324-1"),
+    part: z.string().default("xczu9eg-ffvb1156-2-e"),
     stage: z.literal("synth").default("synth"),
     lut_count: z.number(),
     ff_count: z.number().default(0),
@@ -308,7 +311,15 @@ export const runVivadoOutput = z
     bram18_count: z.number().default(0),
     bram36_count: z.number().default(0),
     bram18_equiv: z.number().default(0),
+    // Setup-path Worst Negative Slack. `wns_ns` is the historical name and
+    // is always Setup WNS. `setup_wns_ns` is the explicit alias.
     wns_ns: z.number().nullable().default(null),
+    setup_wns_ns: z.number().nullable().default(null),
+    // Hold-path Worst Hold Slack ("WHS(ns)" in Vivado). Reported for
+    // visibility but not gated on at synth-only stage — small hold
+    // violations on a pre-placement netlist are routinely fixed during
+    // place_design / opt_design.
+    hold_wns_ns: z.number().nullable().default(null),
     timing_met: z.boolean().default(false),
     fmax_mhz: z.number(),
     report: z.string(),
@@ -326,6 +337,7 @@ export const getRtlPatternsInput = z
     op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
     kernel_h: z.number().int().positive().optional(),
     kernel_w: z.number().int().positive().optional(),
+    contract_id: contractIdSchema.optional(),
   })
   .strict();
 

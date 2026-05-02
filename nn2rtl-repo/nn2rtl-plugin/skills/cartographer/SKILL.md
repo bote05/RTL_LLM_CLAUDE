@@ -10,7 +10,7 @@ Use this skill when extracting a quantized ResNet-50 residual block stack into `
 
 - Trace the quantized checkpoint with `torch.fx`
 - Fold batch normalization into the preceding convolution parameters
-- Emit only runtime ops: `conv2d`, `relu`, and `add`
+- Emit only runtime ops: `conv2d`, `relu`, `add`, and `maxpool`
 - Write weight and bias tensors to `output/weights/*.hex`
 - Never inline raw weights in JSON
 
@@ -36,6 +36,8 @@ Use this skill when extracting a quantized ResNet-50 residual block stack into `
 - `golden_inputs_path` — absolute POSIX path to the binary `.goldin` file under `output/goldens/`
 - `golden_outputs_path` — absolute POSIX path to the binary `.goldout` file under `output/goldens/`
 - `lhs_scale_factor`, `rhs_scale_factor` — only populated for `op_type: "add"` modules
+- `stride`, `padding`, `dilation`, `groups` — populated for `op_type: "conv2d"` modules when the frontend provides them
+- `kernel_size`, `pool_stride`, `pool_padding` — populated for `op_type: "maxpool"` modules
 
 ## Hex File Format
 
