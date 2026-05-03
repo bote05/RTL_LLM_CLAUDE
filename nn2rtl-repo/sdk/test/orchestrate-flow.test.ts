@@ -167,16 +167,64 @@ async function writeUncoveredPipelineIrFixture(): Promise<{ layers: Array<Record
   return pipelineIr;
 }
 
+/**
+ * Strip `verilog_source` from any module-shaped object found at the top level
+ * or nested under `module:` so test fixtures don't have to care about the
+ * agent-output-schema split (verilog_source moved out of the agent contract;
+ * the orchestrator hydrates it from disk after the agent returns). This
+ * keeps existing fixtures (`successResult(module)`,
+ * `successRtlWithDoc(module)`) authoring full modules while letting the
+ * SDK validation see the metadata-only shape.
+ */
+function stripVerilogSourceForAgentSchema(payload: unknown): unknown {
+  if (payload === null || typeof payload !== "object") return payload;
+  const obj = payload as Record<string, unknown>;
+  if ("verilog_source" in obj && "module_id" in obj && "spec_hash" in obj) {
+    const { verilog_source: _omit, ...rest } = obj;
+    void _omit;
+    return rest;
+  }
+  if ("module" in obj && obj.module && typeof obj.module === "object") {
+    return { ...obj, module: stripVerilogSourceForAgentSchema(obj.module) };
+  }
+  return obj;
+}
+
 function successResult(structured_output: unknown, sessionId?: string): SDKResultMessage {
+  const stripped = stripVerilogSourceForAgentSchema(structured_output);
   return {
     type: "result",
     subtype: "success",
-    result: JSON.stringify(structured_output),
-    structured_output,
+    result: JSON.stringify(stripped),
+    structured_output: stripped,
     total_cost_usd: 1,
     modelUsage: { fixture: { input_tokens: 1, output_tokens: 1 } },
     ...(sessionId ? { session_id: sessionId } : {}),
   };
+}
+
+/**
+ * Writes a mock Foundry/Surgeon RTL deliverable to disk before the agent's
+ * structured output is parsed. The orchestrator now hydrates VerilogModule
+ * from the .v on disk rather than from `verilog_source` in the agent's
+ * final JSON, so mocks must materialize both `<module_id>.v` (the source
+ * orchestrator reads) and `<module_id>.meta.json` (the historical
+ * pipeline meta record). Returns the SDKResultMessage with verilog_source
+ * stripped (mirroring the new agent-output schema).
+ */
+async function persistMockRtlDeliverable(
+  module: { module_id: string; verilog_source?: string; [key: string]: unknown },
+): Promise<void> {
+  const verilogSource =
+    typeof module.verilog_source === "string"
+      ? module.verilog_source
+      : `module ${module.module_id}; endmodule\n`;
+  await writeFile(path.join(rtlDir, `${module.module_id}.v`), verilogSource, "utf8");
+  await writeFile(
+    path.join(rtlDir, `${module.module_id}.meta.json`),
+    `${JSON.stringify(module, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function docDraft(title = "Generated RTL note"): Record<string, string> {
@@ -191,11 +239,41 @@ function successRtlWithDoc(module: unknown, sessionId?: string): SDKResultMessag
   return successResult({ module, draft_doc: docDraft() }, sessionId);
 }
 
+// Probationary / archive tiers and doc_lifecycle.json are growth artifacts
+// from real LLM-driven pipeline runs (e.g. node_conv_248's tiled-streaming
+// win). Real runs legitimately leave files in
+// `knowledge/patterns/probationary/`,
+// `knowledge/references/probationary/`, and entries in
+// `knowledge/doc_lifecycle.json`, but those leak into test execution and
+// silently provide "covering doc" matches against the unit_module fixture
+// — which suppresses `create_new_doc_request` in tests that depend on it.
+// Always reset these to empty during the test suite, regardless of what
+// the on-disk backup snapshotted. Tests that need fixture docs use
+// `seedLifecycleDoc` to write a known doc into a known-empty baseline.
+const knowledgeAlwaysEmptyTiers: ReadonlyArray<string> = [
+  "knowledge/doc_lifecycle.json",
+  "knowledge/patterns/probationary",
+  "knowledge/patterns/archive",
+  "knowledge/references/probationary",
+  "knowledge/references/archive",
+];
+
 async function resetKnowledgeLifecycle(): Promise<void> {
   if (!knowledgeBackupRoot) return;
   for (const target of knowledgeResetTargets) {
     const originalPath = path.join(repoRoot, target);
     await rm(originalPath, { recursive: true, force: true });
+    if (knowledgeAlwaysEmptyTiers.includes(target)) {
+      // Recreate empty for directory targets so subsequent test code that
+      // copies fixture docs into the tier doesn't fail on a missing
+      // directory. For file targets (`doc_lifecycle.json`) we leave the
+      // path absent — `loadDocLifecycleState` returns an empty state when
+      // the file is missing.
+      if (!target.endsWith(".json")) {
+        await mkdir(originalPath, { recursive: true });
+      }
+      continue;
+    }
     await copyPathIfPresent(path.join(knowledgeBackupRoot, target), originalPath);
   }
 }
@@ -392,7 +470,10 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [successResult(module)],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(module);
+        return successResult(module);
+      }],
     });
     const assayerFn = createAssayerMock([verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
@@ -434,7 +515,7 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(module);
         return successResult(module);
       }],
     });
@@ -473,11 +554,11 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
       surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
@@ -534,11 +615,11 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
       surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
@@ -590,17 +671,17 @@ describe("runPipeline", () => {
     const queryFn = createQueryMock({
       foundry: [
         async () => {
-          await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+          await persistMockRtlDeliverable(originalModule);
           return successRtlWithDoc(originalModule, "foundry-session-1");
         },
         async () => {
-          await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(finalFoundryModule, null, 2)}\n`, "utf8");
+          await persistMockRtlDeliverable(finalFoundryModule);
           return successRtlWithDoc(finalFoundryModule, "foundry-session-1");
         },
       ],
       surgeon: [
         async () => {
-          await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(surgeonModule, null, 2)}\n`, "utf8");
+          await persistMockRtlDeliverable(surgeonModule);
           return successRtlWithDoc(surgeonModule);
         },
       ],
@@ -680,11 +761,20 @@ describe("runPipeline", () => {
       foundry: [
         // Flat-bus 1x1 is covered by `02_conv1x1.md` → guard suppresses
         // wrapper schema → plain `{VerilogModule}` is what Foundry returns.
-        successResult(module, "flat-session"),
-        successResult(module, "flat-session"),
+        async () => {
+          await persistMockRtlDeliverable(module);
+          return successResult(module, "flat-session");
+        },
+        async () => {
+          await persistMockRtlDeliverable(module);
+          return successResult(module, "flat-session");
+        },
         // Tiled-streaming has no doc coverage seeded for this test → wrapper
         // schema active → `{module, draft_doc}` is required.
-        successRtlWithDoc(tiledModule, "tiled-session"),
+        async () => {
+          await persistMockRtlDeliverable(tiledModule);
+          return successRtlWithDoc(tiledModule, "tiled-session");
+        },
       ],
       retrospector: [
         successResult({
@@ -743,7 +833,10 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [successRtlWithDoc(module, "tiled-session")],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(module);
+        return successRtlWithDoc(module, "tiled-session");
+      }],
     });
     const assayerFn = createAssayerMock([verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
@@ -788,7 +881,10 @@ describe("runPipeline", () => {
     const queryFn = createQueryMock({
       // Plain `{VerilogModule}` — coverage exists for tiled-streaming via
       // `auto_tiled_existing`, so the guard suppresses the wrapper schema.
-      foundry: [successResult(module, "tiled-session")],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(module);
+        return successResult(module, "tiled-session");
+      }],
     });
     const assayerFn = createAssayerMock([verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
@@ -821,7 +917,10 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [successRtlWithDoc(module, "flat-session")],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(module);
+        return successRtlWithDoc(module, "flat-session");
+      }],
     });
     const assayerFn = createAssayerMock([verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 1, fmax_mhz: 75, report: "fixture" }]);
@@ -846,15 +945,7 @@ describe("runPipeline", () => {
     expect(createdFlatDoc?.source_doc_ids?.some((id) => id.includes("protected"))).toBe(true);
   });
 
-  // SYSTEM_REVIEW_FINDINGS #4 made all 5 contracts executable (was 3),
-  // and the new flow no longer routes through `attemptNextContractOrEscalate`
-  // when the final retrospector_failed event fires — the orchestrator now
-  // emits `module_fail_abort` directly, dropping the
-  // `human_escalation_required` event and the `manual_correction_needed`
-  // failure_class override. The runtime regression is real and orthogonal
-  // to the ZCU102 / parser work — tracking under the
-  // "all-contracts-exhausted route loses manual_correction_needed" issue.
-  it.skip("escalates when all available contracts are exhausted", async () => {
+  it("escalates when all available contracts are exhausted", async () => {
     await writePipelineIrFixture();
     await seedContractFlags(["flat", "tiled"]);
     const module = JSON.parse(
@@ -866,8 +957,14 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [
-        successRtlWithDoc(module, "dram-session"),
-        successRtlWithDoc(module, "dram-session"),
+        async () => {
+          await persistMockRtlDeliverable(module);
+          return successRtlWithDoc(module, "dram-session");
+        },
+        async () => {
+          await persistMockRtlDeliverable(module);
+          return successRtlWithDoc(module, "dram-session");
+        },
       ],
       retrospector: [
         successResult({
@@ -917,7 +1014,7 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(module);
         return successRtlWithDoc(module);
       }],
     });
@@ -965,7 +1062,7 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(module);
         return successRtlWithDoc(module);
       }],
     });
@@ -1009,7 +1106,7 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(module, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(module);
         return successRtlWithDoc(module);
       }],
     });
@@ -1104,7 +1201,7 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
     });
@@ -1132,7 +1229,7 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
     });
@@ -1183,11 +1280,11 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
       surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
@@ -1225,11 +1322,11 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
       surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
@@ -1265,11 +1362,11 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
       surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
@@ -1317,11 +1414,11 @@ describe("runPipeline", () => {
 
     const queryFn = createQueryMock({
       foundry: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(originalModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(originalModule);
         return successResult(originalModule);
       }],
       surgeon: [async () => {
-        await writeFile(path.join(rtlDir, "unit_module.meta.json"), `${JSON.stringify(repairedModule, null, 2)}\n`, "utf8");
+        await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });

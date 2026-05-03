@@ -167,10 +167,25 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
 }
 
 const pipelineIrOutputFormat = toOutputFormat(pipelineIrZod);
-const verilogModuleOutputFormat = toOutputFormat(verilogModuleZod);
 const verifResultOutputFormat = toOutputFormat(verifResultZod);
 const failureClassificationOutputFormat = toOutputFormat(failureClassificationZod);
 const retrospectorAdviceOutputFormat = toOutputFormat(retrospectorAdviceZod);
+
+// Foundry / Surgeon emit METADATA only in their final structured output.
+// `verilog_source` is intentionally NOT in this schema — the agents persist
+// the actual RTL via the `mcp__nn2rtl-tools__write_verilog` tool, and the
+// orchestrator hydrates the full `VerilogModule` from disk after the agent
+// returns. Re-serializing 10+ KB of Verilog as a JSON-escaped string in the
+// final message was responsible for an ~30-50% structured-output parse-fail
+// rate on long generations (any unescaped backslash, embedded `"`, or stray
+// newline broke the whole final JSON), recovered through a heavy disk
+// fallback path that lost cost / session / draft_doc telemetry. Dropping
+// `verilog_source` from the agent contract makes the structured output
+// ~200 bytes instead of ~12 KB and effectively eliminates the parse-fail
+// mode while keeping the schema gate over the metadata + draft_doc.
+const verilogModuleAgentOutputZod = verilogModuleZod.omit({ verilog_source: true });
+type VerilogModuleAgentOutput = z.infer<typeof verilogModuleAgentOutputZod>;
+const verilogModuleAgentOutputFormat = toOutputFormat(verilogModuleAgentOutputZod);
 
 const docDraftZod = z
   .object({
@@ -211,12 +226,54 @@ type CreateNewDocRequest = {
 
 const rtlAgentWithDocZod = z
   .object({
-    module: verilogModuleZod,
+    module: verilogModuleAgentOutputZod,
     draft_doc: docDraftZod,
   })
   .strict();
 type RtlAgentWithDoc = z.infer<typeof rtlAgentWithDocZod>;
 const rtlAgentWithDocOutputFormat = toOutputFormat(rtlAgentWithDocZod);
+
+/**
+ * Hydrate a full `VerilogModule` (with `verilog_source`) from the agent's
+ * metadata-only payload by reading the .v that the agent persisted via
+ * `write_verilog`. Throws when the .v is missing — that means the agent
+ * skipped its only required side effect.
+ */
+async function hydrateVerilogModuleFromDisk(
+  metadata: VerilogModuleAgentOutput,
+  layerIr: LayerIR,
+): Promise<VerilogModule> {
+  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const verilogPath = path.join(rtlDir, `${metadata.module_id}.v`);
+  let source: string;
+  try {
+    source = await readFile(verilogPath, "utf8");
+  } catch {
+    throw new Error(
+      `${metadata.generated_by} returned metadata for module '${metadata.module_id}' ` +
+        `but no Verilog source was persisted. Expected ${verilogPath} from a prior ` +
+        `mcp__nn2rtl-tools__write_verilog call. The agent must persist RTL via ` +
+        `write_verilog before returning its final JSON.`,
+    );
+  }
+  if (!source.trim()) {
+    throw new Error(
+      `${metadata.generated_by} persisted an empty Verilog file at ${verilogPath} ` +
+        `for module '${metadata.module_id}'.`,
+    );
+  }
+  // Use the agent's reported spec_hash and attempt verbatim (it's the
+  // authoritative producer record). If they disagree with the LayerIR's
+  // expected spec_hash that's caught by downstream validation, not here.
+  void layerIr;
+  return {
+    module_id: metadata.module_id,
+    spec_hash: metadata.spec_hash,
+    verilog_source: source,
+    generated_by: metadata.generated_by,
+    attempt: metadata.attempt,
+  };
+}
 
 export function createOrchestratorRuntime(
   overrides: Partial<OrchestratorRuntime> = {},
@@ -1243,7 +1300,7 @@ type DocLifecycleState = {
   docs: Record<string, DocLifecycleEntry>;
 };
 
-type ContractPlan = {
+export type ContractPlan = {
   id: ContractId;
   complexity: number;
   description: string;
@@ -1266,7 +1323,7 @@ type ContractResponseState = {
   contracts: Record<string, ContractFlag>;
 };
 
-const CONTRACT_PLANS: ContractPlan[] = [
+export const CONTRACT_PLANS: ContractPlan[] = [
   {
     id: "flat-bus",
     complexity: 0,
@@ -1399,7 +1456,7 @@ function ioModeForContract(contractId: ContractId): LayerIR["io_mode"] {
   }
 }
 
-function applyContractPlan(baseLayer: LayerIR, plan: ContractPlan): LayerIR {
+export function applyContractPlan(baseLayer: LayerIR, plan: ContractPlan): LayerIR {
   const layer = jsonClone(baseLayer);
   layer.contract_id = plan.id;
   layer.io_mode = ioModeForContract(plan.id);
@@ -2873,6 +2930,76 @@ function stripJsonFences(text: string): string {
   return firstBrace > 0 ? candidate.slice(firstBrace) : candidate;
 }
 
+/**
+ * Wraps a parse failure with the underlying SDKResultMessage so the caller
+ * can still pull cost/session/usage out of the failed agent turn instead of
+ * losing it to the recovery-from-disk path. Without this, recovered runs
+ * report `total_cost_usd: 0` even when Foundry burned $3+ producing
+ * malformed final JSON (the RTL itself was already on disk via
+ * `write_verilog`).
+ */
+export class StructuredOutputParseError extends Error {
+  public readonly result: SDKResultMessage;
+  public readonly messages: SDKMessage[];
+  constructor(message: string, result: SDKResultMessage, messages: SDKMessage[]) {
+    super(message);
+    this.name = "StructuredOutputParseError";
+    this.result = result;
+    this.messages = messages;
+  }
+}
+
+/**
+ * Best-effort scrape of a `draft_doc` object out of an RTL agent's raw final
+ * message text when the wrapper-schema JSON parse fails entirely. Looks for
+ * a `"draft_doc"` key followed by an opening `{` and returns whatever
+ * passes a relaxed `JSON.parse` of that substring; null if nothing
+ * recoverable. This lets the doc-lifecycle keep growing the probationary
+ * tier even when Foundry's structured output is shape-broken — the win
+ * (real RTL on disk) shouldn't be invisible to Phase 4 just because the
+ * final-message JSON had an unescaped backslash.
+ */
+function scrapeDraftDocFromText(text: string): unknown | null {
+  if (!text) return null;
+  const idx = text.search(/"draft_doc"\s*:\s*\{/);
+  if (idx < 0) return null;
+  // Walk braces from the first `{` after the key to find a balanced object.
+  const start = text.indexOf("{", idx + '"draft_doc"'.length);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        const candidate = text.slice(start, i + 1);
+        try {
+          return JSON.parse(candidate) as unknown;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function requireStructuredOutput<T>(
   result: SDKResultMessage,
   label: string,
@@ -2950,8 +3077,22 @@ async function runDelegatedAgent<T>(
     throw new Error(`No final result message was received for agent '${slug}'.`);
   }
 
+  let parsedPayload: T;
+  try {
+    parsedPayload = requireStructuredOutput<T>(finalResult, slug, resultSchema);
+  } catch (err) {
+    // Wrap the parse failure with the SDK message so the caller's recovery
+    // path (e.g. `tryRecoverVerilogModuleFromDisk`) can still extract cost,
+    // session, modelUsage and the raw text for `draft_doc` scraping.
+    throw new StructuredOutputParseError(
+      err instanceof Error ? err.message : String(err),
+      finalResult,
+      messages,
+    );
+  }
+
   return {
-    payload: requireStructuredOutput<T>(finalResult, slug, resultSchema),
+    payload: parsedPayload,
     result: finalResult,
     messages,
   };
@@ -4153,25 +4294,38 @@ async function invokeFoundry(
           resumeSessionId: options.resumeSessionId,
         },
       );
+      const hydratedModule = await hydrateVerilogModuleFromDisk(
+        withDoc.payload.module,
+        layerIr,
+      );
       result = {
-        payload: withDoc.payload.module,
+        payload: hydratedModule,
         draft_doc: withDoc.payload.draft_doc,
         doc_request: createNewDocRequest,
         result: withDoc.result,
         messages: withDoc.messages,
       };
     } else {
-      result = await runDelegatedAgent<VerilogModule>(
+      const plainResult = await runDelegatedAgent<VerilogModuleAgentOutput>(
         "foundry",
         foundryPayload,
-        verilogModuleOutputFormat,
-        verilogModuleZod,
+        verilogModuleAgentOutputFormat,
+        verilogModuleAgentOutputZod,
         runtime,
         {
           prompt: resumedPrompt,
           resumeSessionId: options.resumeSessionId,
         },
       );
+      const hydratedModule = await hydrateVerilogModuleFromDisk(
+        plainResult.payload,
+        layerIr,
+      );
+      result = {
+        payload: hydratedModule,
+        result: plainResult.result,
+        messages: plainResult.messages,
+      };
     }
   } catch (err) {
     const recovered = await tryRecoverVerilogModuleFromDisk(
@@ -4182,28 +4336,61 @@ async function invokeFoundry(
     if (!recovered) {
       throw err;
     }
+    // Preserve cost / session / modelUsage / messages from the SDK turn
+    // even when the final structured output was unparseable. Without this,
+    // pipeline_state.json reports $0 spent on multi-dollar Foundry runs and
+    // tool-use audit goes empty.
+    const carried =
+      err instanceof StructuredOutputParseError
+        ? { result: err.result, messages: err.messages }
+        : {
+            result: {
+              type: "result",
+              subtype: "success",
+              result: "",
+              total_cost_usd: 0,
+              modelUsage: {},
+            } as unknown as SDKResultMessage,
+            messages: [] as SDKMessage[],
+          };
+    // Best-effort scrape of `draft_doc` so a working RTL on a previously-
+    // uncovered contract still grows the probationary tier even when the
+    // wrapper JSON parse failed (Phase 4 must not silently drop a real win).
+    let scrapedDraft: DocDraft | null = null;
+    if (useDraftDocWrapperSchema && err instanceof StructuredOutputParseError) {
+      const rawText =
+        err.result.subtype === "success" && typeof err.result.result === "string"
+          ? err.result.result
+          : "";
+      const scraped = scrapeDraftDocFromText(rawText);
+      if (scraped !== null) {
+        const parsed = docDraftZod.safeParse(scraped);
+        if (parsed.success) {
+          scrapedDraft = parsed.data;
+        }
+      }
+    }
     await appendRunLog(
       {
         event: "agent_result_recovered",
         agent: "Foundry",
         module_id: layerIr.module_id,
         reason: err instanceof Error ? err.message : String(err),
+        carried_cost_usd:
+          (carried.result as { total_cost_usd?: number }).total_cost_usd ?? 0,
+        carried_session_id:
+          (carried.result as { session_id?: string }).session_id ?? null,
+        carried_message_count: carried.messages.length,
+        scraped_draft_doc: scrapedDraft !== null,
       },
       runtime,
     );
-    // Build a minimal AgentRunResult stub.  cost/messages are unknown on the
-    // recovery path but the pipeline doesn't need them for state transition.
     result = {
       payload: recovered,
+      ...(scrapedDraft !== null ? { draft_doc: scrapedDraft } : {}),
       doc_request: createNewDocRequest,
-      result: {
-        type: "result",
-        subtype: "success",
-        result: "",
-        total_cost_usd: 0,
-        modelUsage: {},
-      } as unknown as SDKResultMessage,
-      messages: [],
+      result: carried.result,
+      messages: carried.messages,
     };
   }
 
@@ -4669,20 +4856,33 @@ async function invokeSurgeon(
         rtlAgentWithDocZod,
         runtime,
       );
+      const hydratedModule = await hydrateVerilogModuleFromDisk(
+        withDoc.payload.module,
+        layerIr,
+      );
       result = {
-        payload: withDoc.payload.module,
+        payload: hydratedModule,
         draft_doc: withDoc.payload.draft_doc,
         result: withDoc.result,
         messages: withDoc.messages,
       };
     } else {
-      result = await runDelegatedAgent<VerilogModule>(
+      const plainResult = await runDelegatedAgent<VerilogModuleAgentOutput>(
         "surgeon",
         surgeonPayload,
-        verilogModuleOutputFormat,
-        verilogModuleZod,
+        verilogModuleAgentOutputFormat,
+        verilogModuleAgentOutputZod,
         runtime,
       );
+      const hydratedModule = await hydrateVerilogModuleFromDisk(
+        plainResult.payload,
+        layerIr,
+      );
+      result = {
+        payload: hydratedModule,
+        result: plainResult.result,
+        messages: plainResult.messages,
+      };
     }
   } catch (err) {
     const recovered = await tryRecoverVerilogModuleFromDisk(
@@ -4693,25 +4893,56 @@ async function invokeSurgeon(
     if (!recovered) {
       throw err;
     }
+    // Same metadata-preservation as invokeFoundry's recovery path: keep the
+    // SDK turn's cost / session / modelUsage / messages even when the final
+    // structured output failed to parse. See `StructuredOutputParseError`.
+    const carried =
+      err instanceof StructuredOutputParseError
+        ? { result: err.result, messages: err.messages }
+        : {
+            result: {
+              type: "result",
+              subtype: "success",
+              result: "",
+              total_cost_usd: 0,
+              modelUsage: {},
+            } as unknown as SDKResultMessage,
+            messages: [] as SDKMessage[],
+          };
+    let scrapedDraft: DocDraft | null = null;
+    if (surgeonAsksForDraftDoc && err instanceof StructuredOutputParseError) {
+      const rawText =
+        err.result.subtype === "success" && typeof err.result.result === "string"
+          ? err.result.result
+          : "";
+      const scraped = scrapeDraftDocFromText(rawText);
+      if (scraped !== null) {
+        const parsed = docDraftZod.safeParse(scraped);
+        if (parsed.success) {
+          scrapedDraft = parsed.data;
+        }
+      }
+    }
     await appendRunLog(
       {
         event: "agent_result_recovered",
         agent: "Surgeon",
         module_id: brokenModule.module_id,
         reason: err instanceof Error ? err.message : String(err),
+        carried_cost_usd:
+          (carried.result as { total_cost_usd?: number }).total_cost_usd ?? 0,
+        carried_session_id:
+          (carried.result as { session_id?: string }).session_id ?? null,
+        carried_message_count: carried.messages.length,
+        scraped_draft_doc: scrapedDraft !== null,
       },
       runtime,
     );
     result = {
       payload: recovered,
-      result: {
-        type: "result",
-        subtype: "success",
-        result: "",
-        total_cost_usd: 0,
-        modelUsage: {},
-      } as unknown as SDKResultMessage,
-      messages: [],
+      ...(scrapedDraft !== null ? { draft_doc: scrapedDraft } : {}),
+      result: carried.result,
+      messages: carried.messages,
     };
   }
 
@@ -4973,7 +5204,24 @@ async function maybeRunRetrospectorFinalAttempt(
       },
       runtime,
     );
-    return false;
+    // Retrospector died on infrastructure (doc load), not on a real
+    // architectural finding. Don't strand the module — the underlying
+    // terminal failure is still real, so let the contract walk proceed
+    // (next contract or `manual_correction_needed` if all flagged).
+    return attemptNextContractOrEscalate({
+      manager,
+      moduleId,
+      baseLayer,
+      currentLayer: layer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      statePath,
+      runtime,
+      result: terminalResult,
+      reason: "retrospector_failed_load_doc",
+    });
   }
 
   manager.recordRetrospectorCall(contractKey);
@@ -4995,7 +5243,25 @@ async function maybeRunRetrospectorFinalAttempt(
       runtime,
     );
     await manager.saveState(statePath);
-    return false;
+    // Same reasoning as the load-doc fail above: a retrospector outage
+    // (API limit, dispatch crash, classifier unavailable) is not evidence
+    // that the contract is impossible — fall through to the contract walk
+    // so the module either picks a new contract or correctly escalates to
+    // `manual_correction_needed` if all are flagged.
+    return attemptNextContractOrEscalate({
+      manager,
+      moduleId,
+      baseLayer,
+      currentLayer: layer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      statePath,
+      runtime,
+      result: terminalResult,
+      reason: "retrospector_failed_invoke",
+    });
   }
 
   await appendRunLog(

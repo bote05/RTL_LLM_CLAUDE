@@ -124,6 +124,7 @@ export interface VerifResult {
   timing_pass?: boolean;
   timing_actual_cycles?: number;
   timing_expected_cycles?: number;
+  initiation_interval_cycles?: number;
   mismatch_layer?: string;
   expected?: number[];
   got?: number[];

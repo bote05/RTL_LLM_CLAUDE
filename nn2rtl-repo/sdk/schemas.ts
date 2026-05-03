@@ -186,6 +186,7 @@ export const verifResultSchema = z
     timing_pass: nullToUndef(z.boolean()),
     timing_actual_cycles: nullToUndef(z.number()),
     timing_expected_cycles: nullToUndef(z.number()),
+    initiation_interval_cycles: nullToUndef(z.number()),
     mismatch_layer: nullToUndef(z.string()),
     expected: nullToUndef(z.array(z.number())),
     got: nullToUndef(z.array(z.number())),
