@@ -62,12 +62,27 @@ Passed to the testbench as `argv[1]`. Assayer generates it. Shape:
   "beat_width_bits": 8,
   "beats_per_input_sample": 1,
   "beats_per_output_sample": 1,
+  "weights_path": "/abs/path/to/block_1_conv1_weights.hex",
+  "weight_bank_paths": [],
+  "axi_weight_data_width_bits": 64,
   "contract_params": {}
 }
 ```
 
 `bus_bytes_per_sample` is the explicit input bus width in bytes and must equal `input_width_bits / 8`.
-Contract-specific fields are optional for old sidecars; new Assayer sidecars include them so the selected template and metadata can be audited.
+Contract-specific fields are optional for old sidecars; new Assayer sidecars include them so the selected template and metadata can be audited. For `dram-backed-weights`, `weights_path` is required and the testbench uses it to service the AXI weight read channel.
+
+## DRAM-backed AXI weight model
+
+When `contract_id` is `dram-backed-weights`, the runtime drives a deterministic AXI read responder:
+
+- accepts `weights_arvalid` with `weights_arready` when no burst is active
+- treats `weights_araddr` as a byte address into `weights_path`
+- treats `weights_arlen` as AXI burst length minus one
+- drives `weights_rvalid`, `weights_rdata`, and `weights_rlast`
+- advances beats only when the DUT asserts `weights_rready`
+
+The weight file is parsed as a `$readmemh`-style INT8 hex byte stream. Each 64-bit read beat returns eight little-endian bytes.
 
 The golden input/output files use the binary NN2V v2 format:
 
@@ -96,7 +111,11 @@ Written to `results_path`. Shape matches the `VerifResult` contract minus the fi
   "timing_actual_cycles": int,
   "timing_expected_cycles": int,
   "failure_class": null,
-  "verilator_stderr": ""
+  "verilator_stderr": "",
+  "axi_weight_memory_model_enabled": true,
+  "axi_weight_ar_handshakes": 1,
+  "axi_weight_r_beats": 1,
+  "axi_weight_completed_bursts": 1
 }
 ```
 

@@ -285,6 +285,13 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       const moduleName = `contract_${contractId.replace(/-/g, "_")}_passthrough`;
       const tempDir = await makeTempDir(`nn2rtl-verilator-${contractId}-`);
       const verilog = await contractPassthroughVerilog(moduleName, contractId);
+      const contractSpecific: Record<string, unknown> = {};
+      if (contractId === "dram-backed-weights") {
+        const weightsPath = path.join(tempDir, "weights.hex");
+        await writeFile(weightsPath, "00\n", "utf8");
+        contractSpecific.weights_path = weightsPath;
+        contractSpecific.axi_weight_data_width_bits = 64;
+      }
       const sidecarPath = await writeSidecar(tempDir, moduleName, [7, 8], [7, 8], 1, {
         testbench_template_path: path.join(repoRoot, "contracts", contractId, "testbench.cpp"),
         contract_id: contractId,
@@ -294,6 +301,7 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
         beats_per_input_sample: 1,
         beats_per_output_sample: 1,
         contract_params: {},
+        ...contractSpecific,
       });
 
       const result = await run_verilator(verilog, moduleName, sidecarPath);
@@ -301,6 +309,99 @@ describe("mcp tools full integration", { timeout: VERILATOR_TEST_TIMEOUT_MS }, (
       expect(result.expected, contractId).toEqual([7, 8]);
       expect(result.got, contractId).toEqual([7, 8]);
     }
+  });
+
+  it("services dram-backed AXI weight reads from weights_path", async () => {
+    const tempDir = await makeTempDir("nn2rtl-verilator-dram-axi-");
+    const moduleName = "dram_axi_echo";
+    const weightsPath = path.join(tempDir, "weights.hex");
+    await writeFile(weightsPath, "05\n", "utf8");
+    const verilog = `
+module ${moduleName} (
+  input  wire       clk,
+  input  wire       rst_n,
+  input  wire       valid_in,
+  output wire       ready_in,
+  input  wire [7:0] data_in,
+  output reg        valid_out,
+  output reg  [7:0] data_out,
+  output reg        weights_arvalid,
+  input  wire       weights_arready,
+  output reg [31:0] weights_araddr,
+  output reg [7:0]  weights_arlen,
+  input  wire       weights_rvalid,
+  output wire       weights_rready,
+  input  wire [63:0] weights_rdata,
+  input  wire       weights_rlast
+);
+  localparam ST_AR = 2'd0;
+  localparam ST_R = 2'd1;
+  localparam ST_READY = 2'd2;
+  reg [1:0] state;
+  reg [7:0] weight0;
+  assign weights_rready = (state == ST_R);
+  assign ready_in = (state == ST_READY);
+
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      state <= ST_AR;
+      weight0 <= 8'd0;
+      valid_out <= 1'b0;
+      data_out <= 8'd0;
+      weights_arvalid <= 1'b0;
+      weights_araddr <= 32'd0;
+      weights_arlen <= 8'd0;
+    end else begin
+      valid_out <= 1'b0;
+      case (state)
+        ST_AR: begin
+          weights_arvalid <= 1'b1;
+          weights_araddr <= 32'd0;
+          weights_arlen <= 8'd0;
+          if (weights_arvalid && weights_arready) begin
+            weights_arvalid <= 1'b0;
+            state <= ST_R;
+          end
+        end
+        ST_R: begin
+          if (weights_rvalid) begin
+            weight0 <= weights_rdata[7:0];
+            if (weights_rlast) state <= ST_READY;
+          end
+        end
+        ST_READY: begin
+          if (valid_in) begin
+            data_out <= data_in + weight0;
+            valid_out <= 1'b1;
+          end
+        end
+      endcase
+    end
+  end
+endmodule
+`;
+    const sidecarPath = await writeSidecar(tempDir, moduleName, [10], [15], 1, {
+      testbench_template_path: path.join(repoRoot, "contracts", "dram-backed-weights", "testbench.cpp"),
+      contract_id: "dram-backed-weights",
+      contract_name: "DRAM-backed Weights",
+      contract_metadata_path: path.join(repoRoot, "contracts", "dram-backed-weights", "metadata.json"),
+      beat_width_bits: 8,
+      beats_per_input_sample: 1,
+      beats_per_output_sample: 1,
+      weights_path: weightsPath,
+      axi_weight_data_width_bits: 64,
+      contract_params: {},
+    });
+
+    const result = await run_verilator(verilog, moduleName, sidecarPath);
+
+    expect(result.status).toBe("pass");
+    expect(result.expected).toEqual([15]);
+    expect(result.got).toEqual([15]);
+    expect(result.axi_weight_memory_model_enabled).toBe(true);
+    expect(result.axi_weight_ar_handshakes).toBe(1);
+    expect(result.axi_weight_r_beats).toBe(1);
+    expect(result.axi_weight_completed_bursts).toBe(1);
   });
 
   it("packs and unpacks 32-bit multi-channel bus samples correctly", async () => {

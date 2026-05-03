@@ -91,6 +91,18 @@ describe("PipelineStateManager", () => {
     expect(manager.getState().results.m1).toEqual(TB_SETUP_FAIL_RESULT);
   });
 
+  it("does not route verification-environment failures to Surgeon", () => {
+    const manager = new PipelineStateManager(["m1"], 3);
+    manager.applyVerifResult("m1", {
+      ...FAIL_RESULT,
+      failure_category: "verification_env",
+      violated_constraint: "axi_weight_memory_model_missing",
+      classifier_reason: "The AXI weight responder did not provide a meaningful protocol verdict.",
+    });
+
+    expect(manager.getState().modules.m1).toBe("fail_abort");
+  });
+
   it("retries classifier-confirmed code bugs", () => {
     const manager = new PipelineStateManager(["m1"], 3);
     manager.applyVerifResult("m1", {

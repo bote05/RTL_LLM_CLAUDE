@@ -51,6 +51,7 @@ export type ContractMetadata = {
   supported_ops: LayerIR["op_type"][];
   dependencies: string[];
   docs: string[];
+  protocol_rules?: string[];
 };
 
 export type ContractSelectionPayload = {
@@ -190,7 +191,7 @@ export function contractSidecarFields(layer: LayerIR): Record<string, unknown> {
   const inputBeats = Math.max(1, Math.ceil(logicalInputWidthBits / beatWidth));
   const outputBeats = Math.max(1, Math.ceil(logicalOutputWidthBits / beatWidth));
 
-  return {
+  const fields: Record<string, unknown> = {
     contract_id: contractId,
     contract_name: metadata.display_name,
     contract_metadata_path: contractMetadataPath(contractId),
@@ -199,4 +200,12 @@ export function contractSidecarFields(layer: LayerIR): Record<string, unknown> {
     beats_per_output_sample: outputBeats,
     contract_params: layer.contract_params ?? {},
   };
+  if (contractId === "dram-backed-weights") {
+    fields.weights_path = layer.weights_path;
+    if (layer.weight_bank_paths) {
+      fields.weight_bank_paths = layer.weight_bank_paths;
+    }
+    fields.axi_weight_data_width_bits = 64;
+  }
+  return fields;
 }

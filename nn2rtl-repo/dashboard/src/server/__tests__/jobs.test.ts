@@ -1,3 +1,5 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const childProcessMock = vi.hoisted(() => {
@@ -41,7 +43,15 @@ vi.mock("node:child_process", () => ({
   spawn: childProcessMock.spawn,
 }));
 
-import { buildForceKillCommand, previewJob, readJobs, startJob, stopJob } from "../jobs.js";
+import { jobsLogPath } from "../paths.js";
+import {
+  buildForceKillCommand,
+  previewJob,
+  readJobs,
+  reconcilePersistedJobsAfterRestart,
+  startJob,
+  stopJob,
+} from "../jobs.js";
 
 describe("job safety model", () => {
   it("transitions a running job through stopping and records the reason", async () => {
@@ -88,6 +98,46 @@ describe("job safety model", () => {
     expect(buildForceKillCommand(123, "linux")).toEqual({
       command: "kill",
       args: ["-KILL", "-123"],
+    });
+  });
+
+  it("marks persisted queued/running jobs stale after dashboard restart", async () => {
+    const createdAt = new Date().toISOString();
+    const queuedId = `stale_queued_${Date.now()}`;
+    const runningId = `stale_running_${Date.now()}`;
+    await mkdir(path.dirname(jobsLogPath), { recursive: true });
+    await appendFile(
+      jobsLogPath,
+      [
+        JSON.stringify({
+          ...previewJob({ type: "pipeline", checkpointPath: "checkpoint.pth" }),
+          id: queuedId,
+          state: "queued",
+          createdAt,
+          logPath: `output/dashboard/jobs/${queuedId}.log`,
+        }),
+        JSON.stringify({
+          ...previewJob({ type: "check", check: "dashboard-typecheck" }),
+          id: runningId,
+          state: "running",
+          createdAt,
+          logPath: `output/dashboard/jobs/${runningId}.log`,
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await reconcilePersistedJobsAfterRestart();
+
+    const jobs = await readJobs();
+    expect(jobs.find((job) => job.id === queuedId)).toMatchObject({
+      state: "stopped",
+      stopReason: "dashboard restarted before queued job launched",
+    });
+    expect(jobs.find((job) => job.id === runningId)).toMatchObject({
+      state: "failed",
+      stopReason: "dashboard restarted while job was running; process ownership was lost",
+      exitCode: null,
     });
   });
 });

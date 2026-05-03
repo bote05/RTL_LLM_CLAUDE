@@ -682,6 +682,20 @@ function requireAbsoluteSidecarPaths(sidecar: VerificationSidecar): void {
       );
     }
   }
+  if (sidecar.contract_id === "dram-backed-weights") {
+    if (!sidecar.weights_path || !isAbsoluteHostPath(sidecar.weights_path)) {
+      throw new Error(
+        `run_verilator: dram-backed-weights sidecar field 'weights_path' must be an absolute path; got '${sidecar.weights_path ?? ""}'.`,
+      );
+    }
+    for (const [index, bankPath] of (sidecar.weight_bank_paths ?? []).entries()) {
+      if (!isAbsoluteHostPath(bankPath)) {
+        throw new Error(
+          `run_verilator: sidecar field 'weight_bank_paths[${index}]' must be an absolute path; got '${bankPath}'.`,
+        );
+      }
+    }
+  }
 }
 
 function isWindowsAbsolutePath(inputPath: string): boolean {
@@ -717,6 +731,8 @@ function normalizeSidecarPathsForCurrentHost(sidecar: VerificationSidecar): Veri
     golden_outputs_path: normalizePathForCurrentHost(sidecar.golden_outputs_path),
     results_path: normalizePathForCurrentHost(sidecar.results_path),
     testbench_template_path: normalizePathForCurrentHost(sidecar.testbench_template_path),
+    weights_path: sidecar.weights_path ? normalizePathForCurrentHost(sidecar.weights_path) : undefined,
+    weight_bank_paths: sidecar.weight_bank_paths?.map(normalizePathForCurrentHost),
   };
 }
 
@@ -1279,6 +1295,10 @@ function resolvePatternPaths(
     ...tieredPatternPaths("01_context.md"),
     ...tieredPatternPaths("08_common_bugs.md"),
   ];
+  if (contract_id === "dram-backed-weights") {
+    paths.push(...tieredPatternPaths("09_dram_backed_weights.md"));
+    return paths;
+  }
   if (contract_id !== "flat-bus") {
     return paths;
   }

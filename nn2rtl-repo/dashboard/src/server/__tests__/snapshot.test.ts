@@ -72,6 +72,13 @@ async function seedRepo(): Promise<string> {
         improvement_targets: ["use-dsp"],
         successful_modules: ["m0"],
       },
+      archived_m1: {
+        status: "archived",
+        op_type: "relu",
+        created_by_module: "m1",
+        pattern_path: "knowledge/patterns/probationary/old_m1.md",
+        archived_pattern_path: "knowledge/patterns/archive/old_m1.archived.md",
+      },
     },
   });
   await mkdir(path.join(tempRoot, "knowledge", "references", "improved"), { recursive: true });
@@ -121,6 +128,11 @@ describe("buildSnapshot", () => {
     expect(m0?.stage).toBe("improved");
     expect(m0?.improvements[0]).toMatchObject({ targetSlug: "use-dsp", success: true });
     expect(m0?.docs[0]).toMatchObject({ id: "improved_m0__use_dsp", tier: "improved" });
+    expect(snapshot.docs.find((doc) => doc.id === "archived_m1")).toMatchObject({
+      tier: "archive",
+      status: "archived",
+      patternPath: "knowledge/patterns/archive/old_m1.archived.md",
+    });
     expect(m1?.stage).toBe("missing");
     expect(snapshot.orphanArtifacts.rtl).toContain("output/rtl/orphan.v");
   });

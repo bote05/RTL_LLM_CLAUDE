@@ -3,7 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { archiveArtifact, promoteVariant } from "./actions.js";
-import { previewJob, readJobs, startJob, stopJob } from "./jobs.js";
+import { previewJob, readJobs, reconcilePersistedJobsAfterRestart, startJob, stopJob } from "./jobs.js";
 import {
   dashboardRoot,
   ensureDashboardDirs,
@@ -174,6 +174,7 @@ const currentFile = fileURLToPath(import.meta.url);
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(currentFile)) {
   await ensureDashboardDirs();
+  await reconcilePersistedJobsAfterRestart();
   // Validate the main read allowlist path once at boot so path bugs are loud.
   resolveReadablePath("output/layer_ir.json");
   createDashboardServer().listen(PORT, HOST, () => {

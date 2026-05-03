@@ -130,6 +130,7 @@ export class PipelineStateManager {
 
     if (
       result.failure_category === "toolchain_infra" ||
+      result.failure_category === "verification_env" ||
       result.failure_category === "architectural_fit" ||
       result.failure_category === "unknown"
     ) {

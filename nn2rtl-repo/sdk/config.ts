@@ -36,7 +36,7 @@ export type AgentName = keyof typeof AGENT_CONFIG;
 export const FAILURE_CLASSIFIER_CONFIG = {
   model: "claude-sonnet-4-6" as const,
   maxTurns: 4,
-  description: "Classifies failed module evidence as code_bug, architectural_fit, toolchain_infra, or unknown.",
+  description: "Classifies failed module evidence as code_bug, architectural_fit, toolchain_infra, verification_env, or unknown.",
 } as const;
 
 export const RETROSPECTOR_CONFIG = {

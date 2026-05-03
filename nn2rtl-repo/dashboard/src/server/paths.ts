@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { access, mkdir, open, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -101,11 +101,20 @@ export async function readAllowlistedFile(relativePath: string, maxBytes = 1_000
 }> {
   const resolved = resolveReadablePath(relativePath);
   const info = await stat(resolved);
-  const content = await readFile(resolved, "utf8");
-  const truncated = Buffer.byteLength(content, "utf8") > maxBytes;
+  const readLimit = Math.max(0, Math.floor(maxBytes));
+  const buffer = Buffer.alloc(Math.min(info.size, readLimit));
+  const handle = await open(resolved, "r");
+  let bytesRead = 0;
+  try {
+    const result = await handle.read(buffer, 0, buffer.length, 0);
+    bytesRead = result.bytesRead;
+  } finally {
+    await handle.close();
+  }
+  const truncated = info.size > readLimit;
   return {
     path: toRepoRelative(resolved),
-    content: truncated ? content.slice(0, maxBytes) : content,
+    content: buffer.subarray(0, bytesRead).toString("utf8"),
     sizeBytes: info.size,
     truncated,
   };

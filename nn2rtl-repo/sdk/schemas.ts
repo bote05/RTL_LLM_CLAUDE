@@ -22,12 +22,14 @@ export const failureClassSchema = z.enum([
   "architectural_unsupported",
   "structural_preflight_failed",
   "manual_correction_needed",
+  "spec_hash_mismatch",
 ]);
 
 export const failureCategorySchema = z.enum([
   "code_bug",
   "architectural_fit",
   "toolchain_infra",
+  "verification_env",
   "unknown",
 ]);
 
@@ -241,6 +243,21 @@ export const verifResultSchema = z
     first_mismatch_index: nullToUndef(z.number()),
     first_mismatch_expected: nullToUndef(z.number()),
     first_mismatch_got: nullToUndef(z.number()),
+    axi_weight_memory_model_enabled: nullToUndef(z.boolean()),
+    axi_weight_memory_model_status: nullToUndef(z.string()),
+    axi_weight_bytes_loaded: nullToUndef(z.number()),
+    axi_weight_bytes_per_beat: nullToUndef(z.number()),
+    axi_weight_arvalid_cycles: nullToUndef(z.number()),
+    axi_weight_arready_cycles: nullToUndef(z.number()),
+    axi_weight_ar_handshakes: nullToUndef(z.number()),
+    axi_weight_rvalid_cycles: nullToUndef(z.number()),
+    axi_weight_rready_cycles: nullToUndef(z.number()),
+    axi_weight_r_beats: nullToUndef(z.number()),
+    axi_weight_completed_bursts: nullToUndef(z.number()),
+    axi_weight_first_arvalid_cycle: nullToUndef(z.number()),
+    axi_weight_first_ar_handshake_cycle: nullToUndef(z.number()),
+    axi_weight_first_r_beat_cycle: nullToUndef(z.number()),
+    axi_weight_out_of_range_reads: nullToUndef(z.number()),
   })
   .strict();
 
@@ -270,6 +287,9 @@ export const verificationSidecarSchema = z
     beat_width_bits: z.number().int().positive().optional(),
     beats_per_input_sample: z.number().int().positive().optional(),
     beats_per_output_sample: z.number().int().positive().optional(),
+    weights_path: z.string().optional(),
+    weight_bank_paths: z.array(z.string()).optional(),
+    axi_weight_data_width_bits: z.number().int().positive().optional(),
     contract_params: contractParamSchema.optional(),
   })
   .strict();
@@ -380,6 +400,7 @@ export const pipelineStateSchema = z
           result?.status_class === "tb_setup_error" ||
           result?.failure_class === "architectural_unsupported" ||
           result?.failure_class === "manual_correction_needed" ||
+          result?.failure_category === "verification_env" ||
           result?.failure_category === "architectural_fit" ||
           result?.failure_category === "unknown";
         if (attempts !== undefined && attempts < state.max_retries && !earlyAbort) {

@@ -24,6 +24,7 @@
 // the sidecar. `run_verilator` reads that file and returns a full VerifResult.
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -31,9 +32,11 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "third_party/json.hpp"
@@ -82,6 +85,10 @@ struct Sidecar {
   std::string golden_outputs_path;
   std::string results_path;
   std::string testbench_template_path;
+  std::string contract_id;
+  std::string weights_path;
+  std::vector<std::string> weight_bank_paths;
+  int axi_weight_data_width_bits = 64;
 };
 
 struct VectorFile {
@@ -119,6 +126,12 @@ Sidecar loadSidecar(const std::string& path) {
   s.golden_outputs_path = j.at("golden_outputs_path").get<std::string>();
   s.results_path = j.at("results_path").get<std::string>();
   s.testbench_template_path = j.at("testbench_template_path").get<std::string>();
+  s.contract_id = j.value("contract_id", std::string(""));
+  s.weights_path = j.value("weights_path", std::string(""));
+  s.axi_weight_data_width_bits = j.value("axi_weight_data_width_bits", 64);
+  if (j.contains("weight_bank_paths") && j.at("weight_bank_paths").is_array()) {
+    s.weight_bank_paths = j.at("weight_bank_paths").get<std::vector<std::string>>();
+  }
   return s;
 }
 
@@ -188,6 +201,42 @@ VectorFile loadVectorFile(const std::string& path) {
   }
 
   return file;
+}
+
+std::vector<uint8_t> loadReadmemhByteFile(const std::string& path) {
+  std::ifstream in(path);
+  if (!in.is_open()) {
+    throw std::runtime_error("Could not open weight hex file '" + path + "'.");
+  }
+
+  std::vector<uint8_t> bytes;
+  std::string line;
+  size_t cursor = 0;
+  while (std::getline(in, line)) {
+    const size_t comment = line.find("//");
+    if (comment != std::string::npos) {
+      line = line.substr(0, comment);
+    }
+    std::istringstream iss(line);
+    std::string token;
+    while (iss >> token) {
+      if (token.empty()) continue;
+      if (token[0] == '@') {
+        cursor = static_cast<size_t>(std::stoull(token.substr(1), nullptr, 16));
+        if (bytes.size() < cursor) {
+          bytes.resize(cursor, 0);
+        }
+        continue;
+      }
+      const uint64_t value = std::stoull(token, nullptr, 16);
+      if (bytes.size() <= cursor) {
+        bytes.resize(cursor + 1, 0);
+      }
+      bytes[cursor] = static_cast<uint8_t>(value & 0xFFU);
+      ++cursor;
+    }
+  }
+  return bytes;
 }
 
 void requireCanonicalSignals(const Sidecar& s) {
@@ -367,16 +416,212 @@ void tickClock(Dut* dut, int64_t& cycle_counter) {
   ++cycle_counter;
 }
 
+template <typename Dut, typename = void>
+struct HasAxiWeightReadPorts : std::false_type {};
+
+template <typename Dut>
+struct HasAxiWeightReadPorts<Dut, std::void_t<
+    decltype(std::declval<Dut&>().weights_arvalid),
+    decltype(std::declval<Dut&>().weights_arready),
+    decltype(std::declval<Dut&>().weights_araddr),
+    decltype(std::declval<Dut&>().weights_arlen),
+    decltype(std::declval<Dut&>().weights_rvalid),
+    decltype(std::declval<Dut&>().weights_rready),
+    decltype(std::declval<Dut&>().weights_rdata),
+    decltype(std::declval<Dut&>().weights_rlast)>> : std::true_type {};
+
+template <typename Dut>
+void clearAxiWeightInputs(Dut* dut) {
+  if constexpr (HasAxiWeightReadPorts<Dut>::value) {
+    dut->weights_arready = 0;
+    dut->weights_rvalid = 0;
+    dut->weights_rdata = 0;
+    dut->weights_rlast = 0;
+  }
+}
+
 template <typename Dut>
 void applyReset(Dut* dut, int64_t& cycle_counter, int cycles = 5) {
   dut->rst_n = 0;
   dut->valid_in = 0;
   clearSignal(dut->data_in);
+  clearAxiWeightInputs(dut);
   for (int i = 0; i < cycles; ++i) {
     tickClock(dut, cycle_counter);
   }
   dut->rst_n = 1;
 }
+
+class AxiWeightMemory {
+ public:
+  explicit AxiWeightMemory(const Sidecar& sidecar)
+      : contract_id_(sidecar.contract_id),
+        bytes_per_beat_(std::max(1, sidecar.axi_weight_data_width_bits / 8)) {
+    if (contract_id_ != "dram-backed-weights") {
+      return;
+    }
+    if (sidecar.weights_path.empty()) {
+      status_ = "missing_weights_path";
+      return;
+    }
+    memory_ = loadReadmemhByteFile(sidecar.weights_path);
+    enabled_ = true;
+    status_ = "ready";
+  }
+
+  bool enabled() const { return enabled_; }
+  const std::string& status() const { return status_; }
+  int64_t arvalid_cycles() const { return arvalid_cycles_; }
+  int64_t arready_cycles() const { return arready_cycles_; }
+  int64_t ar_handshakes() const { return ar_handshakes_; }
+  int64_t rvalid_cycles() const { return rvalid_cycles_; }
+  int64_t rready_cycles() const { return rready_cycles_; }
+  int64_t r_beats() const { return r_beats_; }
+  int64_t completed_bursts() const { return completed_bursts_; }
+  int64_t first_arvalid_cycle() const { return first_arvalid_cycle_; }
+  int64_t first_ar_handshake_cycle() const { return first_ar_handshake_cycle_; }
+  int64_t first_r_beat_cycle() const { return first_r_beat_cycle_; }
+  int64_t out_of_range_reads() const { return out_of_range_reads_; }
+  bool applicable() const { return contract_id_ == "dram-backed-weights"; }
+
+  template <typename Dut>
+  void requireCompatibleDut() const {
+    if (applicable() && !HasAxiWeightReadPorts<Dut>::value) {
+      throw std::runtime_error(
+          "dram-backed-weights sidecar requires DUT AXI weight ports "
+          "(weights_arvalid/arready/araddr/arlen/rvalid/rready/rdata/rlast), "
+          "but the generated Verilated model does not expose them.");
+    }
+  }
+
+  template <typename Dut>
+  void drive(Dut* dut, int64_t cycle) {
+    if constexpr (!HasAxiWeightReadPorts<Dut>::value) {
+      (void)dut;
+      (void)cycle;
+      return;
+    } else {
+      if (!applicable()) {
+        dut->weights_arready = 0;
+        dut->weights_rvalid = 0;
+        dut->weights_rdata = 0;
+        dut->weights_rlast = 0;
+        return;
+      }
+
+      if (dut->weights_arvalid) {
+        ++arvalid_cycles_;
+        if (first_arvalid_cycle_ < 0) first_arvalid_cycle_ = cycle;
+      }
+      if (dut->weights_rready) {
+        ++rready_cycles_;
+      }
+
+      const bool can_accept_ar = enabled_ && !burst_active_ && !holding_r_;
+      dut->weights_arready = can_accept_ar ? 1 : 0;
+      if (can_accept_ar) {
+        ++arready_cycles_;
+      }
+
+      if (can_accept_ar && dut->weights_arvalid) {
+        burst_active_ = true;
+        burst_addr_ = static_cast<uint64_t>(dut->weights_araddr);
+        burst_len_ = static_cast<uint32_t>(dut->weights_arlen);
+        beat_index_ = 0;
+        ++ar_handshakes_;
+        if (first_ar_handshake_cycle_ < 0) first_ar_handshake_cycle_ = cycle;
+      }
+
+      if (!holding_r_ && burst_active_) {
+        hold_data_ = readBeat(burst_addr_ + static_cast<uint64_t>(beat_index_) * bytes_per_beat_);
+        hold_last_ = beat_index_ >= burst_len_;
+        holding_r_ = true;
+      }
+
+      if (holding_r_) {
+        dut->weights_rvalid = 1;
+        dut->weights_rdata = static_cast<decltype(dut->weights_rdata)>(hold_data_);
+        dut->weights_rlast = hold_last_ ? 1 : 0;
+        ++rvalid_cycles_;
+        if (dut->weights_rready) {
+          ++r_beats_;
+          if (first_r_beat_cycle_ < 0) first_r_beat_cycle_ = cycle;
+          if (hold_last_) {
+            ++completed_bursts_;
+            burst_active_ = false;
+          } else {
+            ++beat_index_;
+          }
+          holding_r_ = false;
+        }
+      } else {
+        dut->weights_rvalid = 0;
+        dut->weights_rdata = 0;
+        dut->weights_rlast = 0;
+      }
+    }
+  }
+
+  json traceJson() const {
+    return {
+        {"axi_weight_memory_model_enabled", enabled_},
+        {"axi_weight_memory_model_status", status_},
+        {"axi_weight_bytes_loaded", static_cast<int64_t>(memory_.size())},
+        {"axi_weight_bytes_per_beat", bytes_per_beat_},
+        {"axi_weight_arvalid_cycles", arvalid_cycles_},
+        {"axi_weight_arready_cycles", arready_cycles_},
+        {"axi_weight_ar_handshakes", ar_handshakes_},
+        {"axi_weight_rvalid_cycles", rvalid_cycles_},
+        {"axi_weight_rready_cycles", rready_cycles_},
+        {"axi_weight_r_beats", r_beats_},
+        {"axi_weight_completed_bursts", completed_bursts_},
+        {"axi_weight_first_arvalid_cycle", first_arvalid_cycle_},
+        {"axi_weight_first_ar_handshake_cycle", first_ar_handshake_cycle_},
+        {"axi_weight_first_r_beat_cycle", first_r_beat_cycle_},
+        {"axi_weight_out_of_range_reads", out_of_range_reads_},
+    };
+  }
+
+ private:
+  uint64_t readBeat(uint64_t byte_addr) {
+    uint64_t word = 0;
+    for (int byte = 0; byte < bytes_per_beat_ && byte < 8; ++byte) {
+      const uint64_t index = byte_addr + static_cast<uint64_t>(byte);
+      uint8_t value = 0;
+      if (index < memory_.size()) {
+        value = memory_[static_cast<size_t>(index)];
+      } else {
+        ++out_of_range_reads_;
+      }
+      word |= static_cast<uint64_t>(value) << (8U * byte);
+    }
+    return word;
+  }
+
+  std::string contract_id_;
+  std::vector<uint8_t> memory_;
+  bool enabled_ = false;
+  std::string status_ = "not_applicable";
+  int bytes_per_beat_ = 8;
+  bool burst_active_ = false;
+  bool holding_r_ = false;
+  uint64_t burst_addr_ = 0;
+  uint32_t burst_len_ = 0;
+  uint32_t beat_index_ = 0;
+  uint64_t hold_data_ = 0;
+  bool hold_last_ = false;
+  int64_t arvalid_cycles_ = 0;
+  int64_t arready_cycles_ = 0;
+  int64_t ar_handshakes_ = 0;
+  int64_t rvalid_cycles_ = 0;
+  int64_t rready_cycles_ = 0;
+  int64_t r_beats_ = 0;
+  int64_t completed_bursts_ = 0;
+  int64_t first_arvalid_cycle_ = -1;
+  int64_t first_ar_handshake_cycle_ = -1;
+  int64_t first_r_beat_cycle_ = -1;
+  int64_t out_of_range_reads_ = 0;
+};
 
 void writeResults(const std::string& results_path, const json& results) {
   std::filesystem::path p = results_path;
@@ -480,7 +725,9 @@ int main(int argc, char** argv) {
           std::to_string(sidecar.output_width_bits / 8) + ".");
     }
 
+    AxiWeightMemory axi_weight_memory(sidecar);
     auto dut = std::make_unique<VMODEL_CLASS>();
+    axi_weight_memory.requireCompatibleDut<VMODEL_CLASS>();
     int64_t cycle_counter = 0;
     applyReset(dut.get(), cycle_counter);
 
@@ -619,6 +866,8 @@ int main(int argc, char** argv) {
           dut->valid_in = 0;
           clearSignal(dut->data_in);
         }
+
+        axi_weight_memory.drive(dut.get(), cycle_counter);
 
         // Always tick — including the cycle that sampled the vector's final
         // output. Skipping this tick leaves valid_out/data_out live into the
@@ -768,6 +1017,24 @@ int main(int argc, char** argv) {
           std::to_string(sample_count) +
           " samples. See first_mismatch_* and expected/got for raw evidence.";
     }
+    if (axi_weight_memory.applicable() && final_status != "pass") {
+      const std::string axi_trace =
+          " AXI weight trace: model_status=" + axi_weight_memory.status() +
+          ", model_enabled=" + std::string(axi_weight_memory.enabled() ? "true" : "false") +
+          ", arvalid_cycles=" + std::to_string(axi_weight_memory.arvalid_cycles()) +
+          ", arready_cycles=" + std::to_string(axi_weight_memory.arready_cycles()) +
+          ", ar_handshakes=" + std::to_string(axi_weight_memory.ar_handshakes()) +
+          ", rvalid_cycles=" + std::to_string(axi_weight_memory.rvalid_cycles()) +
+          ", rready_cycles=" + std::to_string(axi_weight_memory.rready_cycles()) +
+          ", r_beats=" + std::to_string(axi_weight_memory.r_beats()) +
+          ", completed_bursts=" + std::to_string(axi_weight_memory.completed_bursts()) +
+          ", out_of_range_reads=" + std::to_string(axi_weight_memory.out_of_range_reads()) + ".";
+      if (fix_hint_text.empty()) {
+        fix_hint_text = axi_trace.substr(1);
+      } else {
+        fix_hint_text += axi_trace;
+      }
+    }
 
     json results = {
         {"module_id", sidecar.module_id},
@@ -795,6 +1062,12 @@ int main(int argc, char** argv) {
         {"first_mismatch_expected", first_mismatch_expected_v},
         {"first_mismatch_got", first_mismatch_got_v},
     };
+    if (axi_weight_memory.applicable()) {
+      const json trace = axi_weight_memory.traceJson();
+      for (const auto& item : trace.items()) {
+        results[item.key()] = item.value();
+      }
+    }
     if (!fix_hint_text.empty()) {
       results["fix_hint"] = fix_hint_text;
     }

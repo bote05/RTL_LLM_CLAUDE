@@ -183,7 +183,7 @@ async function appendJob(record: JobRecord): Promise<void> {
   await appendFile(jobsLogPath, `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export async function readJobs(): Promise<JobRecord[]> {
+async function readJobsRaw(): Promise<JobRecord[]> {
   try {
     const lines = (await readFile(jobsLogPath, "utf8")).split(/\r?\n/).filter(Boolean);
     const byId = new Map<string, JobRecord>();
@@ -198,6 +198,37 @@ export async function readJobs(): Promise<JobRecord[]> {
     return [...byId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch {
     return [];
+  }
+}
+
+export async function readJobs(): Promise<JobRecord[]> {
+  return readJobsRaw();
+}
+
+export async function reconcilePersistedJobsAfterRestart(): Promise<void> {
+  const jobs = await readJobsRaw();
+  const endedAt = nowIso();
+  for (const job of jobs) {
+    if (running.has(job.id)) continue;
+    if (job.state === "queued" && expensiveQueue.some((queued) => queued.id === job.id)) continue;
+
+    if (job.state === "queued") {
+      await appendJob({
+        ...job,
+        state: "stopped",
+        endedAt,
+        stopRequestedAt: job.stopRequestedAt ?? endedAt,
+        stopReason: job.stopReason ?? "dashboard restarted before queued job launched",
+      });
+    } else if (job.state === "running" || job.state === "stopping") {
+      await appendJob({
+        ...job,
+        state: "failed",
+        endedAt,
+        exitCode: job.exitCode ?? null,
+        stopReason: job.stopReason ?? "dashboard restarted while job was running; process ownership was lost",
+      });
+    }
   }
 }
 

@@ -207,6 +207,7 @@ describe("orchestrate helpers", () => {
 
     expect(prompt).toContain("code_bug");
     expect(prompt).toContain("architectural_fit");
+    expect(prompt).toContain("verification_env");
     expect(prompt).toContain("unknown");
     expect(prompt).toContain("Contract-fit indicators");
     expect(prompt).toContain("DSP48 exhausted");

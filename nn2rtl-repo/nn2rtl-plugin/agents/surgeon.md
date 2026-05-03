@@ -140,9 +140,9 @@ For value-mismatch bugs (outputs all present but wrong):
 2. Confirm the hypothesis against `first_mismatch_*` and the `expected` / `got` samples. If the evidence doesn't support your hypothesis, form a different one before editing.
 3. Locate the exact faulty line range in the Verilog. Read the surrounding code so you understand the context.
 4. Rewrite only that section. The rest of the module is known-good and must not change.
-5. **Preserve the public interface** exactly — canonical port names (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`), port widths from the LayerIR, and the declared `pipeline_latency_cycles`. A regression on any of these causes the orchestrator to revert your output.
+5. **Preserve the public interface** exactly — base stream port names (`clk`, `rst_n`, `valid_in`, `ready_in`, `data_in`, `valid_out`, `data_out`), any extra ports declared by the selected contract metadata, port widths from the LayerIR, and the declared `pipeline_latency_cycles`. A regression on any of these causes the orchestrator to revert your output.
    If the LayerIR uses an alternative contract (`io_mode: "channel_tiled"` or
-   `"dram_backed"`), preserve `channel_tile`, `input_width_bits`, and
+   `"dram_backed_weights"`), preserve `channel_tile`, `input_width_bits`, and
    `output_width_bits` exactly; do not widen back to the full flat-bus shape.
 6. Classify the bug by picking **one** entry from the taxonomy below and include it in `failure_class` in the returned module (for observability; the orchestrator does not gate on it).
 7. Produce the repaired RTL with the same `module_id`, the same `spec_hash`, `generated_by: "Surgeon"`, and `attempt` incremented by one. Persist via `write_verilog` BEFORE returning the final JSON; the orchestrator hard-fails if the `<module_id>.v` is missing on disk.

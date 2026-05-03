@@ -217,6 +217,9 @@ describe("contract parity", () => {
       beat_width_bits: 8,
       beats_per_input_sample: 1,
       beats_per_output_sample: 1,
+      weights_path: "/tmp/weights.hex",
+      weight_bank_paths: [],
+      axi_weight_data_width_bits: 64,
       contract_params: {},
     });
     expect(sdkVerificationSidecarSchema.parse(sidecar)).toEqual(sidecar);
@@ -226,6 +229,8 @@ describe("contract parity", () => {
     expect(tbReadme).toContain('"data_in_signal": "data_in"');
     expect(tbReadme).toContain('"data_out_signal": "data_out"');
     expect(tbReadme).toContain('"bus_bytes_per_sample": 1');
+    expect(tbReadme).toContain('"weights_path": "/abs/path/to/block_1_conv1_weights.hex"');
+    expect(tbReadme).toContain('"axi_weight_data_width_bits": 64');
     expect(sidecar.contract_id).toBe("flat-bus");
     expect(tbCpp).toContain("ready_in_signal");
     expect(tbCpp).toContain("data_in_signal");

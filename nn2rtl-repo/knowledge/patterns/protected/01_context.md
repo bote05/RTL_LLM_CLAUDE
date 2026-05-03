@@ -15,7 +15,8 @@ op-specific files below can assume it already applies.
 
 ## Canonical top-level ports
 
-Exactly these seven signals. No more, no fewer. Names and directions are fixed.
+Every contract starts with these seven stream signals. Names and directions are
+fixed.
 
 ```verilog
 module <module_id> (
@@ -31,6 +32,15 @@ module <module_id> (
 
 `input_width_bits` and `output_width_bits` come from the `LayerIR`. Do not
 invent other width sources.
+
+Some contracts extend this base interface. When `LayerIR.contract_id` selects a
+contract whose `contracts/<contract_id>/metadata.json` declares additional
+`interface_signals`, include those ports exactly as declared. For example,
+`dram-backed-weights` adds an AXI read channel for external weight memory:
+`weights_arvalid`, `weights_arready`, `weights_araddr`, `weights_arlen`,
+`weights_rvalid`, `weights_rready`, `weights_rdata`, and `weights_rlast`.
+Do not apply the seven-signal rule to contracts that explicitly declare these
+extra ports.
 
 ## Packed-channel bus convention
 

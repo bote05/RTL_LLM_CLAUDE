@@ -104,6 +104,13 @@ describe("mcp tools", () => {
     expect(pool.reference_verilog).toBeNull();
   });
 
+  it("get_rtl_patterns includes dram-backed contract guidance without a manual reference", async () => {
+    const result = await get_rtl_patterns("conv2d", 1, 1, "dram-backed-weights");
+    expect(result.pattern_markdown).toContain("DRAM-backed weights contract");
+    expect(result.pattern_markdown).toContain("ready_in = 0");
+    expect(result.reference_verilog).toBeNull();
+  });
+
   it("extracts stderr text from unknown errors", () => {
     expect(stderrFromUnknown({ stderr: Buffer.from("boom") })).toBe("boom");
     expect(stderrFromUnknown(new Error("plain-error"))).toBe("plain-error");

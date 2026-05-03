@@ -70,20 +70,35 @@ function parseTargetSlug(reportPathRel: string, moduleId: string): string {
   return file.startsWith(prefix) ? file.slice(prefix.length) : file.replace(/^improve_/, "");
 }
 
+function lifecycleTier(status: string | undefined): DocTier {
+  if (status === "archived") return "archive";
+  if (
+    status === "protected" ||
+    status === "active" ||
+    status === "probationary" ||
+    status === "improved" ||
+    status === "archive"
+  ) {
+    return status;
+  }
+  return "probationary";
+}
+
 async function loadDocs(root: string): Promise<DocSummary[]> {
   const lifecycle = asRecord(await readJson(path.join(root, "knowledge", "doc_lifecycle.json")));
   const docs: DocSummary[] = [];
   for (const [id, raw] of Object.entries(asRecord(lifecycle.docs))) {
     const doc = asRecord(raw);
+    const status = asString(doc.status) ?? "probationary";
     docs.push({
       id,
-      tier: (asString(doc.status) ?? "probationary") as DocTier,
-      status: asString(doc.status) ?? "probationary",
+      tier: lifecycleTier(status),
+      status,
       opType: asString(doc.op_type),
       contractId: asString(doc.contract_id),
       moduleId: asString(doc.created_by_module),
-      patternPath: asString(doc.pattern_path),
-      referencePath: asString(doc.reference_path),
+      patternPath: asString(doc.archived_pattern_path) ?? asString(doc.pattern_path),
+      referencePath: asString(doc.archived_reference_path) ?? asString(doc.reference_path),
       createdAt: asString(doc.created_at),
       createdByAgent: asString(doc.created_by_agent),
       improvementTargets: asArray<string>(doc.improvement_targets),

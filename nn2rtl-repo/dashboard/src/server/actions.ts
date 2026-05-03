@@ -53,13 +53,13 @@ export async function archiveArtifact(input: {
       : {};
     for (const doc of Object.values(docs)) {
       if (doc.pattern_path === normalized) {
-        doc.pattern_path = archivedRel;
-        doc.status = "archive";
+        doc.archived_pattern_path = archivedRel;
+        doc.status = "archived";
         doc.archived_at = new Date().toISOString();
       }
       if (doc.reference_path === normalized) {
-        doc.reference_path = archivedRel;
-        doc.status = "archive";
+        doc.archived_reference_path = archivedRel;
+        doc.status = "archived";
         doc.archived_at = new Date().toISOString();
       }
     }

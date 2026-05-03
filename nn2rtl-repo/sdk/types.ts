@@ -100,9 +100,15 @@ export type FailureClass =
   | "verilator_timeout"
   | "architectural_unsupported"
   | "structural_preflight_failed"
-  | "manual_correction_needed";
+  | "manual_correction_needed"
+  | "spec_hash_mismatch";
 
-export type FailureCategory = "code_bug" | "architectural_fit" | "toolchain_infra" | "unknown";
+export type FailureCategory =
+  | "code_bug"
+  | "architectural_fit"
+  | "toolchain_infra"
+  | "verification_env"
+  | "unknown";
 
 export interface FailureClassification {
   category: FailureCategory;
@@ -152,6 +158,21 @@ export interface VerifResult {
   first_mismatch_index?: number;
   first_mismatch_expected?: number;
   first_mismatch_got?: number;
+  axi_weight_memory_model_enabled?: boolean;
+  axi_weight_memory_model_status?: string;
+  axi_weight_bytes_loaded?: number;
+  axi_weight_bytes_per_beat?: number;
+  axi_weight_arvalid_cycles?: number;
+  axi_weight_arready_cycles?: number;
+  axi_weight_ar_handshakes?: number;
+  axi_weight_rvalid_cycles?: number;
+  axi_weight_rready_cycles?: number;
+  axi_weight_r_beats?: number;
+  axi_weight_completed_bursts?: number;
+  axi_weight_first_arvalid_cycle?: number;
+  axi_weight_first_ar_handshake_cycle?: number;
+  axi_weight_first_r_beat_cycle?: number;
+  axi_weight_out_of_range_reads?: number;
 }
 
 export interface ModelUsageEntry {
@@ -188,6 +209,9 @@ export interface VerificationSidecar {
   beat_width_bits?: number;
   beats_per_input_sample?: number;
   beats_per_output_sample?: number;
+  weights_path?: string;
+  weight_bank_paths?: string[];
+  axi_weight_data_width_bits?: number;
   contract_params?: Record<string, string | number | boolean | null>;
 }
 

@@ -760,9 +760,11 @@ function buildFoundryImprovePrompt(
   sections.push(
     "",
     "== OUTPUT CONTRACT ==",
-    "Return EXACTLY this JSON object and nothing else:",
-    `  { "module_id": "${input.module_id}", "spec_hash": "${input.original_module.spec_hash}", "verilog_source": "<full improved RTL as a JSON-escaped string>", "generated_by": "Foundry", "attempt": ${input.attempt_index} }`,
-    "Re-emit the FULL improved Verilog source as a single JSON-escaped string. Escape every backslash as `\\\\`, every double quote as `\\\"`, every newline as `\\n`. No markdown fences, no commentary.",
+    "Persist the improved RTL via the `mcp__nn2rtl-tools__write_verilog` MCP tool BEFORE returning — same `module_id` as the original. The orchestrator reads `<output_dir>/<module_id>.v` from disk after you return.",
+    "Then return EXACTLY this metadata-only JSON object and nothing else:",
+    `  { "module_id": "${input.module_id}", "spec_hash": "${input.original_module.spec_hash}", "generated_by": "Foundry", "attempt": ${input.attempt_index} }`,
+    "Do NOT include `verilog_source` in the final JSON. Re-serialising the full Verilog as a JSON-escaped string burns output tokens and routinely produces unparseable final messages.",
+    "No markdown fences, no commentary.",
   );
 
   return sections.filter((line) => line !== undefined).join("\n");
@@ -1351,8 +1353,9 @@ export async function runImprove(
     resumeSessionId = attempt.session_id ?? resumeSessionId;
 
     const verif = await runtime.assayerFn(module, layer);
-    attempt.assayer_result = verifResultSchema.parse(verif);
-    if (attempt.assayer_result.status !== "pass") {
+    const assayerResult = verifResultSchema.parse(verif);
+    attempt.assayer_result = assayerResult;
+    if (assayerResult.status !== "pass") {
       attempt.failed_gate = "verilator";
       attempts.push(attempt);
       await persistAttempt(paths, moduleId, runId, attempt);
