@@ -33,6 +33,14 @@ export type ContractMetadata = {
   interface_signals: ContractSignal[];
   fit_constraints: {
     max_bus_width_bits: number;
+    // Maximum bytes of weights this contract is willing to keep on-chip. Set
+    // on contracts whose weights live in BRAM (flat-bus, tiled-streaming,
+    // activation-double-buffering); omitted on contracts that stream weights
+    // from DRAM (dram-backed-weights, weight-tiling) where the layer's total
+    // weight size doesn't bound on-chip storage. Layers exceeding this cap
+    // fail `contractFitFailure`, which routes the failure_classifier through
+    // a contract-walk to a heavier contract.
+    max_on_chip_weight_bytes?: number;
     default_beat_width_bits?: number;
     default_channel_tile?: number;
     bram_formula: string;
@@ -141,8 +149,21 @@ export function contractFitFailure(layer: LayerIR): string | null {
   const outputWidth = layer.output_width_bits;
   const cap = metadata.fit_constraints.max_bus_width_bits;
   const over: string[] = [];
-  if (inputWidth > cap) over.push(`effective_input_width_bits=${inputWidth}`);
-  if (outputWidth > cap) over.push(`output_width_bits=${outputWidth}`);
+  if (inputWidth > cap) over.push(`effective_input_width_bits=${inputWidth}>max_bus_width_bits=${cap}`);
+  if (outputWidth > cap) over.push(`output_width_bits=${outputWidth}>max_bus_width_bits=${cap}`);
+
+  // Weight-memory budget gate. Contracts whose weights live on-chip declare
+  // `max_on_chip_weight_bytes`; layers whose INT8 weight tensor exceeds that
+  // budget can synth-pass but won't actually fit alongside the rest of the
+  // network on the target device (BRAM18 budget on ZCU102 is ~32.8 Mbit
+  // shared across 119 layers — single layers spilling to LUTRAM blow the
+  // LUT count, and timing_met from synth-only Vivado hides the issue).
+  const weightCap = metadata.fit_constraints.max_on_chip_weight_bytes;
+  const weightBytes = layer.num_weights ?? 0;
+  if (weightCap !== undefined && weightBytes > weightCap) {
+    over.push(`weight_bytes=${weightBytes}>max_on_chip_weight_bytes=${weightCap}`);
+  }
+
   if (over.length === 0) return null;
 
   const nudge =
@@ -151,7 +172,7 @@ export function contractFitFailure(layer: LayerIR): string | null {
       : "Reduce channel_tile / beat width or select a heavier contract.";
   return (
     `Layer ${layer.module_id} does not fit contract '${metadata.name}': ` +
-    `${over.join(" and ")} exceeds max_bus_width_bits=${cap}. ${nudge}`
+    `${over.join(" and ")} exceeds capability. ${nudge}`
   );
 }
 

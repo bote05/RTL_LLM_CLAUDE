@@ -15,6 +15,7 @@
   ],
   "fit_constraints": {
     "max_bus_width_bits": 4096,
+    "max_on_chip_weight_bytes": 1048576,
     "default_beat_width_bits": 256,
     "bram_formula": "activation BRAM bits = 2 * activation_buffer_elements * input_width_bits; weights follow the selected weight storage mode.",
     "buffer_sizing_rules": [

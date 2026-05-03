@@ -13,6 +13,7 @@
   ],
   "fit_constraints": {
     "max_bus_width_bits": 256,
+    "max_on_chip_weight_bytes": 1048576,
     "default_beat_width_bits": 256,
     "default_channel_tile": 32,
     "bram_formula": "line buffers store channel_tile lanes per spatial row; BRAM bits ~= channel_tile*8*image_width*(kernel_h-1) plus accumulator state.",

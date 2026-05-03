@@ -75,15 +75,20 @@ export class PipelineStateManager {
     for (const moduleId of this.moduleOrder) {
       const status = this.state.modules[moduleId];
 
-      if (status === "pending") {
+      if (status === "pending" || status === "fail_retry") {
+        // Per-(module, contract) call sequence: 2 Foundry calls then 1 Surgeon
+        // call. The two Foundry calls run on a single resumed conversation —
+        // call 1 emits the system prompt, call 2 is just a focused user-turn
+        // appended to the same session (orchestrator builds that prompt). The
+        // Surgeon call (attempt 3) is its own conversation and receives the
+        // Foundry transcript as user-provided evidence.
+        // Calls beyond 3 are reached only via the orchestrator's retrospector
+        // path — not via this tick().
         this.state.modules[moduleId] = "generating";
-        return { action: "invoke_foundry", module_id: moduleId };
-      }
-
-      if (status === "fail_retry") {
-        this.state.modules[moduleId] = "generating";
-        this.state.attempts[moduleId] = (this.state.attempts[moduleId] ?? 0) + 1;
-        return { action: "invoke_surgeon", module_id: moduleId };
+        const next = (this.state.attempts[moduleId] ?? 0) + 1;
+        this.state.attempts[moduleId] = next;
+        const action = next <= 2 ? "invoke_foundry" : "invoke_surgeon";
+        return { action, module_id: moduleId };
       }
     }
 
@@ -237,17 +242,20 @@ export class PipelineStateManager {
 
     // Transient statuses ('generating', 'verifying') mean the previous run
     // crashed mid-step. Recover to the nearest resumable status so tick()
-    // can make progress, and roll back the attempts counter for Surgeon-path
-    // crashes so tick()'s re-increment does not over-bill the retry budget.
+    // can make progress, and roll back the attempts counter so tick()'s
+    // re-increment does not over-bill the retry budget. Note that tick()
+    // increments attempts on EVERY dispatch (including the first), so we
+    // decrement on every crash-recovery branch, not just the surgeon path.
     //
     // The four crash points the orchestrator can persist:
-    //   generating + no prior result  -> Foundry crashed.    Resume: pending.
-    //   generating + prior result     -> Surgeon crashed.    Resume: fail_retry, attempts-1.
-    //   verifying  + no prior result  -> Assayer crashed after Foundry.
-    //                                    Resume: pending (re-run Foundry; Assayer is not a
-    //                                    first-class tick() action today).
-    //   verifying  + prior result     -> Assayer crashed after Surgeon.
-    //                                    Resume: fail_retry, attempts-1 (re-run Surgeon).
+    //   generating + no prior result  -> Foundry call 1 crashed.
+    //                                    Resume: pending, attempts-1.
+    //   generating + prior result     -> Foundry call 2 or Surgeon crashed.
+    //                                    Resume: fail_retry, attempts-1.
+    //   verifying  + no prior result  -> Assayer crashed after Foundry call 1.
+    //                                    Resume: pending, attempts-1.
+    //   verifying  + prior result     -> Assayer crashed after Foundry-2/Surgeon.
+    //                                    Resume: fail_retry, attempts-1.
     for (const moduleId of this.moduleOrder) {
       const status = this.state.modules[moduleId];
       if (status !== "generating" && status !== "verifying") {
@@ -255,13 +263,9 @@ export class PipelineStateManager {
       }
 
       const hasPriorResult = moduleId in this.state.results;
-      if (hasPriorResult) {
-        this.state.modules[moduleId] = "fail_retry";
-        const attempts = this.state.attempts[moduleId] ?? 0;
-        this.state.attempts[moduleId] = Math.max(0, attempts - 1);
-      } else {
-        this.state.modules[moduleId] = "pending";
-      }
+      this.state.modules[moduleId] = hasPriorResult ? "fail_retry" : "pending";
+      const attempts = this.state.attempts[moduleId] ?? 0;
+      this.state.attempts[moduleId] = Math.max(0, attempts - 1);
     }
   }
 

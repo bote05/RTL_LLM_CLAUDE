@@ -36,10 +36,12 @@ output/reports/
 output/tmp/
 output/weights/
 output/goldens/
+output/debug/
 output/layer_ir.json
 output/pipeline_state.json
 output/pipeline_state.snapshot.json
 output/pipeline_state.*.json
+output/contract_state.json
 output/run_log.jsonl
 output/golden_vectors.json
 output/layer_ir.*.json
@@ -51,6 +53,7 @@ output/*.onnx
 output/*.onnx.data
 output/saved_rtl_*/
 output/improve/
+output/dashboard/
 
 # Local comparison / smoke artifacts
 comparison/

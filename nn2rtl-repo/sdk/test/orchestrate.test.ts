@@ -12,6 +12,7 @@ import {
   buildFoundryRetrospectorInjectionPrompt,
   buildRetrospectorPrompt,
   checkBusWidthCapability,
+  contractConformanceViolations,
   createOrchestratorRuntime,
   findLayer,
   handlePipelineError,
@@ -483,7 +484,7 @@ describe("orchestrate helpers", () => {
     const issues = preflightVerilogModule(
       {
         module_id: "m1",
-        spec_hash: "hash",
+        spec_hash: "conv2d_3x64x7x7_s224x224_i24_o512",
         generated_by: "Foundry",
         attempt: 1,
         verilog_source: [
@@ -540,7 +541,7 @@ describe("orchestrate helpers", () => {
     const issues = preflightVerilogModule(
       {
         module_id: "m1",
-        spec_hash: "hash",
+        spec_hash: "conv2d_3x64x7x7_s224x224_i24_o512",
         generated_by: "Surgeon",
         attempt: 2,
         verilog_source: [
@@ -584,6 +585,57 @@ describe("orchestrate helpers", () => {
     );
 
     expect(issues).toEqual([]);
+  });
+
+  it("rejects wrong-contract spec hashes before verification", () => {
+    const issues = preflightVerilogModule(
+      {
+        module_id: "m1",
+        spec_hash: "conv2d_64x64x1x1_s1x1_i512_o512_iodram-backed-weights_tile32",
+        generated_by: "Foundry",
+        attempt: 1,
+        verilog_source: [
+          "module m1(",
+          "  input wire clk,",
+          "  input wire rst_n,",
+          "  input wire valid_in,",
+          "  output wire ready_in,",
+          "  input wire [511:0] data_in,",
+          "  output wire valid_out,",
+          "  output wire [511:0] data_out",
+          ");",
+          "endmodule",
+        ].join("\n"),
+      },
+      {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 64, 1, 1],
+        output_shape: [1, 64, 1, 1],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [64, 64, 1, 1],
+        num_weights: 4096,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 67,
+        clock_period_ns: 20,
+        input_width_bits: 512,
+        output_width_bits: 512,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+    );
+
+    expect(issues.some((issue) => issue.includes("does not match expected spec_hash"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("selected contract 'flat-bus'"))).toBe(true);
   });
 
   it("fails fast when LayerIR bus widths do not match the channel contract", async () => {
@@ -988,6 +1040,157 @@ endmodule
 
     const issues = preflightVerilogModule(module, layer);
     expect(issues.some((issue) => issue.includes("weights_arvalid"))).toBe(true);
+  });
+
+  it("rejects dram-backed RTL that ties off external weights or stores the full tensor on chip", () => {
+    const layer = {
+      module_id: "dram_conv",
+      op_type: "conv2d" as const,
+      contract_id: "dram-backed-weights" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 64, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 1, 1],
+      num_weights: 4096,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+
+    const violations = contractConformanceViolations(
+      {
+        module_id: "dram_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: `
+module dram_conv();
+  assign weights_arvalid = 1'b0;
+  reg [7:0] weights [0:OC*K_TOTAL-1];
+  initial begin
+    $readmemh("/tmp/w.hex", weights);
+  end
+endmodule
+`,
+      },
+      layer,
+    );
+
+    expect(violations.map((violation) => violation.rule)).toEqual([
+      "contract_dram_weights_arvalid_tied_off",
+      "contract_dram_full_weight_array",
+      "contract_dram_full_weight_readmemh",
+    ]);
+  });
+
+  it("rejects weight-tiling RTL with a fake scheduler or full active tile", () => {
+    const layer = {
+      module_id: "wt_conv",
+      op_type: "conv2d" as const,
+      contract_id: "weight-tiling" as const,
+      input_shape: [1, 64, 8, 8],
+      output_shape: [1, 64, 8, 8],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 3, 3],
+      num_weights: 36864,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      channel_tile: 32,
+    };
+
+    const violations = contractConformanceViolations(
+      {
+        module_id: "wt_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: `
+module wt_conv();
+  coord_scheduler u_coord_scheduler(.clk(clk), .valid_in(1'b0), .ready_in());
+  reg signed [7:0] active_weight_tile [0:OC*K_TOTAL-1];
+endmodule
+`,
+      },
+      layer,
+    );
+
+    expect(violations.map((violation) => violation.rule)).toEqual([
+      "contract_weight_tiling_fake_scheduler",
+      "contract_weight_tiling_full_active_tile",
+    ]);
+  });
+
+  it("rejects tiled-streaming RTL without deterministic tile beat counters", () => {
+    const layer = {
+      module_id: "tile_conv",
+      op_type: "conv2d" as const,
+      contract_id: "tiled-streaming" as const,
+      input_shape: [1, 64, 8, 8],
+      output_shape: [1, 64, 8, 8],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 1, 1],
+      num_weights: 4096,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      channel_tile: 32,
+    };
+
+    const violations = contractConformanceViolations(
+      {
+        module_id: "tile_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: "module tile_conv(); endmodule",
+      },
+      layer,
+    );
+
+    expect(violations.map((violation) => violation.rule)).toEqual([
+      "contract_tiled_streaming_bus_width",
+      "contract_tiled_streaming_beat_counter_missing",
+    ]);
   });
 
   it("records fatal pipeline errors to the run log", async () => {
