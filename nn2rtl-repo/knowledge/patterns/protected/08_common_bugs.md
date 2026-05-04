@@ -184,12 +184,46 @@ simplest form of some of these before simulation even runs.
   after a Surgeon attempt; `max_error` only slightly changed; timing
   remains exact. The orchestrator triggers `surgeon_regression_reverted`
   and rolls back.
-- **Diagnosis**: Surgeon changed the rounding line from
-  `(x + SCALE_ROUND_BIAS) >>> SCALE_SHIFT` to a bare `>>> SCALE_SHIFT`,
-  which truncates instead of using the current RTL half-up/toward-positive
-  tie approximation. Many pixels drift by ~1 LSB.
-- **Fix**: restore the `+ SCALE_ROUND_BIAS` before the shift. Mark the
-  rounding line `// [INVARIANT:ROUNDING]` to protect it from future
-  regressions. This is not exact PyTorch tie-even rounding; do not chase a
-  remaining +/-1 exact-half tie as a datapath bug unless the project changes
-  the golden/RTL rounding contract together.
+- **Diagnosis**: Surgeon replaced the canonical sign-aware requantisation
+  with one of two stale/incorrect forms — either:
+    1. **Bare `>>> SCALE_SHIFT`** (no bias). Arithmetic shift floors
+       toward `-inf`, biasing every output by up to one LSB downward.
+    2. **`(x + HALF) >>> SCALE_SHIFT`** (the legacy "half-up/toward-positive"
+       unconditional bias). This biases NEGATIVE outputs toward `+inf`
+       and the drift accumulates positive across high-fan-in layers.
+  Either form drifts many pixels by ~1 LSB and a high-fan-in layer
+  (`K_TOTAL ≥ 1024`) accumulates enough to fail bit-exact verification.
+- **Fix**: restore the canonical sign-aware rounding before the shift —
+  `(scaled + (scaled[MSB] ? (HALF-1) : HALF)) >>> SHIFT`, where
+  `HALF = 1 << (SHIFT - 1)`. Verilog `>>>` always floors toward -inf, so
+  for negatives the bias is `(HALF - 1)`, NOT `-HALF`. Subtracting HALF
+  over-rounds (e.g. `-23` with SHIFT=4 should give `-1`; `-23 + (-8) = -31`,
+  shift = `-2`, wrong. With `(HALF-1) = 7`: `-23 + 7 = -16`, shift = `-1`,
+  correct). Mark the rounding line `// [INVARIANT:ROUNDING]` to protect
+  it from future regressions. This matches `torch.round` bit-exact for
+  every non-tie value (essentially every real quantised case). Do not
+  revert to the older unconditional `+0.5 LSB` bias — it biases negatives
+  toward `+inf` and the drift accumulates on high-fan-in layers (large
+  `K_TOTAL`) until bit-exact verification fails.
+
+## Stream-side coordinates confused with input coordinates (stride > 1)
+
+- **Symptom**: `outputs_received` falls short of `outputs_expected` by an
+  exact multiple of `OUT_BEATS_PER_PIXEL` (one or more entire output pixels
+  missing); `output_gap_histogram` shows the missing range packed into a
+  single tail bucket; `status_class` is `sim_stalled` because the FSM is
+  still waiting for a `valid_in` that never comes.
+- **Diagnosis**: when `stride > 1`, the output spatial dimensions
+  (`OH`, `OW`) are smaller than the input ones (`IH`, `IW`). A
+  hand-rolled spatial scheduler that reuses `IH-1` / `IW-1` to wrap the
+  output stream-coordinate counter will keep emitting (or waiting to
+  emit) past the real output-frame end, then deadlock waiting for the
+  next nonexistent input pixel. Example: 1×1 stride-2 with `IH=IW=14`
+  but `OH=OW=7` — the FSM thinks each row has 14 output positions and
+  loses one (or more) actual output pixels per row.
+- **Fix**: stream-side coordinate advance MUST use `OH-1` / `OW-1`,
+  never `IH-1` / `IW-1`. Better: compute side already knows when it has
+  emitted all `OH * OW` output pixels — drive a `done` signal from the
+  compute counter rather than re-deriving completion from input
+  coordinates. This rule is independent of contract (applies to
+  flat-bus, tiled-streaming, dram-backed-weights, weight-tiling).

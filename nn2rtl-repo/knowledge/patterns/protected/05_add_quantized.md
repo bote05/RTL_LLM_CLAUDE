@@ -27,8 +27,12 @@ For each channel `i`:
 lhs_i  = $signed(data_in[i*8 +: 8])                                  // INT8
 rhs_i  = $signed(data_in[W + i*8 +: 8])                              // INT8
 sum32  = lhs_i * LHS_SCALE_MULT + rhs_i * RHS_SCALE_MULT              // INT32
-out32  = (sum32 + OUT_SCALE_ROUND_BIAS) >>> OUT_SCALE_SHIFT
-out8   = saturate_int8(out32)
+// Sign-aware rounding (same rule as conv2d). Verilog >>> always floors
+// toward -inf, so the bias for negatives is (HALF - 1), NOT -HALF.
+half          = 1 << (OUT_SCALE_SHIFT - 1)
+sign_bias     = (sum32 >= 0) ? half : (half - 1)
+out32         = (sum32 + sign_bias) >>> OUT_SCALE_SHIFT
+out8          = saturate_int8(out32)
 data_out[i*8 +: 8] = out8
 ```
 
@@ -52,8 +56,20 @@ cycle through a three-stage arithmetic pipe:
    `lhs_term <= lhs_ch * LHS_FUSED_MULT` and
    `rhs_term <= rhs_ch * RHS_FUSED_MULT`. With `(* use_dsp = "yes" *)`
    on each registered product, Vivado infers two DSP48E1 multipliers total.
-2. **Stage 2 — sum + round bias.**
-   `sum_term <= lhs_term + rhs_term + FUSED_ROUND_BIAS`.
+2. **Stage 2 — sum + sign-aware round bias.** Sum the two terms and add
+   the sign-aware bias in the same registered stage (single cycle to keep
+   the 3-stage latency contract). Declare the unbiased combinational sum
+   as a **module-scope `wire`** (Verilog-2001 forbids `wire` decls inside
+   an `always` block); reference it from inside the always:
+   ```verilog
+   // module scope, alongside other wire decls:
+   wire signed [SUM_W-1:0] sum_pre = lhs_term + rhs_term;
+
+   // inside the stage-2 always block:
+   sum_term <= sum_pre + (sum_pre[SUM_W-1] ? (FUSED_HALF - 1) : FUSED_HALF);
+   ```
+   where `FUSED_HALF = 1 << (FUSED_SHIFT - 1)`. Adding `-FUSED_HALF` for
+   negatives over-rounds (Verilog `>>>` already floors toward -inf).
 3. **Stage 3 — shift + saturate.** `(sum_term >>> FUSED_SHIFT)`,
    clamp to INT8, and write only the current channel slice of `data_out`.
 

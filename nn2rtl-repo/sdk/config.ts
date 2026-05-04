@@ -27,7 +27,7 @@
 // query() also sets a parent cap that applies on top of these.
 export const AGENT_CONFIG = {
   Cartographer: { model: "claude-sonnet-4-6" as const, maxTurns: 30, description: "Legacy PipelineIR formatter fallback; production extraction calls read_weights directly." },
-  Foundry:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule." },
+  Foundry:      { model: "claude-opus-4-7"  as const, maxTurns: 40, description: "Verilog codegen. Receives one LayerIR, produces one VerilogModule. 40 turns gives create-new-doc / unfamiliar-contract flows enough room to finish; covered contracts typically converge in 5-10 turns." },
   Surgeon:      { model: "claude-opus-4-7"  as const, maxTurns: 20, description: "Targeted repair. Receives broken Verilog + VerifResult + LayerIR. Classifies the failure and performs minimal rewrite." },
 } as const;
 
@@ -78,13 +78,14 @@ export function parsePositiveIntEnv(
 }
 
 export const PIPELINE_CONFIG = {
-  // Foundation switch for the self-improving documentation flow. Default OFF
-  // keeps today's pipeline behavior unchanged; later phases should gate any
-  // doc-writing / promotion logic on this flag. The knowledge reader still
-  // loads protected + active + probationary docs in both modes so validated
-  // generated guidance remains available even when new self-improvement writes
-  // are disabled.
-  self_improve: parseBooleanEnv(process.env, "NN2RTL_SELF_IMPROVE", false),
+  // Foundation switch for the self-improving documentation flow. Default ON
+  // because the contract walker, doc lifecycle, and probationary archival are
+  // gated behind this flag — turning it off makes layers without an explicit
+  // contract_id (e.g. heavy convs that need dram-backed-weights) die at the
+  // bus-width gate before Foundry runs. Set NN2RTL_SELF_IMPROVE=0 to opt out
+  // of doc-writing / promotion side effects when running on a frozen
+  // knowledge tree.
+  self_improve: parseBooleanEnv(process.env, "NN2RTL_SELF_IMPROVE", true),
   doc_promotion_success_threshold: parsePositiveIntEnv(
     process.env,
     "NN2RTL_DOC_PROMOTION_SUCCESSES",

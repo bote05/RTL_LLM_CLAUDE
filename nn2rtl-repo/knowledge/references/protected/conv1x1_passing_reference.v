@@ -72,7 +72,10 @@ module layer1_0_conv1 (
     localparam integer SCALE_CONST_W = SCALE_MAG_W + 1;
     localparam integer SCALED_W      = BIASED_W + SCALE_CONST_W;
     localparam signed [SCALE_CONST_W-1:0] SCALE_MULT_CONST = SCALE_MULT;
-    localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS =
+    // Sign-aware rounding HALF. Verilog `>>>` floors toward -inf, so for
+    // negatives the bias is (HALF - 1), NOT -HALF. See protected pattern
+    // 01_context.md "Scale-shift rounding — MANDATORY" for derivation.
+    localparam signed [SCALED_W-1:0] SCALE_ROUND_HALF =
         {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);
 
     localparam ST_STREAM  = 3'd0;
@@ -258,8 +261,11 @@ module layer1_0_conv1 (
                 for (lane = 0; lane < MP; lane = lane + 1) begin
                     out_oc = oc_group * MP + lane;
                     if (out_oc < OC) begin
-                        // [INVARIANT:ROUNDING]
-                        v_tmp = (scaled[lane] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
+                        // [INVARIANT:ROUNDING]  — sign-aware, see 01_context.md
+                        v_tmp = (scaled[lane] +
+                                 (scaled[lane][SCALED_W-1] ? (SCALE_ROUND_HALF - 1)
+                                                           : SCALE_ROUND_HALF)
+                                ) >>> SCALE_SHIFT;
                         data_out[out_oc*8 +: 8] <= (v_tmp >  127) ?  8'sd127 :
                                                    (v_tmp < -128) ? -8'sd128 :
                                                                     v_tmp[7:0];

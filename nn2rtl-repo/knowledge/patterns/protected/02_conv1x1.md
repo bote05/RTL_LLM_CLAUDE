@@ -95,8 +95,15 @@ banked datapath.
 
 See `08_common_bugs.md`. The historically most common pointwise bugs:
 
-- `rounding_mode_wrong` — arithmetic right-shift without the current
-  half-up/toward-positive fixed-point bias term.
+- `rounding_mode_wrong` — arithmetic right-shift without the canonical
+  sign-aware fixed-point bias term. A bare `>>>` floors toward `-inf`;
+  an unconditional `+0.5 LSB` bias pushes negatives toward `+inf`.
+  Subtracting HALF for negatives ALSO over-rounds (since `>>>` already
+  floors). Use:
+  `(scaled + (scaled[MSB] ? (HALF-1) : HALF)) >>> SHIFT`
+  with `HALF = 1 << (SHIFT-1)`. Error is symmetric around zero and
+  matches `torch.round` for non-tie values. See `01_context.md`
+  "Scale-shift rounding — MANDATORY".
 - `sign_extension_error` — the bias adder inferred unsigned context.
 - `weights_packed_forbidden` — Surgeon attempted to pack weights after synth
   timed out; the right fix is serialized reads, not packing.
