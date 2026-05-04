@@ -531,7 +531,7 @@ describe("runPipeline", () => {
     // agent tools list; Agent/Task are in disallowedTools, not allowedTools.
     expect(queryFn.mock.calls[0]?.[0]).toMatchObject({
       options: {
-        maxTurns: 20,
+        maxTurns: 40,
         allowedTools: expect.arrayContaining(["Bash", "mcp__nn2rtl-tools__write_verilog"]),
       },
     });
@@ -694,6 +694,10 @@ describe("runPipeline", () => {
 
     await runPipeline("checkpoint.pth", {
       maxRetries: 3,
+      // Pin self_improve off so the contract walker doesn't activate — this
+      // test exercises the Surgeon regression-revert path, not the contract
+      // walk.
+      selfImprove: false,
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
@@ -1030,17 +1034,20 @@ describe("runPipeline", () => {
       await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
     );
 
+    const foundryStep = async () => {
+      await persistMockRtlDeliverable(module);
+      return successRtlWithDoc(module, "dram-session");
+    };
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(module);
-          return successRtlWithDoc(module, "dram-session");
-        },
-        async () => {
-          await persistMockRtlDeliverable(module);
-          return successRtlWithDoc(module, "dram-session");
-        },
-      ],
+      // After clearGeneratedRtlArtifacts started running before each fresh
+      // Foundry attempt, the orchestrator can no longer paper over a missing
+      // mock by recovering stale RTL from disk. With dram-backed flagged
+      // here, the walk reaches activation-double-buffering and weight-tiling,
+      // each of which dispatches a fresh Foundry attempt before being
+      // flagged in turn. Queue enough mocks for: dram-backed attempt 1,
+      // dram-backed final retry after retrospector, then one each for the
+      // two remaining contracts.
+      foundry: [foundryStep, foundryStep, foundryStep, foundryStep],
       retrospector: [
         successResult({
           analysis: "The final contract variant still fails.",
@@ -1048,10 +1055,7 @@ describe("runPipeline", () => {
         }),
       ],
     });
-    // Defensive queue depth: the new escalation flow can run more assayer
-    // turns than the original (Foundry retry inside dram-backed before
-    // declaring all-contracts-exhausted). Provide enough verifFails so the
-    // mock queue never drains.
+    // Defensive queue depth: one verifFail per Foundry call.
     const assayerFn = createAssayerMock([verifFail, verifFail, verifFail, verifFail]);
     const synthesisFn = createVivadoMock([]);
 
@@ -1179,13 +1183,20 @@ describe("runPipeline", () => {
       classifier_reason: "Seeded failure for lifecycle test.",
     };
 
+    const foundryStep = async () => {
+      await persistMockRtlDeliverable(module);
+      return successRtlWithDoc(module);
+    };
+    // After clearGeneratedRtlArtifacts started running before each fresh
+    // Foundry attempt, missing mocks no longer get rescued by stale RTL on
+    // disk. With no contracts pre-flagged here the walk visits every
+    // contract in CONTRACT_PLANS — queue enough mocks to satisfy each
+    // (the retrospector throws on the first walk because no mock is
+    // queued, which short-circuits the same-contract final retry).
     const queryFn = createQueryMock({
-      foundry: [async () => {
-        await persistMockRtlDeliverable(module);
-        return successRtlWithDoc(module);
-      }],
+      foundry: [foundryStep, foundryStep, foundryStep, foundryStep, foundryStep],
     });
-    const assayerFn = createAssayerMock([verifFail]);
+    const assayerFn = createAssayerMock([verifFail, verifFail, verifFail, verifFail, verifFail]);
     const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
@@ -1228,6 +1239,10 @@ describe("runPipeline", () => {
     const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
+      // Pin self_improve off so the contract walker doesn't try alternate
+      // contracts before the bus-width capability gate fires — this test
+      // asserts the gate produces fail_abort with zero LLM calls.
+      selfImprove: false,
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 

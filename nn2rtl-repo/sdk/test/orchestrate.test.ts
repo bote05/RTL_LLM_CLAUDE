@@ -1097,6 +1097,59 @@ endmodule
     ]);
   });
 
+  it("rejects negative-half fixed-point rounding before simulation", () => {
+    const layer = {
+      module_id: "rounding_conv",
+      op_type: "conv2d" as const,
+      contract_id: "dram-backed-weights" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 64, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 1, 1],
+      num_weights: 4096,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "rounding_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: `
+module rounding_conv();
+  localparam signed [63:0] ROUND_BIAS_POS = 64'sd524288;
+  localparam signed [63:0] ROUND_BIAS_NEG = -64'sd524288;
+  wire signed [63:0] rnd0 = (scaled + (scaled[63] ? -SCALE_ROUND_HALF : SCALE_ROUND_HALF)) >>> SCALE_SHIFT;
+endmodule
+`,
+      },
+      layer,
+    );
+
+    expect(violations.map((violation) => violation.rule)).toContain(
+      "rounding_negative_half_forbidden",
+    );
+    expect(violations.find((violation) => violation.rule === "rounding_negative_half_forbidden")?.detail).toContain(
+      "HALF - 1",
+    );
+  });
+
   it("rejects weight-tiling RTL with a fake scheduler or full active tile", () => {
     const layer = {
       module_id: "wt_conv",

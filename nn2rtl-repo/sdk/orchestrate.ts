@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { appendFile, access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -3739,6 +3739,36 @@ function extractClockedAlwaysBlocks(source: string): string {
   return blocks.join("\n");
 }
 
+function forbiddenNegativeRoundingBiasSnippets(source: string): string[] {
+  const snippets: string[] = [];
+  const seen = new Set<string>();
+  const addMatches = (re: RegExp): void => {
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(source)) !== null) {
+      const snippet = match[0].replace(/\s+/g, " ").trim();
+      if (!seen.has(snippet)) {
+        seen.add(snippet);
+        snippets.push(snippet);
+      }
+    }
+  };
+
+  addMatches(
+    /\b(?:localparam|parameter)\b[^;]*\b[A-Za-z_][A-Za-z0-9_$]*(?:ROUND|RND)[A-Za-z0-9_$]*(?:NEG|NEGATIVE)[A-Za-z0-9_$]*\b\s*=\s*-[^;]+;/gi,
+  );
+  addMatches(
+    /\b(?:localparam|parameter)\b[^;]*\b[A-Za-z_][A-Za-z0-9_$]*(?:NEG|NEGATIVE)[A-Za-z0-9_$]*(?:ROUND|RND)[A-Za-z0-9_$]*\b\s*=\s*-[^;]+;/gi,
+  );
+  addMatches(
+    /\b(?:localparam|parameter)\b[^;]*\b[A-Za-z_][A-Za-z0-9_$]*(?:BIAS)[A-Za-z0-9_$]*(?:NEG|NEGATIVE)[A-Za-z0-9_$]*\b\s*=\s*-[^;]+;/gi,
+  );
+  addMatches(
+    /\?\s*\(?\s*-\s*(?:[A-Za-z_][A-Za-z0-9_$]*HALF[A-Za-z0-9_$]*|HALF)\s*\)?\s*:/gi,
+  );
+
+  return snippets;
+}
+
 export function structuralPreflightViolations(
   module: VerilogModule,
   layer: LayerIR,
@@ -3851,6 +3881,21 @@ export function structuralPreflightViolations(
         "Declarations inside always blocks are forbidden for Vivado / " +
         `Verilog-2001 compatibility. Move '${proceduralDecl[0].trim()}' ` +
         "to module scope and assign it procedurally instead.",
+    });
+  }
+
+  // Rule 3c: sign-aware fixed-point rounding must not subtract HALF for
+  // negatives. Verilog arithmetic shift already floors toward -inf, so the
+  // negative bias is +(HALF - 1), not -HALF.
+  const negativeRoundingBiasSnippets = forbiddenNegativeRoundingBiasSnippets(source);
+  if (negativeRoundingBiasSnippets.length > 0) {
+    violations.push({
+      rule: "rounding_negative_half_forbidden",
+      detail:
+        "Forbidden fixed-point rounding pattern: negative values may not use `-HALF`, " +
+        "`-SCALE_ROUND_HALF`, or a negative `ROUND_BIAS_NEG` constant before `>>> SCALE_SHIFT`. " +
+        "Use `(scaled + (scaled[MSB] ? (HALF - 1) : HALF)) >>> SHIFT` instead. " +
+        `Found: ${negativeRoundingBiasSnippets.slice(0, 3).join("; ")}.`,
     });
   }
 
@@ -4583,6 +4628,53 @@ async function tryRecoverVerilogModuleFromDisk(
     };
   } catch {
     return null;
+  }
+}
+
+// Delete the on-disk Verilog + meta for a module. Called before a fresh
+// Foundry attempt for a (module, contract) pair (attempt 1, including after
+// resetModuleForContractRetry()) so that tryRecoverVerilogModuleFromDisk()
+// cannot resurrect a stale .v from a prior contract or process. Reports and
+// debug bundles in output/reports/ and output/debug/ are evidence and are
+// NOT touched here.
+async function clearGeneratedRtlArtifacts(
+  moduleId: string,
+  reason: string,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const verilogPath = path.join(rtlDir, `${moduleId}.v`);
+  const metaPath = path.join(rtlDir, `${moduleId}.meta.json`);
+  const removed: string[] = [];
+  for (const target of [verilogPath, metaPath]) {
+    try {
+      await unlink(target);
+      removed.push(path.basename(target));
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      await appendRunLog(
+        {
+          event: "rtl_artifact_clear_warning",
+          module_id: moduleId,
+          path: target,
+          reason,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        runtime,
+      );
+    }
+  }
+  if (removed.length > 0) {
+    await appendRunLog(
+      {
+        event: "rtl_artifacts_cleared",
+        module_id: moduleId,
+        removed,
+        reason,
+      },
+      runtime,
+    );
   }
 }
 
@@ -6943,6 +7035,20 @@ export async function runPipeline(
         foundryAttemptIndex > 1
           ? manager.getState().results[nextAction.module_id]
           : undefined;
+      // Attempt 1 means a fresh Foundry call for this (module, contract) —
+      // either a non-resume cold start or a post-resetModuleForContractRetry
+      // contract switch. Clear stale .v / .meta.json so a no-write or
+      // malformed-write Foundry response cannot be silently rescued by
+      // tryRecoverVerilogModuleFromDisk() reading a prior contract's RTL.
+      // Attempt 2+ deliberately preserves Surgeon's last attempt on disk —
+      // that file is the input the resumed Foundry session is reviewing.
+      if (foundryAttemptIndex === 1) {
+        await clearGeneratedRtlArtifacts(
+          nextAction.module_id,
+          "fresh_foundry_attempt",
+          runtime,
+        );
+      }
       let foundryResult: RtlAgentRunResult;
       try {
         foundryResult = await invokeFoundry(layer, runtime, {

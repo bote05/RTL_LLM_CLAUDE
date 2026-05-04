@@ -182,14 +182,15 @@ files — do not guess.
 - **`pipeline_latency_cycles` is authoritative from the LayerIR.** Do not
   re-derive it from a formula. First `valid_out` fires exactly that many
   cycles after the first `valid_in` of the current vector.
-- **Weights and biases load via `$readmemh`** using `weights_path` and
-  `bias_path` from the LayerIR. Never hardcode numeric arrays. For Vivado,
-  prefer registered ROM reads with `rom_style` / `ram_style = "block"`.
-  `weight_bank_paths` may be present, but the current verified latency
-  contract is still the serialized one-read-per-cycle contract in the pattern
-  files. Do not convert to MP parallel bank reads unless the LayerIR latency
-  contract explicitly says that datapath is enabled. Do not mark memory lines
-  invariant.
+- **Weight and bias storage follows the selected contract.** For on-chip-weight
+  contracts, weights and biases load via `$readmemh` using `weights_path` and
+  `bias_path` from the LayerIR. For `dram-backed-weights`, only the small bias
+  array is loaded on chip; the full weight tensor must enter through the AXI
+  read channel described in `09_dram_backed_weights.md`. Never hardcode numeric
+  arrays. For Vivado, prefer registered ROM/BRAM reads with `rom_style` /
+  `ram_style = "block"`. `weight_bank_paths` may be present, but do not convert
+  to MP parallel bank reads unless the LayerIR latency contract explicitly says
+  that datapath is enabled. Do not mark memory lines invariant.
 - **No simulation-only constructs** in synthesizable RTL: no `$display`,
   `$random`, `$monitor`, `#delay`, `initial` blocks other than the
   `$readmemh` loader.
