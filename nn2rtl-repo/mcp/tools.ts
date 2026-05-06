@@ -1252,6 +1252,11 @@ export type GetRtlPatternsResult = {
   license_notice: string | null;
 };
 
+export type GetFailureCorpusResult = {
+  visible_tier: "output/failure_corpus/visible";
+  entries: Array<Record<string, unknown>>;
+};
+
 const PATTERN_LIBRARY_ROOT = path.resolve(repoRoot, "knowledge");
 const DOC_LIFECYCLE_STATE_PATH = path.join(PATTERN_LIBRARY_ROOT, "doc_lifecycle.json");
 export const KNOWLEDGE_READ_TIERS = ["protected", "active", "probationary"] as const;
@@ -1515,6 +1520,57 @@ export async function get_rtl_patterns(
   }
 
   return { pattern_markdown, reference_verilog, license_notice };
+}
+
+export async function get_failure_corpus(input: {
+  module_id?: string;
+  op_type?: string;
+  contract_id?: string;
+  spec_hash?: string;
+  max_entries?: number;
+  include_verilog?: boolean;
+}): Promise<GetFailureCorpusResult> {
+  const root = path.resolve(repoRoot, "output", "failure_corpus", "visible");
+  const indexPath = path.join(root, "index.jsonl");
+  let raw: string;
+  try {
+    raw = await readFile(indexPath, "utf8");
+  } catch {
+    return { visible_tier: "output/failure_corpus/visible", entries: [] };
+  }
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (input.module_id && entry.module_id !== input.module_id) continue;
+      if (input.op_type && entry.op_type !== input.op_type) continue;
+      if (input.contract_id && entry.contract_id !== input.contract_id) continue;
+      if (input.spec_hash && entry.spec_hash !== input.spec_hash) continue;
+      entries.push(entry);
+    } catch {
+      // Ignore malformed historical corpus lines.
+    }
+  }
+  entries.sort((a, b) => {
+    const sameModuleA = input.module_id && a.module_id === input.module_id ? 0 : 1;
+    const sameModuleB = input.module_id && b.module_id === input.module_id ? 0 : 1;
+    if (sameModuleA !== sameModuleB) return sameModuleA - sameModuleB;
+    return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+  });
+  const limited = entries.slice(0, input.max_entries ?? 5);
+  if (input.include_verilog) {
+    for (const entry of limited) {
+      const rel = typeof entry.rtl_path === "string" ? entry.rtl_path : null;
+      if (!rel) continue;
+      try {
+        entry.verilog_source = await readFile(path.resolve(repoRoot, rel), "utf8");
+      } catch {
+        entry.verilog_source = "";
+      }
+    }
+  }
+  return { visible_tier: "output/failure_corpus/visible", entries: limited };
 }
 
 export async function readSidecarIfPresent(

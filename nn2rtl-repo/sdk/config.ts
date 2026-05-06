@@ -91,7 +91,10 @@ export const PIPELINE_CONFIG = {
     "NN2RTL_DOC_PROMOTION_SUCCESSES",
     3,
   ),
-  max_retries: 3,
+  // Normal retry budget per (module, contract): one Foundry generation and
+  // one Surgeon repair. When self-improve is enabled, retry exhaustion then
+  // routes through Retrospector for one final resumed Foundry attempt.
+  max_retries: 2,
   // Cap on the number of accumulator lanes in each conv output-channel
   // group. Per-layer mac_parallelism = min(OC, MAX_PARALLEL_MACS). The
   // current verified FSM still issues one lane's weight read / MAC per

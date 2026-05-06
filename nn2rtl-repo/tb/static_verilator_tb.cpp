@@ -781,6 +781,14 @@ int main(int argc, char** argv) {
     int64_t first_mismatch_flat_index = -1;
     int64_t first_mismatch_expected_v = 0;
     int64_t first_mismatch_got_v = 0;
+    int64_t first_mismatch_vector_index = -1;
+    int64_t first_mismatch_output_index = -1;
+    int64_t first_mismatch_channel_index = -1;
+    int64_t exact_match_count = 0;
+    int64_t mismatch_count = 0;
+    int64_t signed_error_sum = 0;
+    int64_t positive_error_count = 0;
+    int64_t negative_error_count = 0;
 
     // Unified interleaved drive/sample loop. For each test vector we drive
     // packed input samples whenever the DUT is ready and we sample packed
@@ -835,6 +843,22 @@ int main(int argc, char** argv) {
                   static_cast<int64_t>(expected_flat.size()) - 1;
               first_mismatch_expected_v = expected;
               first_mismatch_got_v = got;
+              first_mismatch_vector_index = static_cast<int64_t>(v);
+              first_mismatch_output_index = static_cast<int64_t>(output_idx);
+              first_mismatch_channel_index = static_cast<int64_t>(channel);
+            }
+
+            const int64_t signed_diff = got - expected;
+            signed_error_sum += signed_diff;
+            if (signed_diff == 0) {
+              ++exact_match_count;
+            } else {
+              ++mismatch_count;
+              if (signed_diff > 0) {
+                ++positive_error_count;
+              } else {
+                ++negative_error_count;
+              }
             }
 
             const int64_t diff = got >= expected ? got - expected : expected - got;
@@ -1061,6 +1085,16 @@ int main(int argc, char** argv) {
         {"first_mismatch_index", first_mismatch_flat_index},
         {"first_mismatch_expected", first_mismatch_expected_v},
         {"first_mismatch_got", first_mismatch_got_v},
+        {"first_mismatch_vector_index", first_mismatch_vector_index},
+        {"first_mismatch_output_index", first_mismatch_output_index},
+        {"first_mismatch_channel_index", first_mismatch_channel_index},
+        {"exact_match_count", exact_match_count},
+        {"mismatch_count", mismatch_count},
+        {"signed_error_sum", signed_error_sum},
+        {"positive_error_count", positive_error_count},
+        {"negative_error_count", negative_error_count},
+        {"first_valid_in_cycle", first_valid_in_cycle},
+        {"first_valid_out_cycle", first_valid_out_cycle},
     };
     if (axi_weight_memory.applicable()) {
       const json trace = axi_weight_memory.traceJson();

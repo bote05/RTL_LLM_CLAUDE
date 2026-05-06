@@ -76,18 +76,14 @@ export class PipelineStateManager {
       const status = this.state.modules[moduleId];
 
       if (status === "pending" || status === "fail_retry") {
-        // Per-(module, contract) call sequence: 2 Foundry calls then 1 Surgeon
-        // call. The two Foundry calls run on a single resumed conversation —
-        // call 1 emits the system prompt, call 2 is just a focused user-turn
-        // appended to the same session (orchestrator builds that prompt). The
-        // Surgeon call (attempt 3) is its own conversation and receives the
-        // Foundry transcript as user-provided evidence.
-        // Calls beyond 3 are reached only via the orchestrator's retrospector
-        // path — not via this tick().
+        // Per-(module, contract) normal call sequence: 1 Foundry call then
+        // 1 Surgeon call. Calls beyond that are reached only through the
+        // orchestrator's self-improve Retrospector/final-Foundry path, not
+        // via this tick().
         this.state.modules[moduleId] = "generating";
         const next = (this.state.attempts[moduleId] ?? 0) + 1;
         this.state.attempts[moduleId] = next;
-        const action = next <= 2 ? "invoke_foundry" : "invoke_surgeon";
+        const action = next === 1 ? "invoke_foundry" : "invoke_surgeon";
         return { action, module_id: moduleId };
       }
     }
@@ -251,11 +247,11 @@ export class PipelineStateManager {
     // The four crash points the orchestrator can persist:
     //   generating + no prior result  -> Foundry call 1 crashed.
     //                                    Resume: pending, attempts-1.
-    //   generating + prior result     -> Foundry call 2 or Surgeon crashed.
+    //   generating + prior result     -> Surgeon crashed.
     //                                    Resume: fail_retry, attempts-1.
     //   verifying  + no prior result  -> Assayer crashed after Foundry call 1.
     //                                    Resume: pending, attempts-1.
-    //   verifying  + prior result     -> Assayer crashed after Foundry-2/Surgeon.
+    //   verifying  + prior result     -> Assayer crashed after Surgeon.
     //                                    Resume: fail_retry, attempts-1.
     for (const moduleId of this.moduleOrder) {
       const status = this.state.modules[moduleId];

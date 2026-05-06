@@ -465,6 +465,7 @@ describe("orchestrate helpers", () => {
     expect(foundry.tools).toContain("Bash");
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__write_verilog");
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__get_rtl_patterns");
+    expect(foundry.tools).toContain("mcp__nn2rtl-tools__get_failure_corpus");
     expect(foundry.prompt).toContain("Knowledge catalog");
     expect(foundry.prompt).toContain("knowledge/patterns/protected/02_conv1x1.md");
     expect(foundry.prompt).toContain("rtl_library/coord_scheduler.v");
@@ -797,7 +798,7 @@ describe("orchestrate helpers", () => {
           "module m1();",
           "  reg [63:0] weights_packed [0:15];",
           "  reg signed [7:0] weights [0:63];",
-          "  initial $readmemh(\"w.hex\", weights);",
+          "  initial $readmemh(\"/tmp/w.hex\", weights);",
           "  reg [31:0] outputs_emitted;",
           "  reg [7:0] line_buf [0:31][0:15];",
           "  reg [7:0] window [0:8];",
@@ -847,8 +848,8 @@ describe("orchestrate helpers", () => {
           "  reg signed [7:0] weights [0:63];",
           "  reg signed [31:0] biases [0:0];",
           "  initial begin",
-          "    $readmemh(\"w.hex\", weights);",
-          "    $readmemh(\"b.hex\", biases);",
+          "    $readmemh(\"/tmp/w.hex\", weights);",
+          "    $readmemh(\"/tmp/b.hex\", biases);",
           "  end",
           "  always @(posedge clk) begin : BIAS_LANE",
           "    integer bias_oc;",
@@ -902,8 +903,8 @@ describe("orchestrate helpers", () => {
           "  reg signed [7:0] weights [0:63];",
           "  reg signed [31:0] biases [0:0];",
           "  initial begin",
-          "    $readmemh(\"w.hex\", weights);",
-          "    $readmemh(\"b.hex\", biases);",
+          "    $readmemh(\"/tmp/w.hex\", weights);",
+          "    $readmemh(\"/tmp/b.hex\", biases);",
           "  end",
           "endmodule",
         ].join("\n"),
@@ -1147,6 +1148,121 @@ endmodule
     );
     expect(violations.find((violation) => violation.rule === "rounding_negative_half_forbidden")?.detail).toContain(
       "HALF - 1",
+    );
+  });
+
+  it("rejects $readmemh with a relative-path string literal", () => {
+    const layer = {
+      module_id: "relpath_conv",
+      op_type: "conv2d" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 1, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [1, 64, 1, 1],
+      num_weights: 64,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 67,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 8,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "relpath_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module relpath_conv();",
+          "  reg signed [7:0] weights [0:63];",
+          "  reg signed [31:0] biases [0:0];",
+          "  initial begin",
+          "    $readmemh(\"output/weights/w.hex\", weights);",
+          "    $readmemh(\"b.hex\", biases);",
+          "  end",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(violations.map((v) => v.rule)).toContain("readmemh_relative_path_forbidden");
+    expect(violations.find((v) => v.rule === "readmemh_relative_path_forbidden")?.detail).toContain(
+      "absolute path",
+    );
+  });
+
+  it("rejects multi-vector contract RTL whose ST_DONE locks the FSM", () => {
+    const layer = {
+      module_id: "lock_conv",
+      op_type: "conv2d" as const,
+      contract_id: "dram-backed-weights" as const,
+      input_shape: [1, 1024, 14, 14],
+      output_shape: [1, 2048, 7, 7],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [2048, 1024, 1, 1],
+      num_weights: 2097152,
+      scale_factor: 0.015,
+      zero_point: 0,
+      pipeline_latency_cycles: 2100225,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      io_mode: "dram_backed_weights" as const,
+      channel_tile: 32,
+    };
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "lock_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: `
+module lock_conv();
+  reg signed [7:0] weights [0:63];
+  initial $readmemh("/tmp/w.hex", weights);
+  // Real AR FSM elsewhere in the module — fake here to keep fixture small.
+  output reg weights_arvalid;
+  always @* begin end
+  // The bad block: ST_DONE holds ready_in low forever and never transitions.
+  reg [3:0] state;
+  localparam ST_DONE = 4'd9;
+  always @(posedge clk) begin
+    case (state)
+      ST_DONE: begin
+        valid_out <= 1'b0;
+        ready_in  <= 1'b0;
+      end
+    endcase
+  end
+endmodule
+`,
+      },
+      layer,
+    );
+    expect(violations.map((v) => v.rule)).toContain("dram_backed_weights_terminal_done_lock");
+    expect(violations.find((v) => v.rule === "dram_backed_weights_terminal_done_lock")?.detail).toContain(
+      "vector N+1",
     );
   });
 

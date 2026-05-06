@@ -54,6 +54,15 @@ output/*.onnx.data
 output/saved_rtl_*/
 output/improve/
 output/dashboard/
+output/failure_corpus/
+output/contract_state.json.bak*
+output/pipeline_state.json.bak*
+
+# Manual / one-off experiments (not part of the production pipeline)
+experiments/
+
+# Backfill helper input snapshot (contains absolute host paths)
+scripts/_applied_layer_288.json
 
 # Local comparison / smoke artifacts
 comparison/
