@@ -34,6 +34,92 @@ this contract because the layer's `OC*K_TOTAL` exceeds the on-chip weight
 budget; reverting to `$readmemh` puts you over budget and invalidates the
 synthesis target.
 
+## Multi-vector test sequencing — CRITICAL
+
+The static Verilator testbench drives **multiple distinct input vectors**
+through the DUT in a single simulation run (typically 4-8 per layer). The
+goldin file's header carries `num_vectors` ≥ 1. Per-vector latency is
+re-measured from each vector's first accepted `valid_in` to its first
+`valid_out` and must equal `pipeline_latency_cycles` for EVERY vector.
+
+This means:
+
+1. **Do NOT use a terminal `ST_DONE`** that holds `valid_out=0; ready_in=0;`
+   forever. Foundry's instinct is to write a "done" state that locks the FSM;
+   that locks out vector N+1's input and the testbench hangs. The structural
+   preflight gate `dram_backed_weights_terminal_done_lock` rejects this.
+2. After the last active output pixel of vector N is emitted, the FSM must
+   reset all per-vector state (in_row, in_col, in_pixel_counter,
+   active_cache_sel, ar prefetch counters, MAC pipeline, accumulators,
+   out_buffer) and re-enter `ST_INIT_BOOT` for vector N+1. The module must
+   present the same shape vector N+1 sees as it would after `!rst_n`.
+3. The **per-vector latency contract is exact, not approximate**. The
+   Assayer reports `worst_vector_actual_cycles` when any vector misses;
+   off-by-1 fails timing.
+
+## Stop after the last active output pixel — CRITICAL
+
+For stride > 1, only `OH × OW` of the `IH × IW` input-grid positions are
+active. The remaining `IH×IW − OH×OW` positions are inactive and produce
+no output. **Track an `active_pixel_counter` and force ST_DONE when it
+reaches `OH × OW`. Do NOT iterate trailing inactive input pixels.**
+
+The reason is a TB/RTL handshake-protocol pitfall: the testbench advances
+to vector N+1 as soon as `output_idx >= outputs.size()` (= `OH × OW × OUT_BEATS`
+for vector N). At that moment, vector N's last active pixel has been
+emitted. If the FSM keeps iterating inactive trailing pixels (e.g. for
+stride-2 with IH=14, pixels (12,13) through (13,13) — 15 inactive pixels
+× 32 input beats = 480 beats), it raises `ready_in` for those pixels and
+the testbench drives **vector N+1's first 480 beats into RTL's vector-N
+tail**. Vector N+1's nominal "first input pixel" then receives data that
+actually came from pixel-15 of vector N+1, not pixel-0.
+
+```verilog
+// CORRECT: stop on output-pixel count, not input-pixel count.
+if (pix_active && active_pixel_counter + 1 == OH*OW) begin
+    state <= ST_DONE;
+end else if (in_pixel_counter + 1 == TOTAL_IN_PIXELS) begin
+    // Defensive fallback only.
+    state <= ST_DONE;
+end else begin
+    state <= ST_INIT_BOOT;  // next pixel
+end
+```
+
+Failure signature when this rule is violated: vector 0 passes 100% (TB
+exits v=0 cleanly; v=0 has no preceding tail). Vectors 1..N each match
+~30% with small ±1-3 LSB errors AND, more diagnostically, the
+**accumulated MAC values for vectors 1+'s "first pixel" match the int64
+reference for an OFFSET pixel** (e.g. pixel (1,1) for stride-2 with the
+15-pixel tail, or pixel (offset/IW, offset%IW) more generally where
+`offset = floor(trailing_inactive_count)`).
+
+## $readmemh paths must be absolute or come from a parameter — CRITICAL
+
+`$readmemh("output/weights/foo.hex", rom)` with a **relative** path
+silently fails at simulation start: Verilator (and iverilog under the
+Assayer) compile in a temporary build directory with no `output/` subtree,
+so the file is not found and the array stays at its default zero value.
+**No warning or error is emitted by Verilator.** Bias/weight ROMs that
+should hold real data instead read all-zero, and the RTL produces
+plausible-but-wrong outputs (zero-bias outputs that test as "close but
+not bit-exact").
+
+The structural preflight gate `readmemh_relative_path_forbidden` rejects
+any `$readmemh` whose first argument is a string literal that does not
+start with `/` (POSIX absolute), `[A-Z]:` (Windows drive), or that is not
+a top-level `parameter`. Use either:
+
+```verilog
+// Option A: top-level parameter (preferred — overridable per-instance).
+parameter BIAS_PATH = "C:/abs/path/to/bias.hex";
+initial $readmemh(BIAS_PATH, bias_rom);
+
+// Option B: absolute path string from the LayerIR's bias_path field
+// (which the orchestrator already provides as an absolute POSIX path).
+initial $readmemh("/abs/path/to/bias.hex", bias_rom);
+```
+
 ## Interface
 
 The top level includes the seven base activation-stream ports from

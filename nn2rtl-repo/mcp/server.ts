@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 
 import {
+  get_failure_corpus,
   get_rtl_patterns,
   read_weights,
   run_iverilog,
@@ -18,6 +19,8 @@ import {
 import {
   getRtlPatternsInput,
   getRtlPatternsOutput,
+  getFailureCorpusInput,
+  getFailureCorpusOutput,
   pipelineIrSchema,
   readWeightsInput,
   runIverilogInput,
@@ -31,6 +34,7 @@ import {
 } from "./schemas.js";
 
 export type ToolImplementations = {
+  get_failure_corpus: typeof get_failure_corpus;
   get_rtl_patterns: typeof get_rtl_patterns;
   read_weights: typeof read_weights;
   run_iverilog: typeof run_iverilog;
@@ -40,6 +44,7 @@ export type ToolImplementations = {
 };
 
 const DEFAULT_TOOL_IMPLEMENTATIONS: ToolImplementations = {
+  get_failure_corpus,
   get_rtl_patterns,
   read_weights,
   run_iverilog,
@@ -99,6 +104,14 @@ export const toolDefinitions = [
       "(Surgeon). Returns { pattern_markdown, reference_verilog, license_notice }.",
     inputSchema: toJsonSchema(getRtlPatternsInput),
     outputSchema: toJsonSchema(getRtlPatternsOutput),
+  },
+  {
+    name: "get_failure_corpus",
+    description:
+      "Retrieve visible scored failed RTL attempts from output/failure_corpus/visible. " +
+      "Returns summaries plus rtl_path/failure_path; optionally includes Verilog source. Archived failures are intentionally hidden.",
+    inputSchema: toJsonSchema(getFailureCorpusInput),
+    outputSchema: toJsonSchema(getFailureCorpusOutput),
   },
 ] as const;
 
@@ -171,6 +184,15 @@ async function handleGetRtlPatterns(
   return toToolResult(result as unknown as Record<string, unknown>);
 }
 
+async function handleGetFailureCorpus(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
+  const input = getFailureCorpusInput.parse(args);
+  const result = await toolImpls.get_failure_corpus(input);
+  return toToolResult(result as unknown as Record<string, unknown>);
+}
+
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
@@ -189,6 +211,8 @@ export async function handleToolCall(
       return handleWriteVerilog(args, toolImpls);
     case "get_rtl_patterns":
       return handleGetRtlPatterns(args, toolImpls);
+    case "get_failure_corpus":
+      return handleGetFailureCorpus(args, toolImpls);
     default:
       return {
         content: [{ type: "text", text: `Unknown tool '${name}'.` }],

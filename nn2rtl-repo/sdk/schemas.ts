@@ -23,6 +23,7 @@ export const failureClassSchema = z.enum([
   "structural_preflight_failed",
   "manual_correction_needed",
   "spec_hash_mismatch",
+  "agent_max_turns_exhausted",
 ]);
 
 export const failureCategorySchema = z.enum([
@@ -243,6 +244,16 @@ export const verifResultSchema = z
     first_mismatch_index: nullToUndef(z.number()),
     first_mismatch_expected: nullToUndef(z.number()),
     first_mismatch_got: nullToUndef(z.number()),
+    first_mismatch_vector_index: nullToUndef(z.number()),
+    first_mismatch_output_index: nullToUndef(z.number()),
+    first_mismatch_channel_index: nullToUndef(z.number()),
+    exact_match_count: nullToUndef(z.number()),
+    mismatch_count: nullToUndef(z.number()),
+    signed_error_sum: nullToUndef(z.number()),
+    positive_error_count: nullToUndef(z.number()),
+    negative_error_count: nullToUndef(z.number()),
+    first_valid_in_cycle: nullToUndef(z.number()),
+    first_valid_out_cycle: nullToUndef(z.number()),
     axi_weight_memory_model_enabled: nullToUndef(z.boolean()),
     axi_weight_memory_model_status: nullToUndef(z.string()),
     axi_weight_bytes_loaded: nullToUndef(z.number()),
@@ -400,6 +411,7 @@ export const pipelineStateSchema = z
           result?.status_class === "tb_setup_error" ||
           result?.failure_class === "architectural_unsupported" ||
           result?.failure_class === "manual_correction_needed" ||
+          result?.failure_category === "toolchain_infra" ||
           result?.failure_category === "verification_env" ||
           result?.failure_category === "architectural_fit" ||
           result?.failure_category === "unknown";

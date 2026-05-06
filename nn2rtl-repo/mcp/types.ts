@@ -101,7 +101,8 @@ export type FailureClass =
   | "architectural_unsupported"
   | "structural_preflight_failed"
   | "manual_correction_needed"
-  | "spec_hash_mismatch";
+  | "spec_hash_mismatch"
+  | "agent_max_turns_exhausted";
 
 export type FailureCategory =
   | "code_bug"
@@ -158,6 +159,16 @@ export interface VerifResult {
   first_mismatch_index?: number;
   first_mismatch_expected?: number;
   first_mismatch_got?: number;
+  first_mismatch_vector_index?: number;
+  first_mismatch_output_index?: number;
+  first_mismatch_channel_index?: number;
+  exact_match_count?: number;
+  mismatch_count?: number;
+  signed_error_sum?: number;
+  positive_error_count?: number;
+  negative_error_count?: number;
+  first_valid_in_cycle?: number;
+  first_valid_out_cycle?: number;
   axi_weight_memory_model_enabled?: boolean;
   axi_weight_memory_model_status?: string;
   axi_weight_bytes_loaded?: number;

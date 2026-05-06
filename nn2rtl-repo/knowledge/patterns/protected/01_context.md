@@ -231,6 +231,35 @@ v_tmp = (scaled[oc] +
         ) >>> SCALE_SHIFT;
 ```
 
+#### Verilog signedness footgun on `(SCALE_ROUND_HALF - 1)`
+
+The `1` literal in `SCALE_ROUND_HALF - 1` is unsigned 32-bit by Verilog's
+default-type rules. Mixed signed/unsigned arithmetic can downgrade the
+expression's overall type to unsigned, which silently changes `>>>` from
+arithmetic shift to logical shift on the negative path. This was the
+source of a real, hard-to-find bug on dram-backed-weights layers where
+small-magnitude negative `scaled` values flipped sign through the shift
+and produced output 0 where -1 was expected.
+
+Either pre-compute the negative branch as a separate signed localparam
+(safest), or wrap the `1` as a typed signed literal:
+
+```verilog
+// Option A (preferred): pre-compute the negative-branch bias.
+localparam signed [SCALED_W-1:0] SCALE_ROUND_HALF_M1 =
+    SCALE_ROUND_HALF - {{(SCALED_W-1){1'b0}}, 1'b1};
+v_tmp = (scaled[oc] +
+         (scaled[oc][SCALED_W-1] ? SCALE_ROUND_HALF_M1 : SCALE_ROUND_HALF)
+        ) >>> SCALE_SHIFT;
+
+// Option B: explicitly $signed-cast the inline subtraction.
+v_tmp = (scaled[oc] +
+         $signed(scaled[oc][SCALED_W-1]
+                  ? (SCALE_ROUND_HALF - 1'sd1)
+                  : SCALE_ROUND_HALF)
+        ) >>> SCALE_SHIFT;
+```
+
 Exact PyTorch tie-even behaviour on `.5` ties needs an explicit tie
 detector (`(scaled[oc] & ((1 << SCALE_SHIFT) - 1)) == SCALE_ROUND_HALF`
 → round to nearest even). The cheap form above gives

@@ -579,9 +579,8 @@ describe("runPipeline", () => {
     expect(log).toContain('"event":"cartographer_bypassed_deterministic_read_weights"');
   });
 
-  it("runs the Surgeon repair path after two Foundry attempts both fail verification", async () => {
-    // New flow: 2 Foundry calls (resumed second) then 1 Surgeon. Surgeon
-    // only sees verification when both Foundry attempts have failed.
+  it("runs the Surgeon repair path after one Foundry attempt fails verification", async () => {
+    // New flow: 1 Foundry call then 1 Surgeon repair.
     await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
@@ -599,22 +598,16 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule, "foundry-session-1");
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule, "foundry-session-1");
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule, "foundry-session-1");
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    const assayerFn = createAssayerMock([verifFail, verifFail, verifPass]);
+    const assayerFn = createAssayerMock([verifFail, verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
@@ -623,16 +616,9 @@ describe("runPipeline", () => {
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
-    // Foundry call 2 must arrive on the same resumed session as call 1.
-    expect(
-      queryFn.mock.calls.some(
-        ([call]) => (call as { options?: { resume?: string } }).options?.resume === "foundry-session-1",
-      ),
-    ).toBe(true);
-
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.attempts.unit_module).toBe(3);
+    expect(state.attempts.unit_module).toBe(2);
   });
 
   it("reverts Surgeon output and logs surgeon_regression_reverted when first_mismatch_index goes backward", async () => {
@@ -672,28 +658,21 @@ describe("runPipeline", () => {
     };
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // New flow: Foundry call 1 fails, Foundry call 2 (resumed) fails the same
-    // way, Surgeon repairs but regresses first_mismatch_index → revert.
-    const assayerFn = createAssayerMock([foundryVerif, foundryVerif, surgeonVerif]);
+    // New flow: Foundry fails, then Surgeon repairs but regresses first_mismatch_index.
+    const assayerFn = createAssayerMock([foundryVerif, surgeonVerif]);
     const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
-      maxRetries: 3,
+      maxRetries: 2,
       // Pin self_improve off so the contract walker doesn't activate — this
       // test exercises the Surgeon regression-revert path, not the contract
       // walk.
@@ -745,12 +724,7 @@ describe("runPipeline", () => {
           await persistMockRtlDeliverable(originalModule);
           return successRtlWithDoc(originalModule, "foundry-session-1");
         },
-        // Call 2: resumed session (orchestrator passes resume=foundry-session-1).
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successRtlWithDoc(originalModule, "foundry-session-1");
-        },
-        // Call 3 (post-retrospector final): same resumed session + advice.
+        // Call 2 (post-retrospector final): same resumed session + advice.
         async () => {
           await persistMockRtlDeliverable(finalFoundryModule);
           return successRtlWithDoc(finalFoundryModule, "foundry-session-1");
@@ -771,13 +745,13 @@ describe("runPipeline", () => {
         }),
       ],
     });
-    // 2 Foundry fail, Surgeon fail (fail_abort), retrospector advisory,
-    // final Foundry passes. 4 verifications total.
-    const assayerFn = createAssayerMock([verifFail, verifFail, verifFail, verifPass]);
+    // Foundry fail, Surgeon fail (fail_abort), retrospector advisory,
+    // final Foundry passes. 3 verifications total.
+    const assayerFn = createAssayerMock([verifFail, verifFail, verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      maxRetries: 3,
+      maxRetries: 2,
       selfImprove: true,
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
@@ -791,7 +765,7 @@ describe("runPipeline", () => {
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.attempts.unit_module).toBe(3);
+    expect(state.attempts.unit_module).toBe(2);
     expect(Object.values(state.retrospector_calls)).toEqual([1]);
     expect(synthesisFn).toHaveBeenCalledTimes(1);
 
@@ -1369,23 +1343,17 @@ describe("runPipeline", () => {
     };
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // Both Foundry attempts time out the same way; Surgeon then succeeds.
-    const assayerFn = createAssayerMock([timeoutVerif, timeoutVerif, verifPass]);
+    // Foundry times out; Surgeon then succeeds.
+    const assayerFn = createAssayerMock([timeoutVerif, verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
@@ -1418,25 +1386,18 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // Both Foundry attempts pass sim but fail Vivado, then Surgeon succeeds.
-    const assayerFn = createAssayerMock([verifPass, verifPass, verifPass]);
+    // Foundry passes sim but fails Vivado, then Surgeon succeeds.
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const synthesisFn = createVivadoMock([
-      { success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" },
       { success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" },
       { success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" },
     ]);
@@ -1446,12 +1407,12 @@ describe("runPipeline", () => {
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(synthesisFn).toHaveBeenCalledTimes(3);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.attempts.unit_module).toBe(3);
+    expect(state.attempts.unit_module).toBe(2);
     expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"vivado_synthesis_failed"');
   });
 
@@ -1466,32 +1427,18 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // 2 Foundry calls both miss timing, then Surgeon succeeds.
-    const assayerFn = createAssayerMock([verifPass, verifPass, verifPass]);
+    // Foundry misses timing, then Surgeon succeeds.
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const synthesisFn = createVivadoMock([
-      {
-        success: true,
-        lut_count: 1479,
-        fmax_mhz: 0,
-        wns_ns: null,
-        timing_met: false,
-        report: "| Slice LUTs* | 1479 |",
-      },
       {
         success: true,
         lut_count: 1479,
@@ -1515,7 +1462,7 @@ describe("runPipeline", () => {
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(synthesisFn).toHaveBeenCalledTimes(3);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");

@@ -23,6 +23,7 @@ export const failureClassSchema = z.enum([
   "structural_preflight_failed",
   "manual_correction_needed",
   "spec_hash_mismatch",
+  "agent_max_turns_exhausted",
 ]);
 
 export const failureCategorySchema = z.enum([
@@ -223,6 +224,16 @@ export const verifResultSchema = z
     first_mismatch_index: nullToUndef(z.number()),
     first_mismatch_expected: nullToUndef(z.number()),
     first_mismatch_got: nullToUndef(z.number()),
+    first_mismatch_vector_index: nullToUndef(z.number()),
+    first_mismatch_output_index: nullToUndef(z.number()),
+    first_mismatch_channel_index: nullToUndef(z.number()),
+    exact_match_count: nullToUndef(z.number()),
+    mismatch_count: nullToUndef(z.number()),
+    signed_error_sum: nullToUndef(z.number()),
+    positive_error_count: nullToUndef(z.number()),
+    negative_error_count: nullToUndef(z.number()),
+    first_valid_in_cycle: nullToUndef(z.number()),
+    first_valid_out_cycle: nullToUndef(z.number()),
     axi_weight_memory_model_enabled: nullToUndef(z.boolean()),
     axi_weight_memory_model_status: nullToUndef(z.string()),
     axi_weight_bytes_loaded: nullToUndef(z.number()),
@@ -367,5 +378,44 @@ export const getRtlPatternsOutput = z
     pattern_markdown: z.string(),
     reference_verilog: z.string().nullable(),
     license_notice: z.string().nullable(),
+  })
+  .strict();
+
+export const getFailureCorpusInput = z
+  .object({
+    module_id: z.string().optional(),
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]).optional(),
+    contract_id: contractIdSchema.optional(),
+    spec_hash: z.string().optional(),
+    max_entries: z.number().int().positive().max(20).default(5),
+    include_verilog: z.boolean().default(false),
+  })
+  .strict();
+
+const failureCorpusEntrySchema = z
+  .object({
+    id: z.string(),
+    created_at: z.string(),
+    module_id: z.string(),
+    stage: z.string(),
+    attempt_index: z.number(),
+    op_type: z.string(),
+    contract_id: z.string(),
+    spec_hash: z.string(),
+    generated_by: z.string().nullable(),
+    module_attempt: z.number().nullable(),
+    rtl_path: z.string().nullable(),
+    failure_path: z.string(),
+    score: z.record(z.string(), z.unknown()),
+    summary: z.record(z.string(), z.unknown()),
+    shape: z.record(z.string(), z.unknown()),
+    verilog_source: z.string().optional(),
+  })
+  .passthrough();
+
+export const getFailureCorpusOutput = z
+  .object({
+    visible_tier: z.literal("output/failure_corpus/visible"),
+    entries: z.array(failureCorpusEntrySchema),
   })
   .strict();
