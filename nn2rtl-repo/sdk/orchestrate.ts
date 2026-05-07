@@ -46,6 +46,8 @@ import type {
   ModelUsageEntry,
   PipelineIR,
   RetrospectorAdvice,
+  RetrospectorBaseArtifact,
+  RetrospectorNextActor,
   VerifResult,
   VerilogModule,
 } from "./types.js";
@@ -71,11 +73,13 @@ const AGENT_MCP_TOOLS = {
     "mcp__nn2rtl-tools__write_verilog",
     "mcp__nn2rtl-tools__get_rtl_patterns",
     "mcp__nn2rtl-tools__get_failure_corpus",
+    "mcp__nn2rtl-tools__compute_layer_reference",
   ],
   surgeon: [
     "mcp__nn2rtl-tools__write_verilog",
     "mcp__nn2rtl-tools__get_rtl_patterns",
     "mcp__nn2rtl-tools__get_failure_corpus",
+    "mcp__nn2rtl-tools__compute_layer_reference",
   ],
 } as const;
 
@@ -1126,6 +1130,25 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
     "- compiler-first rule: if status=syntax_error or compiler stderr is populated, read iverilog/verilator stderr before touching datapath logic.",
     "- setup-failure rule: if evidence points only to static_verilator_tb.cpp, sidecar JSON, or toolchain glue, do not rewrite the RTL datapath in response to it.",
   ];
+
+  // Post-Retrospector final attempt. The advice block names the failure
+  // mode and the repair scope; the broken_module is already the
+  // best-known artifact picked by the orchestrator (or the latest if
+  // Retrospector overrode that choice). Surgeon should treat the scope
+  // verdict as the upper bound of edits — a `targeted_fsm_or_datapath_fix`
+  // verdict is permission for narrow surgery, not a green light to rewrite
+  // the architecture.
+  if (isRecord(payload.retrospector_advice)) {
+    const advice = payload.retrospector_advice as unknown as RetrospectorAdvice;
+    lines.push(
+      `- post-retrospector final attempt: scope=${advice.repair_scope ?? "unspecified"}; the orchestrator chose Surgeon (not Foundry) because the prior artifact is salvageable. Do NOT rewrite the architecture; perform the smallest possible repair consistent with retrospector_advice.suggestion.`,
+    );
+    if (advice.base_artifact === "best_known") {
+      lines.push(
+        "- broken_module is the highest-scoring artifact across all prior attempts (Foundry + Surgeon), not necessarily the most recent one. A later attempt may have regressed; this picker rolled it back automatically.",
+      );
+    }
+  }
   if (retrySeed) {
     lines.push(`- retry seed: ${retrySeed}. Use this as a fresh-attempt discriminator; do not repeat a prior unsuccessful patch shape.`);
   }
@@ -1204,6 +1227,32 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   } else if (expLen > 0 && totalLen > expLen) {
     lines.push(
       `- verif arrays: expected/got are a ±${SURGEON_MISMATCH_WINDOW}-sample window around first_mismatch_index=${verif.first_mismatch_index} (${expLen} of ${totalLen} total samples shown).`,
+    );
+  }
+
+  // Per-vector breakdown: a single line that names which goldin vectors
+  // matched 100% vs partial. A "v0=100%, v1=98%, v2-7=98%" pattern is the
+  // signature of a multi-vector pipeline desync (active-pixel-counter or
+  // FSM reset bug). v0 alone failing usually means the cold-start path is
+  // wrong; vN alone failing means a per-frame reset issue.
+  if (Array.isArray(verif.per_vector) && verif.per_vector.length > 0) {
+    const summary = verif.per_vector
+      .map((pv) => {
+        const total = pv.exact_match_count + pv.mismatch_count;
+        if (total === 0) return `v${pv.vector_idx}=∅`;
+        const pct = ((pv.exact_match_count / total) * 100).toFixed(1);
+        return `v${pv.vector_idx}=${pct}%(max_err=${pv.max_error})`;
+      })
+      .join(", ");
+    lines.push(`- per-vector breakdown: ${summary}.`);
+  }
+
+  // Verilator stdout: surface only the existence and size, not the body.
+  // Surgeon can read payload.verif_result.verilator_stdout directly when
+  // they have planted $display probes; the prompt brief stays compact.
+  if (typeof verif.verilator_stdout === "string" && verif.verilator_stdout.length > 0) {
+    lines.push(
+      `- verilator_stdout: ${verif.verilator_stdout.length} bytes captured in payload.verif_result.verilator_stdout (read it only if you embedded $display/$write probes; otherwise it's just simulator banners).`,
     );
   }
 
@@ -1975,6 +2024,7 @@ function verifDiagnosticSummary(result: VerifResult): Record<string, unknown> {
       completed_bursts: result.axi_weight_completed_bursts ?? null,
       out_of_range_reads: result.axi_weight_out_of_range_reads ?? null,
     },
+    per_vector: result.per_vector ?? null,
   };
 }
 
@@ -2221,6 +2271,19 @@ async function persistFailureCorpusAttempt(input: {
   return entry;
 }
 
+// Sibling of FAILURE_ATTEMPT_HISTORY that retains the full VerilogModule
+// (with verilog_source) for every recorded failure. Necessary so the
+// post-Retrospector "best_known" artifact picker can hand Surgeon a complete
+// module to repair without rehydrating from disk. Memory-only; cleared in
+// the same lifecycle hooks as the other in-memory histories.
+type AttemptArtifact = {
+  attempt_index: number;
+  stage: string;
+  module: VerilogModule;
+  result: VerifResult;
+};
+const ATTEMPT_ARTIFACT_HISTORY = new Map<string, AttemptArtifact[]>();
+
 async function recordFailureAttempt(
   layer: LayerIR,
   stage: string,
@@ -2250,6 +2313,16 @@ async function recordFailureAttempt(
     logs: buildFailureLogs(result, extraLogs),
   });
   FAILURE_ATTEMPT_HISTORY.set(key, history);
+  if (module) {
+    const artifacts = ATTEMPT_ARTIFACT_HISTORY.get(key) ?? [];
+    artifacts.push({
+      attempt_index: history.length,
+      stage,
+      module: jsonClone(module),
+      result: jsonClone(result),
+    });
+    ATTEMPT_ARTIFACT_HISTORY.set(key, artifacts);
+  }
   await persistFailureCorpusAttempt({
     layer,
     stage,
@@ -2264,6 +2337,78 @@ async function recordFailureAttempt(
 
 function failureAttemptsFor(layer: LayerIR): FailureAttemptRecord[] {
   return FAILURE_ATTEMPT_HISTORY.get(moduleContractKey(layer)) ?? [];
+}
+
+function attemptArtifactsFor(layer: LayerIR): AttemptArtifact[] {
+  return ATTEMPT_ARTIFACT_HISTORY.get(moduleContractKey(layer)) ?? [];
+}
+
+/**
+ * Rank a verifier outcome from "best" (most worth resuming from) to "worst".
+ * Tuple is read greater-is-better: status_pass first, then sim-completed,
+ * then numerical agreement, then timing closeness, then output completeness,
+ * with attempt_index as the final tiebreaker (later wins on equal scores so
+ * we don't regress to an older attempt that happened to score identically).
+ */
+function attemptRankTuple(a: AttemptArtifact): number[] {
+  const r = a.result;
+  const score = verifScore(r);
+  const passBit = r.status === "pass" ? 1 : 0;
+  const simCompletedBit = score.sim_completed ? 1 : 0;
+  const sampleCount =
+    typeof r.exact_match_count === "number" && typeof r.mismatch_count === "number"
+      ? r.exact_match_count + r.mismatch_count
+      : 0;
+  // Numerical agreement: ratio of exact matches over comparable samples.
+  // Falls back to 0 when no samples were ever produced (status=syntax_error
+  // or stalled before first valid_out) — those rank below any attempt that
+  // at least emitted a few correct bytes.
+  const exactRatio =
+    sampleCount > 0 && typeof r.exact_match_count === "number"
+      ? r.exact_match_count / sampleCount
+      : 0;
+  // max_error and timing_abs_delta are minimised: invert them with a finite
+  // bound so the tuple stays purely greater-is-better.
+  const maxErrorRank = -(score.max_error ?? Number.POSITIVE_INFINITY);
+  const timingDeltaRank = -(score.timing_abs_delta_cycles ?? Number.POSITIVE_INFINITY);
+  const completionRatio = score.output_completion_ratio ?? 0;
+  return [
+    passBit,
+    simCompletedBit,
+    exactRatio,
+    maxErrorRank,
+    timingDeltaRank,
+    completionRatio,
+    a.attempt_index,
+  ];
+}
+
+function compareAttemptArtifacts(a: AttemptArtifact, b: AttemptArtifact): number {
+  const ta = attemptRankTuple(a);
+  const tb = attemptRankTuple(b);
+  for (let i = 0; i < ta.length; i += 1) {
+    if (ta[i] === tb[i]) continue;
+    if (Number.isNaN(ta[i]) || Number.isNaN(tb[i])) continue;
+    return ta[i] > tb[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Best-scoring attempt across the (module, contract)'s in-memory history.
+ * Returns null when no attempt has produced a verilog module yet (only
+ * possible when every prior dispatch crashed before write_verilog).
+ *
+ * Used by `maybeRunRetrospectorFinalAttempt` when Retrospector picks
+ * `next_actor: "surgeon"` with `base_artifact: "best_known"` (the default):
+ * Surgeon should repair the artifact closest to passing, not necessarily
+ * the most recent attempt — Surgeon may have regressed to a worse state.
+ */
+function pickBestKnownAttempt(layer: LayerIR): AttemptArtifact | null {
+  const artifacts = attemptArtifactsFor(layer);
+  if (artifacts.length === 0) return null;
+  const ranked = [...artifacts].sort(compareAttemptArtifacts);
+  return ranked[0] ?? null;
 }
 
 function foundryVersionsFor(layer: LayerIR): FoundryVersionRecord[] {
@@ -3232,6 +3377,21 @@ export function buildRetrospectorPrompt(input: RetrospectorInput): string {
     "== EXHAUSTION SIGNAL ==",
     "- If the current contract truly cannot host this layer (e.g. weight memory architecturally wrong for the contract's storage assumption), say so clearly in `analysis`; the orchestrator will walk to the next contract.",
     "",
+    "== ROUTING (next_actor / base_artifact / repair_scope) ==",
+    "Decide who runs the final attempt:",
+    "  - `next_actor: \"surgeon\"` (DEFAULT) — pick this when the prior RTL is salvageable: the module compiles, emits at least some correct outputs, has timing close or exact, and the failure is localized (FSM stall, boundary desync, off-by-N, missing reset, wrong transition). Surgeon preserves the working structure and applies the smallest possible fix. THIS IS THE COMMON CASE.",
+    "  - `next_actor: \"foundry\"` — pick this ONLY when the design is structurally wrong, the contract is incompatible, the module never compiled, or the architecture itself must change. Foundry will discard the existing artifact and regenerate.",
+    "Pair with `repair_scope`:",
+    "  - `targeted_fsm_or_datapath_fix` — single-state / single-counter / single-register edits.",
+    "  - `numerical_pipeline_fix` — accumulator / scale / saturation edits.",
+    "  - `interface_or_contract_fix` — port / handshake / sidecar edits.",
+    "  - `architecture_replacement` — only valid with `next_actor: \"foundry\"`.",
+    "Pair with `base_artifact`:",
+    "  - `best_known` (DEFAULT for `next_actor: \"surgeon\"`) — orchestrator picks the highest-scoring artifact across all prior attempts (a later Surgeon attempt may have regressed; this rolls back automatically).",
+    "  - `latest` — force Surgeon to repair the most recent failed artifact even if it scored lower than an earlier one.",
+    "  - `fresh` — discard all prior artifacts; only meaningful with `next_actor: \"foundry\"`.",
+    "When in doubt, omit these fields entirely; the orchestrator's defaults are `next_actor: \"surgeon\"` + `base_artifact: \"best_known\"`, which is correct for ~80% of code-bug failures.",
+    "",
     "Output schema:",
     JSON.stringify(z.toJSONSchema(retrospectorAdviceZod), null, 2),
     "",
@@ -3298,6 +3458,22 @@ async function invokeRetrospector(
  * advice as orchestrator-provided context, not as a fake assistant turn that
  * came from itself.
  */
+/**
+ * Foundry should not probe-debug from raw simulator stdout — `$display` /
+ * `$write` traces are a Surgeon/Assayer evidence channel, not part of
+ * Foundry's first-attempt generation flow. Strip the captured stdout
+ * before serialising a VerifResult into a Foundry continuation prompt to
+ * keep the prompt under control (the field is capped at 64 KiB, but every
+ * KiB of irrelevant text dilutes the actually-load-bearing facts).
+ */
+function stripVerilatorStdoutForFoundry(verif: VerifResult): VerifResult {
+  if (typeof verif.verilator_stdout !== "string" || verif.verilator_stdout.length === 0) {
+    return verif;
+  }
+  const { verilator_stdout: _stripped, ...rest } = verif;
+  return rest as VerifResult;
+}
+
 export function buildFoundryContinuationPrompt(input: {
   expected_spec_hash: string;
   write_verilog_output_dir: string;
@@ -3322,7 +3498,7 @@ export function buildFoundryContinuationPrompt(input: {
     lines.push(
       "Your previous attempt failed verification. The verifier reported:",
       "",
-      JSON.stringify(input.prior_verif_result, null, 2),
+      JSON.stringify(stripVerilatorStdoutForFoundry(input.prior_verif_result), null, 2),
       "",
       "The canonical RTL on disk is your previous output; you may read it back via the Read tool if needed (it is at the same module_id .v path you wrote earlier).",
       "",
@@ -3342,7 +3518,7 @@ export function buildFoundryContinuationPrompt(input: {
             attempt: input.surgeon_attempt.module.attempt,
             verilog_source: input.surgeon_attempt.module.verilog_source,
           },
-          surgeon_verif_result: input.surgeon_attempt.verif_result,
+          surgeon_verif_result: stripVerilatorStdoutForFoundry(input.surgeon_attempt.verif_result),
         },
         null,
         2,
@@ -5805,6 +5981,7 @@ const SURGEON_HISTORY_DEPTH = 3;  // last 3 attempts surfaced in the next prompt
 export function clearAgentHistories(): void {
   FOUNDRY_HISTORY.clear();
   FAILURE_ATTEMPT_HISTORY.clear();
+  ATTEMPT_ARTIFACT_HISTORY.clear();
   SURGEON_HISTORY.clear();
 }
 
@@ -6003,6 +6180,13 @@ async function invokeSurgeon(
   runtime: OrchestratorRuntime,
   options: {
     selfImproveEnabled?: boolean;
+    // Set when this Surgeon dispatch is the post-Retrospector final attempt
+    // (the orchestrator already exhausted ordinary Foundry/Surgeon retries
+    // and Retrospector chose `next_actor: "surgeon"`). The advice block is
+    // forwarded verbatim into the Surgeon payload so the agent can frame
+    // its repair around the architectural / scope verdict.
+    retrospectorAdvice?: RetrospectorAdvice;
+    isFinalAttempt?: boolean;
   } = {},
 ): Promise<RtlAgentRunResult> {
   await appendRunLog(
@@ -6010,6 +6194,8 @@ async function invokeSurgeon(
       event: "action",
       action: "invoke_surgeon",
       module_id: brokenModule.module_id,
+      ...(options.isFinalAttempt ? { final_attempt: true } : {}),
+      ...(options.retrospectorAdvice ? { retrospector_advice: options.retrospectorAdvice } : {}),
     },
     runtime,
   );
@@ -6082,6 +6268,8 @@ async function invokeSurgeon(
     prior_attempts,
     prior_foundry_attempts: priorFoundryAttempts,
     ...(failureMemory.length > 0 ? { failure_memory: failureMemory } : {}),
+    ...(options.retrospectorAdvice ? { retrospector_advice: options.retrospectorAdvice } : {}),
+    ...(options.isFinalAttempt ? { is_final_attempt: true } : {}),
     retry_seed: retrySeed,
     write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
     ...(surgeonAsksForDraftDoc
@@ -6288,6 +6476,54 @@ async function attemptNextContractOrEscalate(input: {
     return true;
   }
 
+  // Code-bug failures don't justify a contract walk. Walking to a different
+  // contract on a code_bug failure (agent forgot to register a window, broke
+  // a bus width while fixing rounding, etc.) just gives the agent a fresh
+  // chance to make new bugs on a different interface — observed on
+  // node_conv_292 (2026-05-06): all 8 dispatches across dram-backed-weights
+  // → weight-tiling were code_bug failures, walking from one to the other
+  // wasted ~$5–6 chasing the same agent-side mistakes and discarded the
+  // failure-corpus signal we'd built up on the original contract.
+  //
+  // Escalate to manual review without flagging the contract — the contract
+  // isn't the problem, the agents' RTL is. The human-review flow can decide
+  // whether to retry under a different model / give the agent more
+  // protected docs / accept the module as unsynthesizable.
+  if (input.result.failure_category === "code_bug") {
+    const manualResult: VerifResult = {
+      ...input.result,
+      module_id: input.moduleId,
+      status: "fail",
+      failure_class: "manual_correction_needed",
+      violated_constraint:
+        input.result.violated_constraint ?? "code_bug_after_retrospector_exhausted",
+      classifier_reason:
+        "Failure category is code_bug. Walking to another contract would not address agent-level RTL mistakes; escalating to manual review without flagging the current contract.",
+    };
+    const before = input.manager.getState().modules[input.moduleId];
+    input.manager.applyVerifResult(input.moduleId, manualResult);
+    await logStateTransition(
+      input.manager,
+      input.moduleId,
+      before,
+      input.manager.getState().modules[input.moduleId],
+      "code_bug_no_contract_walk",
+      input.runtime,
+    );
+    await input.manager.saveState(input.statePath);
+    await appendRunLog(
+      {
+        event: "human_escalation_required",
+        module_id: input.moduleId,
+        contract_key: contractStateKeyForLayer(input.currentLayer),
+        reason: "code_bug_after_retrospector_exhausted",
+        result: manualResult,
+      },
+      input.runtime,
+    );
+    return true;
+  }
+
   await flagContractForManualCorrection(
     input.contractState,
     input.currentLayer,
@@ -6376,6 +6612,292 @@ async function attemptNextContractOrEscalate(input: {
     input.runtime,
   );
   return true;
+}
+
+/**
+ * Surgeon-led variant of the post-Retrospector final attempt. Picks a base
+ * artifact according to Retrospector's `base_artifact` choice (or the
+ * default `best_known`), then dispatches Surgeon with the full advice
+ * block. Replaces the unconditional Foundry-resume that previously ran on
+ * every retrospector verdict — Surgeon-shaped repair work was being
+ * thrown away because Foundry would regenerate from scratch.
+ */
+async function runRetrospectorSurgeonFinalAttempt(input: {
+  manager: PipelineStateManager;
+  moduleId: string;
+  layer: LayerIR;
+  baseLayer: LayerIR;
+  pipelineIr: PipelineIR;
+  activeLayers: Map<string, LayerIR>;
+  newDocFailureContexts: Map<string, NewDocFailureContext>;
+  contractState: ContractResponseState;
+  terminalResult: VerifResult;
+  statePath: string;
+  runtime: OrchestratorRuntime;
+  passedModules: Map<string, { module: VerilogModule; layer: LayerIR }>;
+  selfImproveEnabled: boolean;
+  advice: RetrospectorAdvice;
+  baseArtifactChoice: RetrospectorBaseArtifact;
+  replacementForDocIds: string[];
+}): Promise<boolean> {
+  const {
+    manager,
+    moduleId,
+    layer,
+    baseLayer,
+    pipelineIr,
+    activeLayers,
+    newDocFailureContexts,
+    contractState,
+    terminalResult,
+    statePath,
+    runtime,
+    passedModules,
+    selfImproveEnabled,
+    advice,
+    baseArtifactChoice,
+    replacementForDocIds,
+  } = input;
+
+  // Resolve the base artifact Surgeon will repair. `fresh` falls back to
+  // the latest persisted module — Surgeon cannot work without a starting
+  // module — and the orchestrator logs the downgrade so the policy choice
+  // remains auditable.
+  let baseModule: VerilogModule | null = null;
+  let baseVerif: VerifResult = terminalResult;
+  let baseSource: "best_known" | "latest" | "fresh_downgraded_to_latest" = "latest";
+
+  if (baseArtifactChoice === "best_known") {
+    const best = pickBestKnownAttempt(layer);
+    if (best) {
+      baseModule = best.module;
+      baseVerif = best.result;
+      baseSource = "best_known";
+    }
+  }
+  if (baseModule === null) {
+    try {
+      baseModule = await loadPersistedVerilogModule(moduleId);
+      if (baseArtifactChoice === "fresh") {
+        baseSource = "fresh_downgraded_to_latest";
+      } else if (baseArtifactChoice !== "best_known") {
+        baseSource = "latest";
+      }
+    } catch (error: unknown) {
+      await appendRunLog(
+        {
+          event: "retrospector_surgeon_dispatch_failed",
+          module_id: moduleId,
+          stage: "load_base_artifact",
+          base_artifact: baseArtifactChoice,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        runtime,
+      );
+      return attemptNextContractOrEscalate({
+        manager,
+        moduleId,
+        baseLayer,
+        currentLayer: layer,
+        pipelineIr,
+        activeLayers,
+        newDocFailureContexts,
+        contractState,
+        statePath,
+        runtime,
+        result: terminalResult,
+        reason: "retrospector_surgeon_no_base_artifact",
+      });
+    }
+  }
+
+  await appendRunLog(
+    {
+      event: "retrospector_surgeon_base_artifact_selected",
+      module_id: moduleId,
+      base_artifact_choice: baseArtifactChoice,
+      base_artifact_source: baseSource,
+      base_module_attempt: baseModule.attempt,
+      base_module_generated_by: baseModule.generated_by,
+      base_verif_status: baseVerif.status,
+      base_verif_exact_match_count: baseVerif.exact_match_count ?? null,
+      base_verif_max_error: baseVerif.max_error ?? null,
+    },
+    runtime,
+  );
+
+  const beforeGenerate = manager.getState().modules[moduleId];
+  manager.setStatus(moduleId, "generating");
+  await logStateTransition(
+    manager,
+    moduleId,
+    beforeGenerate,
+    "generating",
+    "retrospector_surgeon_dispatch",
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  let surgeonResult: RtlAgentRunResult;
+  try {
+    surgeonResult = await invokeSurgeon(baseModule, baseVerif, layer, runtime, {
+      selfImproveEnabled,
+      retrospectorAdvice: advice,
+      isFinalAttempt: true,
+    });
+    recordUsageFromResult(manager, surgeonResult.result);
+  } catch (error: unknown) {
+    const finalFailure: VerifResult = {
+      module_id: moduleId,
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layer.pipeline_latency_cycles,
+      failure_category: "unknown",
+      violated_constraint: "retrospector_surgeon_dispatch_failed",
+      classifier_reason: "Surgeon's final post-retrospector attempt failed before producing RTL.",
+      fix_hint: error instanceof Error ? error.message : String(error),
+    };
+    await recordFailureAttempt(layer, "retrospector_surgeon_dispatch", finalFailure, null, runtime);
+    await archiveProbationaryDocsForFailure(
+      layer,
+      moduleId,
+      "retrospector_surgeon_dispatch_failed",
+      runtime,
+    );
+    const beforeApply = manager.getState().modules[moduleId];
+    manager.applyVerifResult(moduleId, finalFailure);
+    await logStateTransition(
+      manager,
+      moduleId,
+      beforeApply,
+      manager.getState().modules[moduleId],
+      "retrospector_surgeon_dispatch_failed",
+      runtime,
+    );
+    await manager.saveState(statePath);
+    return attemptNextContractOrEscalate({
+      manager,
+      moduleId,
+      baseLayer,
+      currentLayer: layer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      statePath,
+      runtime,
+      result: finalFailure,
+      reason: "retrospector_surgeon_dispatch_failed",
+    });
+  }
+
+  await manager.saveState(statePath);
+  const beforeVerify = manager.getState().modules[moduleId];
+  manager.setStatus(moduleId, "verifying");
+  await logStateTransition(
+    manager,
+    moduleId,
+    beforeVerify,
+    "verifying",
+    "retrospector_surgeon_completed",
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  const rawVerif = await invokeAssayer(surgeonResult.payload, layer, runtime);
+  const finalVerif = await classifyFailedModule(
+    manager,
+    rawVerif,
+    layer,
+    surgeonResult.payload,
+    runtime,
+  );
+  if (finalVerif.status !== "pass") {
+    await recordFailureAttempt(
+      layer,
+      "retrospector_surgeon_assayer",
+      finalVerif,
+      surgeonResult.payload,
+      runtime,
+    );
+    await archiveProbationaryDocsForFailure(
+      layer,
+      moduleId,
+      `retrospector_surgeon_assayer_${finalVerif.status}`,
+      runtime,
+    );
+  }
+
+  const beforeApply = manager.getState().modules[moduleId];
+  manager.applyVerifResult(moduleId, finalVerif);
+  const afterApply = manager.getState().modules[moduleId];
+  await logStateTransition(
+    manager,
+    moduleId,
+    beforeApply,
+    afterApply,
+    `retrospector_surgeon_assayer_${finalVerif.status}`,
+    runtime,
+  );
+  await manager.saveState(statePath);
+
+  if (afterApply === "pass") {
+    await processSynthesisOutcome(
+      manager,
+      moduleId,
+      surgeonResult.payload,
+      layer,
+      finalVerif,
+      statePath,
+      runtime,
+      selfImproveEnabled,
+    );
+    if (manager.getState().modules[moduleId] === "pass") {
+      passedModules.set(moduleId, { module: surgeonResult.payload, layer });
+      await finalizeSuccessfulRtlDocs(
+        surgeonResult.payload,
+        layer,
+        surgeonResult.draft_doc,
+        runtime,
+        selfImproveEnabled,
+        replacementForDocIds,
+        surgeonResult.doc_request ?? null,
+      );
+    } else {
+      const synthesisResult = manager.getState().results[moduleId] ?? finalVerif;
+      return attemptNextContractOrEscalate({
+        manager,
+        moduleId,
+        baseLayer,
+        currentLayer: layer,
+        pipelineIr,
+        activeLayers,
+        newDocFailureContexts,
+        contractState,
+        statePath,
+        runtime,
+        result: synthesisResult,
+        reason: "retrospector_surgeon_synthesis_failed",
+      });
+    }
+    return true;
+  }
+
+  return attemptNextContractOrEscalate({
+    manager,
+    moduleId,
+    baseLayer,
+    currentLayer: layer,
+    pipelineIr,
+    activeLayers,
+    newDocFailureContexts,
+    contractState,
+    statePath,
+    runtime,
+    result: finalVerif,
+    reason: "retrospector_surgeon_final_attempt_failed",
+  });
 }
 
 async function maybeRunRetrospectorFinalAttempt(
@@ -6539,13 +7061,64 @@ async function maybeRunRetrospectorFinalAttempt(
     runtime,
   );
 
+  // Decide who runs the post-Retrospector final attempt. Default policy:
+  // **Surgeon** preserves a near-passing artifact and applies a localized
+  // fix; Retrospector picks Foundry only when the architecture or contract
+  // itself must change. Older Retrospector outputs that pre-date the
+  // `next_actor` field default to "surgeon" too — the previous always-
+  // Foundry behaviour discarded mostly-good RTL on every final attempt
+  // (see node_conv_288 case study: 98%-correct module rebuilt from scratch
+  // and regressed). To force the legacy Foundry path, Retrospector must
+  // emit `next_actor: "foundry"` explicitly with an architecture-level
+  // `repair_scope` (`architecture_replacement` / `interface_or_contract_fix`).
+  const advice = adviceRun.payload;
+  const baseArtifactDefault: RetrospectorBaseArtifact =
+    advice.next_actor === "foundry" ? "fresh" : "best_known";
+  const baseArtifactChoice: RetrospectorBaseArtifact =
+    advice.base_artifact ?? baseArtifactDefault;
+  const nextActor: RetrospectorNextActor = advice.next_actor ?? "surgeon";
+
+  await appendRunLog(
+    {
+      event: "retrospector_final_attempt_routing",
+      module_id: moduleId,
+      contract_key: contractKey,
+      next_actor: nextActor,
+      base_artifact: baseArtifactChoice,
+      repair_scope: advice.repair_scope ?? null,
+      retrospector_specified_actor: advice.next_actor ?? null,
+    },
+    runtime,
+  );
+
+  if (nextActor === "surgeon") {
+    return runRetrospectorSurgeonFinalAttempt({
+      manager,
+      moduleId,
+      layer,
+      baseLayer,
+      pipelineIr,
+      activeLayers,
+      newDocFailureContexts,
+      contractState,
+      terminalResult,
+      statePath,
+      runtime,
+      passedModules,
+      selfImproveEnabled,
+      advice,
+      baseArtifactChoice,
+      replacementForDocIds,
+    });
+  }
+
   if (!resumeSessionId) {
     await appendRunLog(
       {
         event: "retrospector_no_resumable_foundry_session",
         module_id: moduleId,
         contract_key: contractKey,
-        reason: "No Foundry session exists for this contract, so the orchestrator will try the next available contract instead of a same-contract final retry.",
+        reason: "Retrospector routed the final retry to Foundry, but no Foundry session exists for this contract. The orchestrator will try the next available contract instead.",
       },
       runtime,
     );
@@ -6595,7 +7168,7 @@ async function maybeRunRetrospectorFinalAttempt(
   try {
     foundryResult = await invokeFoundry(layer, runtime, {
       resumeSessionId,
-      retrospectorAdvice: adviceRun.payload,
+      retrospectorAdvice: advice,
       surgeonAttempt,
       isFinalAttempt: true,
       selfImproveEnabled,

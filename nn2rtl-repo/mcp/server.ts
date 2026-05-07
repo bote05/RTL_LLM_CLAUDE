@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 
 import {
+  compute_layer_reference,
   get_failure_corpus,
   get_rtl_patterns,
   read_weights,
@@ -17,6 +18,8 @@ import {
   write_verilog,
 } from "./tools.js";
 import {
+  computeLayerReferenceInput,
+  computeLayerReferenceOutput,
   getRtlPatternsInput,
   getRtlPatternsOutput,
   getFailureCorpusInput,
@@ -34,6 +37,7 @@ import {
 } from "./schemas.js";
 
 export type ToolImplementations = {
+  compute_layer_reference: typeof compute_layer_reference;
   get_failure_corpus: typeof get_failure_corpus;
   get_rtl_patterns: typeof get_rtl_patterns;
   read_weights: typeof read_weights;
@@ -44,6 +48,7 @@ export type ToolImplementations = {
 };
 
 const DEFAULT_TOOL_IMPLEMENTATIONS: ToolImplementations = {
+  compute_layer_reference,
   get_failure_corpus,
   get_rtl_patterns,
   read_weights,
@@ -112,6 +117,24 @@ export const toolDefinitions = [
       "Returns summaries plus rtl_path/failure_path; optionally includes Verilog source. Archived failures are intentionally hidden.",
     inputSchema: toJsonSchema(getFailureCorpusInput),
     outputSchema: toJsonSchema(getFailureCorpusOutput),
+  },
+  {
+    name: "compute_layer_reference",
+    description:
+      "Bit-exact ground-truth oracle for one output pixel of a layer. Reads " +
+      "the same weights/bias/golden-input files the testbench reads, runs " +
+      "pure int64 conv math with sign-aware rounding, and returns the " +
+      "expected INT8 outputs (and optional integer-domain intermediates: " +
+      "acc, biased, scaled, v_tmp). Use to compare RTL outputs against " +
+      "expected values when verif fails. " +
+      "Access policy: assayer / surgeon — uncapped. foundry — sanity check " +
+      "only, max 3 calls per attempt; do NOT use for iterative probe-driven " +
+      "debugging or to harvest broad ranges. Pass `caller_role` for audit. " +
+      "Returns shape { module_id, vector_idx, output_pixel_oy, " +
+      "output_pixel_ox, oc_range, scale_constants, output[], " +
+      "intermediates?, output_fingerprint }.",
+    inputSchema: toJsonSchema(computeLayerReferenceInput),
+    outputSchema: toJsonSchema(computeLayerReferenceOutput),
   },
 ] as const;
 
@@ -193,6 +216,15 @@ async function handleGetFailureCorpus(
   return toToolResult(result as unknown as Record<string, unknown>);
 }
 
+async function handleComputeLayerReference(
+  args: Record<string, unknown>,
+  toolImpls: ToolImplementations,
+): Promise<CallToolResult> {
+  const input = computeLayerReferenceInput.parse(args);
+  const result = await toolImpls.compute_layer_reference(input);
+  return toToolResult(result as unknown as Record<string, unknown>);
+}
+
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
@@ -213,6 +245,8 @@ export async function handleToolCall(
       return handleGetRtlPatterns(args, toolImpls);
     case "get_failure_corpus":
       return handleGetFailureCorpus(args, toolImpls);
+    case "compute_layer_reference":
+      return handleComputeLayerReference(args, toolImpls);
     default:
       return {
         content: [{ type: "text", text: `Unknown tool '${name}'.` }],
