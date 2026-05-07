@@ -221,6 +221,9 @@ def test_weight_bank_files_partition_conv_weights_by_mac_lane(tmp_path: Path) ->
 
     paths = write_weight_bank_hex_files(weight_values, weight_shape, 2, tmp_path, "conv")
     assert [path.name for path in paths] == ["conv_weights_bank0.hex", "conv_weights_bank1.hex"]
+    assert (tmp_path / "output" / "weights" / "conv_weights.hex").read_text(encoding="utf8") == (
+        "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n"
+    )
     assert paths[0].read_text(encoding="utf8") == "00\n01\n04\n05\n08\n09\n"
     assert paths[1].read_text(encoding="utf8") == "02\n03\n06\n07\n00\n00\n"
 

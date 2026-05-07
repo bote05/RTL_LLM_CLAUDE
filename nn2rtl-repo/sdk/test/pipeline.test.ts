@@ -45,8 +45,8 @@ describe("PipelineStateManager", () => {
     expect(manager.getState().modules.m1).toBe("generating");
   });
 
-  it("dispatches 2 Foundry calls then 1 Surgeon call before fail_abort", () => {
-    const manager = new PipelineStateManager(["m1"], 3);
+  it("dispatches 1 Foundry call then 1 Surgeon call before fail_abort", () => {
+    const manager = new PipelineStateManager(["m1"], 2);
 
     // Call 1: Foundry on a fresh module.
     expect(manager.tick()).toEqual({ action: "invoke_foundry", module_id: "m1" });
@@ -54,15 +54,9 @@ describe("PipelineStateManager", () => {
     manager.applyVerifResult("m1", FAIL_RESULT);
     expect(manager.getState().modules.m1).toBe("fail_retry");
 
-    // Call 2: a SECOND Foundry call (will be dispatched on the resumed session).
-    expect(manager.tick()).toEqual({ action: "invoke_foundry", module_id: "m1" });
-    expect(manager.getState().attempts.m1).toBe(2);
-    manager.applyVerifResult("m1", FAIL_RESULT);
-    expect(manager.getState().modules.m1).toBe("fail_retry");
-
-    // Call 3: Surgeon takes over (sees Foundry's two prior attempts).
+    // Call 2: Surgeon takes over after Foundry's failed attempt.
     expect(manager.tick()).toEqual({ action: "invoke_surgeon", module_id: "m1" });
-    expect(manager.getState().attempts.m1).toBe(3);
+    expect(manager.getState().attempts.m1).toBe(2);
     manager.applyVerifResult("m1", FAIL_RESULT);
     expect(manager.getState().modules.m1).toBe("fail_abort");
   });

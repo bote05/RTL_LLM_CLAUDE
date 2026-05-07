@@ -766,6 +766,12 @@ def write_weight_bank_hex_files(
     repo_root: Path,
     module_id: str,
 ) -> list[Path]:
+    # The legacy on-chip datapaths consume bank files, but the
+    # dram-backed-weights AXI testbench consumes the flat byte stream at
+    # <module>_weights.hex. Keep both artifacts in sync whenever banking runs.
+    flat_weights_path, _ = get_weight_artifact_paths(repo_root, module_id)
+    write_signed_int8_hex(weight_values, flat_weights_path)
+
     bank_values = bank_weight_values_for_mac_lanes(
         weight_values,
         weight_shape,

@@ -101,7 +101,8 @@ export type FailureClass =
   | "architectural_unsupported"
   | "structural_preflight_failed"
   | "manual_correction_needed"
-  | "spec_hash_mismatch";
+  | "spec_hash_mismatch"
+  | "agent_max_turns_exhausted";
 
 export type FailureCategory =
   | "code_bug"
@@ -117,11 +118,22 @@ export interface FailureClassification {
   rationale: string;
 }
 
+export type RetrospectorNextActor = "surgeon" | "foundry";
+export type RetrospectorBaseArtifact = "latest" | "best_known" | "fresh";
+export type RetrospectorRepairScope =
+  | "targeted_fsm_or_datapath_fix"
+  | "numerical_pipeline_fix"
+  | "interface_or_contract_fix"
+  | "architecture_replacement";
+
 export interface RetrospectorAdvice {
   analysis: string;
   suggestion: string;
   doc_fault?: boolean;
   faulty_doc_paths?: string[];
+  next_actor?: RetrospectorNextActor;
+  base_artifact?: RetrospectorBaseArtifact;
+  repair_scope?: RetrospectorRepairScope;
 }
 
 export interface VerifResult {
@@ -158,6 +170,16 @@ export interface VerifResult {
   first_mismatch_index?: number;
   first_mismatch_expected?: number;
   first_mismatch_got?: number;
+  first_mismatch_vector_index?: number;
+  first_mismatch_output_index?: number;
+  first_mismatch_channel_index?: number;
+  exact_match_count?: number;
+  mismatch_count?: number;
+  signed_error_sum?: number;
+  positive_error_count?: number;
+  negative_error_count?: number;
+  first_valid_in_cycle?: number;
+  first_valid_out_cycle?: number;
   axi_weight_memory_model_enabled?: boolean;
   axi_weight_memory_model_status?: string;
   axi_weight_bytes_loaded?: number;
@@ -173,6 +195,19 @@ export interface VerifResult {
   axi_weight_first_ar_handshake_cycle?: number;
   axi_weight_first_r_beat_cycle?: number;
   axi_weight_out_of_range_reads?: number;
+  verilator_stdout?: string;
+  per_vector?: PerVectorMetrics[];
+}
+
+export interface PerVectorMetrics {
+  vector_idx: number;
+  outputs_received: number;
+  exact_match_count: number;
+  mismatch_count: number;
+  max_error: number;
+  mean_error: number;
+  actual_cycles: number;
+  first_mismatch_output_index: number | null;
 }
 
 export interface ModelUsageEntry {

@@ -146,6 +146,120 @@ describe("orchestrate helpers", () => {
     expect(prompt).toContain("invariant scope");
   });
 
+  it("surfaces retrospector_advice routing in the Surgeon repair brief", () => {
+    const prompt = buildDelegationPrompt("surgeon", {
+      layer_ir: {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 64, 4, 4],
+        output_shape: [1, 64, 4, 4],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [64, 64, 1, 1],
+        num_weights: 4096,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 40,
+        clock_period_ns: 20,
+        input_width_bits: 512,
+        output_width_bits: 512,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+      verif_result: {
+        module_id: "m1",
+        status: "fail",
+        status_class: "sim_completed_mismatch",
+        max_error: 1,
+        first_mismatch_index: 100,
+      },
+      retrospector_advice: {
+        analysis: "trailing input pixels desync the active counter",
+        suggestion: "stop consuming inputs once active outputs reach OH*OW",
+        next_actor: "surgeon",
+        base_artifact: "best_known",
+        repair_scope: "targeted_fsm_or_datapath_fix",
+      },
+    });
+    expect(prompt).toContain("post-retrospector final attempt");
+    expect(prompt).toContain("scope=targeted_fsm_or_datapath_fix");
+    expect(prompt).toContain("highest-scoring artifact across all prior attempts");
+  });
+
+  it("retrospector prompt documents the next_actor / base_artifact / repair_scope routing fields", () => {
+    const prompt = buildRetrospectorPrompt({
+      original_spec: {
+        module_id: "m1",
+        op_type: "conv2d",
+        input_shape: [1, 64, 4, 4],
+        output_shape: [1, 64, 4, 4],
+        weights_path: "/tmp/w.hex",
+        bias_path: "/tmp/b.hex",
+        weight_shape: [64, 64, 1, 1],
+        num_weights: 4096,
+        scale_factor: 0.5,
+        zero_point: 0,
+        pipeline_latency_cycles: 40,
+        clock_period_ns: 20,
+        input_width_bits: 512,
+        output_width_bits: 512,
+        clock_signal: "clk",
+        reset_signal: "rst_n",
+        valid_in_signal: "valid_in",
+        valid_out_signal: "valid_out",
+        ready_in_signal: "ready_in",
+        data_in_signal: "data_in",
+        data_out_signal: "data_out",
+        golden_inputs_path: "/tmp/in.goldin",
+        golden_outputs_path: "/tmp/out.goldout",
+      },
+      contract: {
+        interface: {
+          clock: "clk",
+          reset: "rst_n",
+          valid_in: "valid_in",
+          ready_in: "ready_in",
+          valid_out: "valid_out",
+          data_in_bits: 512,
+          data_out_bits: 512,
+        },
+        timing: { pipeline_latency_cycles: 40, clock_period_ns: 20, fmax_target_mhz: 50 },
+        capability_limits: {
+          max_supported_bus_bits: 8192,
+          target_part: "xczu9eg-ffvb1156-2-e",
+          target_part_resources: {
+            lut_logic: 274080,
+            lut_distributed_ram: 144000,
+            ff_total: 548160,
+            block_ram_36k: 912,
+            block_ram_18k_equiv: 1824,
+            uram_288k: 0,
+            dsp_slices: 2520,
+            dsp_type: "DSP48E2",
+          },
+        },
+      },
+      current_contract: { id: "flat-bus", complexity: 0, description: "fixture flat-bus" },
+      available_contracts: [],
+      doc_used: { pattern_markdown: "fixture", reference_verilog: null, license_notice: null },
+      knowledge_docs_used: [],
+      foundry_versions: [],
+      failure_attempts: [],
+      failure_corpus: [],
+    });
+    expect(prompt).toContain("ROUTING (next_actor / base_artifact / repair_scope)");
+    expect(prompt).toContain("`next_actor: \"surgeon\"`");
+    expect(prompt).toContain("`base_artifact`");
+    expect(prompt).toContain("`repair_scope`");
+  });
+
   it("builds failure-classifier prompts with logs and contract-fit indicators", () => {
     const layer = {
       module_id: "m1",
@@ -461,10 +575,14 @@ describe("orchestrate helpers", () => {
 
   it("loads plugin agent definitions with merged MCP tools and skills", async () => {
     const foundry = await loadPluginAgentDefinition("foundry");
+    const surgeon = await loadPluginAgentDefinition("surgeon");
     const cartographer = await loadPluginAgentDefinition("cartographer");
     expect(foundry.tools).toContain("Bash");
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__write_verilog");
     expect(foundry.tools).toContain("mcp__nn2rtl-tools__get_rtl_patterns");
+    expect(foundry.tools).toContain("mcp__nn2rtl-tools__get_failure_corpus");
+    expect(foundry.tools).toContain("mcp__nn2rtl-tools__compute_layer_reference");
+    expect(surgeon.tools).toContain("mcp__nn2rtl-tools__compute_layer_reference");
     expect(foundry.prompt).toContain("Knowledge catalog");
     expect(foundry.prompt).toContain("knowledge/patterns/protected/02_conv1x1.md");
     expect(foundry.prompt).toContain("rtl_library/coord_scheduler.v");
@@ -797,7 +915,7 @@ describe("orchestrate helpers", () => {
           "module m1();",
           "  reg [63:0] weights_packed [0:15];",
           "  reg signed [7:0] weights [0:63];",
-          "  initial $readmemh(\"w.hex\", weights);",
+          "  initial $readmemh(\"/tmp/w.hex\", weights);",
           "  reg [31:0] outputs_emitted;",
           "  reg [7:0] line_buf [0:31][0:15];",
           "  reg [7:0] window [0:8];",
@@ -847,8 +965,8 @@ describe("orchestrate helpers", () => {
           "  reg signed [7:0] weights [0:63];",
           "  reg signed [31:0] biases [0:0];",
           "  initial begin",
-          "    $readmemh(\"w.hex\", weights);",
-          "    $readmemh(\"b.hex\", biases);",
+          "    $readmemh(\"/tmp/w.hex\", weights);",
+          "    $readmemh(\"/tmp/b.hex\", biases);",
           "  end",
           "  always @(posedge clk) begin : BIAS_LANE",
           "    integer bias_oc;",
@@ -902,8 +1020,8 @@ describe("orchestrate helpers", () => {
           "  reg signed [7:0] weights [0:63];",
           "  reg signed [31:0] biases [0:0];",
           "  initial begin",
-          "    $readmemh(\"w.hex\", weights);",
-          "    $readmemh(\"b.hex\", biases);",
+          "    $readmemh(\"/tmp/w.hex\", weights);",
+          "    $readmemh(\"/tmp/b.hex\", biases);",
           "  end",
           "endmodule",
         ].join("\n"),
@@ -1095,6 +1213,174 @@ endmodule
       "contract_dram_full_weight_array",
       "contract_dram_full_weight_readmemh",
     ]);
+  });
+
+  it("rejects negative-half fixed-point rounding before simulation", () => {
+    const layer = {
+      module_id: "rounding_conv",
+      op_type: "conv2d" as const,
+      contract_id: "dram-backed-weights" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 64, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [64, 64, 1, 1],
+      num_weights: 4096,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 1,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 512,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "rounding_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: `
+module rounding_conv();
+  localparam signed [63:0] ROUND_BIAS_POS = 64'sd524288;
+  localparam signed [63:0] ROUND_BIAS_NEG = -64'sd524288;
+  wire signed [63:0] rnd0 = (scaled + (scaled[63] ? -SCALE_ROUND_HALF : SCALE_ROUND_HALF)) >>> SCALE_SHIFT;
+endmodule
+`,
+      },
+      layer,
+    );
+
+    expect(violations.map((violation) => violation.rule)).toContain(
+      "rounding_negative_half_forbidden",
+    );
+    expect(violations.find((violation) => violation.rule === "rounding_negative_half_forbidden")?.detail).toContain(
+      "HALF - 1",
+    );
+  });
+
+  it("rejects $readmemh with a relative-path string literal", () => {
+    const layer = {
+      module_id: "relpath_conv",
+      op_type: "conv2d" as const,
+      input_shape: [1, 64, 1, 1],
+      output_shape: [1, 1, 1, 1],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [1, 64, 1, 1],
+      num_weights: 64,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 67,
+      clock_period_ns: 20,
+      input_width_bits: 512,
+      output_width_bits: 8,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+    };
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "relpath_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module relpath_conv();",
+          "  reg signed [7:0] weights [0:63];",
+          "  reg signed [31:0] biases [0:0];",
+          "  initial begin",
+          "    $readmemh(\"output/weights/w.hex\", weights);",
+          "    $readmemh(\"b.hex\", biases);",
+          "  end",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(violations.map((v) => v.rule)).toContain("readmemh_relative_path_forbidden");
+    expect(violations.find((v) => v.rule === "readmemh_relative_path_forbidden")?.detail).toContain(
+      "absolute path",
+    );
+  });
+
+  it("rejects multi-vector contract RTL whose ST_DONE locks the FSM", () => {
+    const layer = {
+      module_id: "lock_conv",
+      op_type: "conv2d" as const,
+      contract_id: "dram-backed-weights" as const,
+      input_shape: [1, 1024, 14, 14],
+      output_shape: [1, 2048, 7, 7],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [2048, 1024, 1, 1],
+      num_weights: 2097152,
+      scale_factor: 0.015,
+      zero_point: 0,
+      pipeline_latency_cycles: 2100225,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      io_mode: "dram_backed_weights" as const,
+      channel_tile: 32,
+    };
+    const violations = structuralPreflightViolations(
+      {
+        module_id: "lock_conv",
+        spec_hash: "fixture",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: `
+module lock_conv();
+  reg signed [7:0] weights [0:63];
+  initial $readmemh("/tmp/w.hex", weights);
+  // Real AR FSM elsewhere in the module — fake here to keep fixture small.
+  output reg weights_arvalid;
+  always @* begin end
+  // The bad block: ST_DONE holds ready_in low forever and never transitions.
+  reg [3:0] state;
+  localparam ST_DONE = 4'd9;
+  always @(posedge clk) begin
+    case (state)
+      ST_DONE: begin
+        valid_out <= 1'b0;
+        ready_in  <= 1'b0;
+      end
+    endcase
+  end
+endmodule
+`,
+      },
+      layer,
+    );
+    expect(violations.map((v) => v.rule)).toContain("dram_backed_weights_terminal_done_lock");
+    expect(violations.find((v) => v.rule === "dram_backed_weights_terminal_done_lock")?.detail).toContain(
+      "vector N+1",
+    );
   });
 
   it("rejects weight-tiling RTL with a fake scheduler or full active tile", () => {

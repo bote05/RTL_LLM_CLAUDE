@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -531,7 +532,7 @@ describe("runPipeline", () => {
     // agent tools list; Agent/Task are in disallowedTools, not allowedTools.
     expect(queryFn.mock.calls[0]?.[0]).toMatchObject({
       options: {
-        maxTurns: 20,
+        maxTurns: 40,
         allowedTools: expect.arrayContaining(["Bash", "mcp__nn2rtl-tools__write_verilog"]),
       },
     });
@@ -579,9 +580,8 @@ describe("runPipeline", () => {
     expect(log).toContain('"event":"cartographer_bypassed_deterministic_read_weights"');
   });
 
-  it("runs the Surgeon repair path after two Foundry attempts both fail verification", async () => {
-    // New flow: 2 Foundry calls (resumed second) then 1 Surgeon. Surgeon
-    // only sees verification when both Foundry attempts have failed.
+  it("runs the Surgeon repair path after one Foundry attempt fails verification", async () => {
+    // New flow: 1 Foundry call then 1 Surgeon repair.
     await writePipelineIrFixture();
     const originalModule = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
@@ -599,22 +599,16 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule, "foundry-session-1");
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule, "foundry-session-1");
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule, "foundry-session-1");
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    const assayerFn = createAssayerMock([verifFail, verifFail, verifPass]);
+    const assayerFn = createAssayerMock([verifFail, verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
@@ -623,16 +617,9 @@ describe("runPipeline", () => {
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
-    // Foundry call 2 must arrive on the same resumed session as call 1.
-    expect(
-      queryFn.mock.calls.some(
-        ([call]) => (call as { options?: { resume?: string } }).options?.resume === "foundry-session-1",
-      ),
-    ).toBe(true);
-
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.attempts.unit_module).toBe(3);
+    expect(state.attempts.unit_module).toBe(2);
   });
 
   it("reverts Surgeon output and logs surgeon_regression_reverted when first_mismatch_index goes backward", async () => {
@@ -672,28 +659,25 @@ describe("runPipeline", () => {
     };
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // New flow: Foundry call 1 fails, Foundry call 2 (resumed) fails the same
-    // way, Surgeon repairs but regresses first_mismatch_index → revert.
-    const assayerFn = createAssayerMock([foundryVerif, foundryVerif, surgeonVerif]);
+    // New flow: Foundry fails, then Surgeon repairs but regresses first_mismatch_index.
+    const assayerFn = createAssayerMock([foundryVerif, surgeonVerif]);
     const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
-      maxRetries: 3,
+      maxRetries: 2,
+      // Pin self_improve off so the contract walker doesn't activate — this
+      // test exercises the Surgeon regression-revert path, not the contract
+      // walk.
+      selfImprove: false,
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
@@ -741,12 +725,7 @@ describe("runPipeline", () => {
           await persistMockRtlDeliverable(originalModule);
           return successRtlWithDoc(originalModule, "foundry-session-1");
         },
-        // Call 2: resumed session (orchestrator passes resume=foundry-session-1).
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successRtlWithDoc(originalModule, "foundry-session-1");
-        },
-        // Call 3 (post-retrospector final): same resumed session + advice.
+        // Call 2 (post-retrospector final): same resumed session + advice.
         async () => {
           await persistMockRtlDeliverable(finalFoundryModule);
           return successRtlWithDoc(finalFoundryModule, "foundry-session-1");
@@ -764,16 +743,23 @@ describe("runPipeline", () => {
           suggestion: "Keep the contract and rebuild the output counter around the documented latency.",
           doc_fault: true,
           faulty_doc_paths: ["auto_test_active_doc_fault"],
+          // Doc_fault verdict: the existing artifact was generated against a
+          // bad doc, so a fresh Foundry regeneration with the doc archived is
+          // the right move. Explicitly select Foundry; the orchestrator's
+          // default would otherwise route this to Surgeon.
+          next_actor: "foundry",
+          base_artifact: "fresh",
+          repair_scope: "architecture_replacement",
         }),
       ],
     });
-    // 2 Foundry fail, Surgeon fail (fail_abort), retrospector advisory,
-    // final Foundry passes. 4 verifications total.
-    const assayerFn = createAssayerMock([verifFail, verifFail, verifFail, verifPass]);
+    // Foundry fail, Surgeon fail (fail_abort), retrospector advisory,
+    // final Foundry passes. 3 verifications total.
+    const assayerFn = createAssayerMock([verifFail, verifFail, verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
-      maxRetries: 3,
+      maxRetries: 2,
       selfImprove: true,
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
@@ -787,7 +773,7 @@ describe("runPipeline", () => {
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.attempts.unit_module).toBe(3);
+    expect(state.attempts.unit_module).toBe(2);
     expect(Object.values(state.retrospector_calls)).toEqual([1]);
     expect(synthesisFn).toHaveBeenCalledTimes(1);
 
@@ -825,9 +811,16 @@ describe("runPipeline", () => {
       spec_hash: "conv2d_1x1x1x1_s1x1_i8_o8_iotiled-streaming_tile1",
       verilog_source: `${module.verilog_source}\n// tiled contract attempt\n`,
     };
-    const verifFail = JSON.parse(
-      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
-    );
+    // Inject `failure_category: "architectural_fit"` so the contract walker
+    // gate (which now blocks walking on code_bug) lets this test exercise
+    // the actual contract-walk path. The test's intent is to validate the
+    // walk, so we set up a walk-worthy failure category explicitly.
+    const verifFail = {
+      ...JSON.parse(
+        await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+      ),
+      failure_category: "architectural_fit",
+    };
     const verifPass = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
     );
@@ -855,6 +848,13 @@ describe("runPipeline", () => {
         successResult({
           analysis: "The flat-bus contract keeps reproducing the same failure.",
           suggestion: "Try a channel-tiled interface so the datapath can be rebuilt under a simpler stream width.",
+          // The new policy defaults to Surgeon — but here the verdict is
+          // that the flat-bus contract is structurally wrong for the layer,
+          // so a fresh Foundry generation is required (and will be followed
+          // by the contract walk to tiled-streaming when this also fails).
+          next_actor: "foundry",
+          base_artifact: "fresh",
+          repair_scope: "interface_or_contract_fix",
         }),
       ],
     });
@@ -1026,21 +1026,30 @@ describe("runPipeline", () => {
     const module = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
-    const verifFail = JSON.parse(
-      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
-    );
+    // Inject `architectural_fit` so the contract walker fires (the new
+    // code_bug gate blocks walking otherwise; this test specifically
+    // validates the walk-then-escalate path).
+    const verifFail = {
+      ...JSON.parse(
+        await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+      ),
+      failure_category: "architectural_fit",
+    };
 
+    const foundryStep = async () => {
+      await persistMockRtlDeliverable(module);
+      return successRtlWithDoc(module, "dram-session");
+    };
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(module);
-          return successRtlWithDoc(module, "dram-session");
-        },
-        async () => {
-          await persistMockRtlDeliverable(module);
-          return successRtlWithDoc(module, "dram-session");
-        },
-      ],
+      // After clearGeneratedRtlArtifacts started running before each fresh
+      // Foundry attempt, the orchestrator can no longer paper over a missing
+      // mock by recovering stale RTL from disk. With dram-backed flagged
+      // here, the walk reaches activation-double-buffering and weight-tiling,
+      // each of which dispatches a fresh Foundry attempt before being
+      // flagged in turn. Queue enough mocks for: dram-backed attempt 1,
+      // dram-backed final retry after retrospector, then one each for the
+      // two remaining contracts.
+      foundry: [foundryStep, foundryStep, foundryStep, foundryStep],
       retrospector: [
         successResult({
           analysis: "The final contract variant still fails.",
@@ -1048,10 +1057,7 @@ describe("runPipeline", () => {
         }),
       ],
     });
-    // Defensive queue depth: the new escalation flow can run more assayer
-    // turns than the original (Foundry retry inside dram-backed before
-    // declaring all-contracts-exhausted). Provide enough verifFails so the
-    // mock queue never drains.
+    // Defensive queue depth: one verifFail per Foundry call.
     const assayerFn = createAssayerMock([verifFail, verifFail, verifFail, verifFail]);
     const synthesisFn = createVivadoMock([]);
 
@@ -1072,6 +1078,73 @@ describe("runPipeline", () => {
 
     const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
     expect(log).toContain('"event":"human_escalation_required"');
+  });
+
+  it("does not walk contracts on code_bug failures (escalates straight to manual)", async () => {
+    // Regression guard for the contract-walker gate: when failure_category
+    // is `code_bug`, the orchestrator must NOT walk to another contract
+    // because the bug is in how the agent wrote the RTL, not in the
+    // contract's fit. Walking would just give the agent a fresh chance to
+    // make new code-bugs on a different bus shape while discarding the
+    // failure-corpus signal built up on the original contract (observed
+    // wasting ~$5–6 on node_conv_292 walking dram-backed → weight-tiling).
+    await writePipelineIrFixture();
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    // Explicitly mark the failure as code_bug so the new gate fires.
+    const verifFail = {
+      ...JSON.parse(
+        await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+      ),
+      failure_category: "code_bug",
+    };
+
+    const foundryStep = async () => {
+      await persistMockRtlDeliverable(module);
+      return successResult(module, "flat-session");
+    };
+    const queryFn = createQueryMock({
+      // One Foundry attempt + one Retrospector-led final Foundry attempt.
+      // If the gate is broken (walks anyway), the orchestrator would dispatch
+      // additional Foundry calls for downstream contracts and the test would
+      // fail at "no more mocks queued".
+      foundry: [foundryStep, foundryStep],
+      retrospector: [
+        successResult({
+          analysis: "Code bug: agent forgot to register the sliding window.",
+          suggestion: "Repair the indicted construct.",
+          next_actor: "foundry",
+          base_artifact: "fresh",
+          repair_scope: "targeted_fsm_or_datapath_fix",
+        }),
+      ],
+    });
+    const assayerFn = createAssayerMock([verifFail, verifFail]);
+    const synthesisFn = createVivadoMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      maxRetries: 0,
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("fail_abort");
+    expect(state.results.unit_module.failure_class).toBe("manual_correction_needed");
+
+    // The contract must NOT have been flagged — the contract isn't broken,
+    // the agents' RTL was. Future runs of this (module, contract) tuple
+    // should still be allowed to proceed.
+    const contractStatePath = path.join(outputRoot, "contract_state.json");
+    if (existsSync(contractStatePath)) {
+      const contractState = JSON.parse(await readFile(contractStatePath, "utf8"));
+      expect(contractState.contracts[fixtureContractKeys.flat]).toBeUndefined();
+    }
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"reason":"code_bug_after_retrospector_exhausted"');
+    expect(log).not.toContain('"event":"contract_alternative_selected"');
   });
 
   it("writes successful self-improve draft docs to probationary", async () => {
@@ -1179,13 +1252,20 @@ describe("runPipeline", () => {
       classifier_reason: "Seeded failure for lifecycle test.",
     };
 
+    const foundryStep = async () => {
+      await persistMockRtlDeliverable(module);
+      return successRtlWithDoc(module);
+    };
+    // After clearGeneratedRtlArtifacts started running before each fresh
+    // Foundry attempt, missing mocks no longer get rescued by stale RTL on
+    // disk. With no contracts pre-flagged here the walk visits every
+    // contract in CONTRACT_PLANS — queue enough mocks to satisfy each
+    // (the retrospector throws on the first walk because no mock is
+    // queued, which short-circuits the same-contract final retry).
     const queryFn = createQueryMock({
-      foundry: [async () => {
-        await persistMockRtlDeliverable(module);
-        return successRtlWithDoc(module);
-      }],
+      foundry: [foundryStep, foundryStep, foundryStep, foundryStep, foundryStep],
     });
-    const assayerFn = createAssayerMock([verifFail]);
+    const assayerFn = createAssayerMock([verifFail, verifFail, verifFail, verifFail, verifFail]);
     const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
@@ -1228,6 +1308,10 @@ describe("runPipeline", () => {
     const synthesisFn = createVivadoMock([]);
 
     await runPipeline("checkpoint.pth", {
+      // Pin self_improve off so the contract walker doesn't try alternate
+      // contracts before the bus-width capability gate fires — this test
+      // asserts the gate produces fail_abort with zero LLM calls.
+      selfImprove: false,
       runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
     });
 
@@ -1354,23 +1438,17 @@ describe("runPipeline", () => {
     };
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // Both Foundry attempts time out the same way; Surgeon then succeeds.
-    const assayerFn = createAssayerMock([timeoutVerif, timeoutVerif, verifPass]);
+    // Foundry times out; Surgeon then succeeds.
+    const assayerFn = createAssayerMock([timeoutVerif, verifPass]);
     const synthesisFn = createVivadoMock([{ success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" }]);
 
     await runPipeline("checkpoint.pth", {
@@ -1403,25 +1481,18 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // Both Foundry attempts pass sim but fail Vivado, then Surgeon succeeds.
-    const assayerFn = createAssayerMock([verifPass, verifPass, verifPass]);
+    // Foundry passes sim but fails Vivado, then Surgeon succeeds.
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const synthesisFn = createVivadoMock([
-      { success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" },
       { success: false, lut_count: 0, fmax_mhz: 0, report: "synth failed" },
       { success: true, lut_count: 3, fmax_mhz: 75, report: "fixture" },
     ]);
@@ -1431,12 +1502,12 @@ describe("runPipeline", () => {
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(synthesisFn).toHaveBeenCalledTimes(3);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
 
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");
-    expect(state.attempts.unit_module).toBe(3);
+    expect(state.attempts.unit_module).toBe(2);
     expect(await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8")).toContain('"reason":"vivado_synthesis_failed"');
   });
 
@@ -1451,32 +1522,18 @@ describe("runPipeline", () => {
     );
 
     const queryFn = createQueryMock({
-      foundry: [
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-        async () => {
-          await persistMockRtlDeliverable(originalModule);
-          return successResult(originalModule);
-        },
-      ],
+      foundry: [async () => {
+        await persistMockRtlDeliverable(originalModule);
+        return successResult(originalModule);
+      }],
       surgeon: [async () => {
         await persistMockRtlDeliverable(repairedModule);
         return successResult(repairedModule);
       }],
     });
-    // 2 Foundry calls both miss timing, then Surgeon succeeds.
-    const assayerFn = createAssayerMock([verifPass, verifPass, verifPass]);
+    // Foundry misses timing, then Surgeon succeeds.
+    const assayerFn = createAssayerMock([verifPass, verifPass]);
     const synthesisFn = createVivadoMock([
-      {
-        success: true,
-        lut_count: 1479,
-        fmax_mhz: 0,
-        wns_ns: null,
-        timing_met: false,
-        report: "| Slice LUTs* | 1479 |",
-      },
       {
         success: true,
         lut_count: 1479,
@@ -1500,7 +1557,7 @@ describe("runPipeline", () => {
     });
 
     const prompts = queryFn.mock.calls.map(([call]) => (call as { prompt: string }).prompt);
-    expect(synthesisFn).toHaveBeenCalledTimes(3);
+    expect(synthesisFn).toHaveBeenCalledTimes(2);
     expect(prompts.some((prompt) => prompt.includes("You are the `surgeon`"))).toBe(true);
     const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
     expect(state.modules.unit_module).toBe("pass");

@@ -23,6 +23,7 @@ export const failureClassSchema = z.enum([
   "structural_preflight_failed",
   "manual_correction_needed",
   "spec_hash_mismatch",
+  "agent_max_turns_exhausted",
 ]);
 
 export const failureCategorySchema = z.enum([
@@ -42,12 +43,33 @@ export const failureClassificationSchema = z
   })
   .strict();
 
+// Retrospector chooses the post-analysis actor: by default a same-contract
+// final repair is handed to Surgeon (preserves a near-passing artifact);
+// Retrospector picks Foundry only when the architecture or contract itself
+// must change. Older Retrospector outputs that pre-date these fields are
+// still accepted — the orchestrator defaults them safely.
+export const retrospectorNextActorSchema = z.enum(["surgeon", "foundry"]);
+export const retrospectorBaseArtifactSchema = z.enum([
+  "latest",      // resume from whichever attempt failed most recently
+  "best_known",  // resume from the highest-scoring attempt across history
+  "fresh",       // discard prior attempts (only sensible with next_actor=foundry)
+]);
+export const retrospectorRepairScopeSchema = z.enum([
+  "targeted_fsm_or_datapath_fix",
+  "numerical_pipeline_fix",
+  "interface_or_contract_fix",
+  "architecture_replacement",
+]);
+
 export const retrospectorAdviceSchema = z
   .object({
     analysis: z.string().min(1),
     suggestion: z.string().min(1),
     doc_fault: z.boolean().optional(),
     faulty_doc_paths: z.array(z.string()).optional(),
+    next_actor: retrospectorNextActorSchema.optional(),
+    base_artifact: retrospectorBaseArtifactSchema.optional(),
+    repair_scope: retrospectorRepairScopeSchema.optional(),
   })
   .strict();
 
@@ -243,6 +265,16 @@ export const verifResultSchema = z
     first_mismatch_index: nullToUndef(z.number()),
     first_mismatch_expected: nullToUndef(z.number()),
     first_mismatch_got: nullToUndef(z.number()),
+    first_mismatch_vector_index: nullToUndef(z.number()),
+    first_mismatch_output_index: nullToUndef(z.number()),
+    first_mismatch_channel_index: nullToUndef(z.number()),
+    exact_match_count: nullToUndef(z.number()),
+    mismatch_count: nullToUndef(z.number()),
+    signed_error_sum: nullToUndef(z.number()),
+    positive_error_count: nullToUndef(z.number()),
+    negative_error_count: nullToUndef(z.number()),
+    first_valid_in_cycle: nullToUndef(z.number()),
+    first_valid_out_cycle: nullToUndef(z.number()),
     axi_weight_memory_model_enabled: nullToUndef(z.boolean()),
     axi_weight_memory_model_status: nullToUndef(z.string()),
     axi_weight_bytes_loaded: nullToUndef(z.number()),
@@ -258,6 +290,35 @@ export const verifResultSchema = z
     axi_weight_first_ar_handshake_cycle: nullToUndef(z.number()),
     axi_weight_first_r_beat_cycle: nullToUndef(z.number()),
     axi_weight_out_of_range_reads: nullToUndef(z.number()),
+    // Verbatim simulator stdout (truncated). Captured for Surgeon /
+    // Assayer when they need to see `$display` / `$write` traces from
+    // probe code embedded in the DUT or testbench. Foundry should not
+    // probe-debug from this — it is an evidence channel, not a workflow.
+    verilator_stdout: nullToUndef(z.string()),
+    // Per-vector breakdown of simulation outcomes. The TB drives N
+    // distinct goldin vectors per run; aggregate metrics
+    // (max_error / first_mismatch_*) collapse them into one number.
+    // This array preserves which specific vector(s) failed, so a
+    // module that passes vector 0 + 1 but mis-pipelines vector 2
+    // (e.g. stride-2 active-pixel-counter bug) can be diagnosed
+    // without re-running the simulation. See tb/static_verilator_tb.cpp
+    // for emission logic.
+    per_vector: nullToUndef(
+      z.array(
+        z
+          .object({
+            vector_idx: z.number(),
+            outputs_received: z.number(),
+            exact_match_count: z.number(),
+            mismatch_count: z.number(),
+            max_error: z.number(),
+            mean_error: z.number(),
+            actual_cycles: z.number(),
+            first_mismatch_output_index: z.number().nullable(),
+          })
+          .strict(),
+      ),
+    ),
   })
   .strict();
 
@@ -400,6 +461,7 @@ export const pipelineStateSchema = z
           result?.status_class === "tb_setup_error" ||
           result?.failure_class === "architectural_unsupported" ||
           result?.failure_class === "manual_correction_needed" ||
+          result?.failure_category === "toolchain_infra" ||
           result?.failure_category === "verification_env" ||
           result?.failure_category === "architectural_fit" ||
           result?.failure_category === "unknown";

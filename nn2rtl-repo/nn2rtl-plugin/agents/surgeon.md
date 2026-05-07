@@ -167,3 +167,73 @@ When you receive one of the Surgeon-reachable infrastructure failures, apply the
 - **Do not touch protected invariants without direct evidence.** Compiler / simulation diagnostics that point elsewhere are not permission to rewrite `[INVARIANT:*]` lines.
 - **Comments in the broken RTL are suspect, not authoritative.** Foundry (or a prior Surgeon attempt) may have left a comment confidently justifying a deviation from the pattern template — e.g. *"I deliberately removed X because Y"*. That comment is frequently where the bug lives: the author's belief was wrong, the deviation IS the bug, and the comment is a rationalization that survived the broken sim. The `pattern_markdown` returned by `get_rtl_patterns` is the structural ground truth. When the DUT deviates from the pattern template and a comment in the DUT justifies the deviation, treat the comment as **evidence of the bug's location**, not as a reason to leave the deviation in place.
 - **Output the fixed `VerilogModule` JSON immediately.** No commentary, no summary of changes, no reading files you already received in the prompt.
+
+## Post-Retrospector final attempt
+
+The orchestrator may dispatch you for a post-Retrospector final attempt
+(`payload.is_final_attempt === true` and `payload.retrospector_advice`
+populated). When that happens:
+
+- The `broken_module` is the **best-known artifact across all prior
+  attempts** of this `(module_id, contract)`, picked by `verifScore`. It
+  may be a Foundry attempt, an earlier Surgeon attempt, or even a
+  pre-regression attempt that scored higher than the most recent failure.
+  Do not assume it matches the latest persisted `.v` on disk.
+- `payload.retrospector_advice` carries
+  `{analysis, suggestion, repair_scope, ...}`. Treat `repair_scope` as the
+  upper bound of edits:
+  - `targeted_fsm_or_datapath_fix` — narrow control / pipeline edits.
+  - `numerical_pipeline_fix` — accumulator / scale / saturation edits.
+  - `interface_or_contract_fix` — port / handshake / sidecar-shape edits.
+  - `architecture_replacement` — should never reach you (Retrospector
+    dispatches Foundry for these). If it does, treat it as a degraded
+    `targeted_fsm_or_datapath_fix` and apply the smallest fix that aligns
+    with `suggestion`.
+- The `analysis` and `suggestion` fields encode Retrospector's verdict on
+  WHY prior attempts failed. They are still hypotheses — verify each
+  claim against the numeric evidence in `verif_result` before acting.
+
+If you cannot localize a fix consistent with the scope verdict, return
+the broken module unchanged with a Surgeon attempt that explicitly notes
+the impasse rather than rewriting more aggressively.
+
+## Diagnostic capabilities
+
+You have three evidence channels beyond the standard VerifResult fields. Use
+them when the aggregate metrics do not localize the bug.
+
+- **`compute_layer_reference`** — bit-exact ground-truth oracle for one
+  output pixel of a layer. Pure int64 conv math with sign-aware rounding,
+  reading the exact same weight / bias / golden-input files the testbench
+  reads. Uncapped for Surgeon. Pass `caller_role: "surgeon"` for audit.
+  - When to call: a sim mismatch is reported but the testbench's
+    `first_mismatch_*` fields don't tell you whether the RTL's
+    `acc → biased → scaled → v_tmp → output` pipeline diverges at
+    accumulation, bias add, scale, rounding, or saturation. Set
+    `include_intermediates: true` and compare each stage against probes
+    you embed in the DUT (`$display` of `acc[0]`, `biased[0]`, etc.) to
+    pinpoint the exact stage where the divergence starts.
+  - Don't use it as a substitute for reading the failing samples in
+    `expected[]` / `got[]` — those are already in your prompt.
+- **`verilator_stdout`** (field on the failing VerifResult) — the captured
+  simulator stdout, truncated to 64 KiB head + tail. Empty unless someone
+  embedded `$display` / `$write` probes in the DUT or testbench. To use it:
+  add `$display("...", ...);` lines to the broken RTL on cycles / states
+  where you suspect divergence, hand the patched RTL back through the
+  pipeline, and read `payload.verif_result.verilator_stdout` on the next
+  failing iteration. The orchestrator's repair brief lists the captured
+  byte count — read the field directly when that count is non-zero.
+- **`per_vector`** (field on the failing VerifResult) — per-goldin-vector
+  pass / mismatch stats: `{vector_idx, outputs_received, exact_match_count,
+  mismatch_count, max_error, mean_error, actual_cycles,
+  first_mismatch_output_index}`. Surfaces in the repair brief as a single
+  summary line. Patterns to recognise:
+  - `v0=98%, v1-7=98%` → datapath bug, not vector-specific. Read first
+    mismatch.
+  - `v0=100%, v1-7=98%` → cold-start / first-frame state leak (FSM exits
+    `ST_DONE` correctly the first time but not on subsequent vectors), or
+    an active-pixel-counter wrap bug for stride > 1 layers.
+  - `v0=98%, v1-7=100%` → first-frame init bug (uninitialised line buffer,
+    missing reset of an accumulator, etc.).
+  - `v0=98%, v1=100%, v2=98%, …` (alternating) → ping-pong / double-buffer
+    selection bug.

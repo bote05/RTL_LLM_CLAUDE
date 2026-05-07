@@ -55,6 +55,26 @@ const VERILATOR_DEFAULT_BUILD_JOB_CAP = 16;
 // the module to Surgeon with failure_class=verilator_timeout instead of
 // burning wall-clock. Covers every layer; not ResNet-specific.
 export const VERILATOR_SIM_TIMEOUT_MS = Number(process.env.NN2RTL_VERILATOR_SIM_TIMEOUT_MS ?? "") || 10 * 60 * 1000;
+
+// Cap on how much simulator stdout is forwarded into the VerifResult. The
+// captured text is meant for $display/$write probes Surgeon embeds during
+// repair; multi-MHz simulations can otherwise produce hundreds of MB of
+// output and blow up pipeline_state.json plus the Surgeon delegation prompt.
+// 32 KiB head + 32 KiB tail keeps boundary diagnostics intact.
+const VERILATOR_STDOUT_HEAD_BYTES = 32 * 1024;
+const VERILATOR_STDOUT_TAIL_BYTES = 32 * 1024;
+
+function truncateSimulationStdout(stdout: string): string | undefined {
+  if (!stdout) return undefined;
+  const total = stdout.length;
+  if (total <= VERILATOR_STDOUT_HEAD_BYTES + VERILATOR_STDOUT_TAIL_BYTES) {
+    return stdout;
+  }
+  const head = stdout.slice(0, VERILATOR_STDOUT_HEAD_BYTES);
+  const tail = stdout.slice(total - VERILATOR_STDOUT_TAIL_BYTES);
+  const elided = total - VERILATOR_STDOUT_HEAD_BYTES - VERILATOR_STDOUT_TAIL_BYTES;
+  return `${head}\n…[${elided} bytes elided]…\n${tail}`;
+}
 export function resolveVivadoCommand(env: NodeJS.ProcessEnv = process.env): string {
   return env.NN2RTL_VIVADO_BIN ?? "vivado";
 }
@@ -923,14 +943,17 @@ export async function run_verilator(
     const binaryPath = path.join(tempDir, "obj_dir", binaryName);
     let simulationError: unknown = null;
     let simulationTimedOut = false;
+    let simulationStdout = "";
 
     try {
-      await runtime.commandRunner(binaryPath, [tempSidecarPath], {
+      const simResult = await runtime.commandRunner(binaryPath, [tempSidecarPath], {
         cwd: tempDir,
         env: augmentEnvForVerilatorCxx(augmentEnvForOssCadSuiteLibOnly(runtime.env)),
         timeout: VERILATOR_SIM_TIMEOUT_MS,
       });
+      simulationStdout = simResult.stdout ?? "";
     } catch (error: unknown) {
+      simulationStdout = outputFieldFromUnknown(error, "stdout");
       simulationError = error;
       // Node's execFile marks `killed=true` + `signal` set when it reaps a
       // child whose wall-clock exceeded `timeout`. Distinguish that from a
@@ -945,6 +968,8 @@ export async function run_verilator(
       }
     }
 
+    const truncatedStdout = truncateSimulationStdout(simulationStdout);
+
     if (simulationTimedOut) {
       return {
         module_id: sidecar.module_id,
@@ -957,6 +982,7 @@ export async function run_verilator(
         got: [],
         failure_class: "verilator_timeout",
         verilator_stderr: stderrFromUnknown(simulationError),
+        verilator_stdout: truncatedStdout,
         fix_hint: [
           `Verilator simulation exceeded the ${VERILATOR_SIM_TIMEOUT_MS / 1000}s wall-clock cap.`,
           "The TB's hang_budget only fires on total valid_out silence, so a timeout means the FSM is",
@@ -969,6 +995,9 @@ export async function run_verilator(
 
     const parsedResults = await readVerilatorResultsIfPresent(sidecar.results_path);
     if (parsedResults) {
+      if (truncatedStdout !== undefined) {
+        parsedResults.verilator_stdout = truncatedStdout;
+      }
       return parsedResults;
     }
 
@@ -983,6 +1012,7 @@ export async function run_verilator(
       got: [],
       failure_class: null,
       verilator_stderr: simulationError ? stderrFromUnknown(simulationError) : "",
+      verilator_stdout: truncatedStdout,
       fix_hint: `Static testbench did not produce results JSON at '${sidecar.results_path}'.`,
     };
   }, runtime);
@@ -1252,6 +1282,11 @@ export type GetRtlPatternsResult = {
   license_notice: string | null;
 };
 
+export type GetFailureCorpusResult = {
+  visible_tier: "output/failure_corpus/visible";
+  entries: Array<Record<string, unknown>>;
+};
+
 const PATTERN_LIBRARY_ROOT = path.resolve(repoRoot, "knowledge");
 const DOC_LIFECYCLE_STATE_PATH = path.join(PATTERN_LIBRARY_ROOT, "doc_lifecycle.json");
 export const KNOWLEDGE_READ_TIERS = ["protected", "active", "probationary"] as const;
@@ -1515,6 +1550,359 @@ export async function get_rtl_patterns(
   }
 
   return { pattern_markdown, reference_verilog, license_notice };
+}
+
+export async function get_failure_corpus(input: {
+  module_id?: string;
+  op_type?: string;
+  contract_id?: string;
+  spec_hash?: string;
+  max_entries?: number;
+  include_verilog?: boolean;
+}): Promise<GetFailureCorpusResult> {
+  const root = path.resolve(repoRoot, "output", "failure_corpus", "visible");
+  const indexPath = path.join(root, "index.jsonl");
+  let raw: string;
+  try {
+    raw = await readFile(indexPath, "utf8");
+  } catch {
+    return { visible_tier: "output/failure_corpus/visible", entries: [] };
+  }
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      if (input.module_id && entry.module_id !== input.module_id) continue;
+      if (input.op_type && entry.op_type !== input.op_type) continue;
+      if (input.contract_id && entry.contract_id !== input.contract_id) continue;
+      if (input.spec_hash && entry.spec_hash !== input.spec_hash) continue;
+      entries.push(entry);
+    } catch {
+      // Ignore malformed historical corpus lines.
+    }
+  }
+  entries.sort((a, b) => {
+    const sameModuleA = input.module_id && a.module_id === input.module_id ? 0 : 1;
+    const sameModuleB = input.module_id && b.module_id === input.module_id ? 0 : 1;
+    if (sameModuleA !== sameModuleB) return sameModuleA - sameModuleB;
+    return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+  });
+  const limited = entries.slice(0, input.max_entries ?? 5);
+  if (input.include_verilog) {
+    for (const entry of limited) {
+      const rel = typeof entry.rtl_path === "string" ? entry.rtl_path : null;
+      if (!rel) continue;
+      try {
+        entry.verilog_source = await readFile(path.resolve(repoRoot, rel), "utf8");
+      } catch {
+        entry.verilog_source = "";
+      }
+    }
+  }
+  return { visible_tier: "output/failure_corpus/visible", entries: limited };
+}
+
+// ---------------------------------------------------------------------------
+// compute_layer_reference: bit-exact ground-truth oracle for a single output
+// pixel. Reads the same weights.hex / bias.hex / goldin files the testbench
+// reads, runs the conv math in pure int64, applies the same sign-aware
+// rounding the canonical RTL uses, and returns the expected INT8 outputs (and
+// optional integer-domain intermediates).
+//
+// Access policy (enforced via agent .md docs, audit-tracked here via
+// caller_role + tool_use_summary; not a hard runtime cap):
+//   - assayer:  free use for deterministic failure enrichment.
+//   - surgeon:  free use during repair / debugging.
+//   - foundry:  read-only sanity checks only, cap 3 calls per attempt.
+// ---------------------------------------------------------------------------
+
+interface ComputeLayerReferenceInput {
+  module_id: string;
+  vector_idx: number;
+  output_pixel_oy: number;
+  output_pixel_ox: number;
+  oc_start?: number;
+  oc_end?: number;
+  include_intermediates?: boolean;
+  caller_role?: "foundry" | "surgeon" | "assayer";
+}
+
+interface ComputeLayerReferenceOutput {
+  module_id: string;
+  vector_idx: number;
+  output_pixel_oy: number;
+  output_pixel_ox: number;
+  oc_range: [number, number];
+  scale_constants: { mult: number; shift: number };
+  output: number[];
+  intermediates?: {
+    acc: number[];
+    biased: number[];
+    scaled: number[];
+    v_tmp: number[];
+  };
+  // Fingerprint for quick-equality checks across calls.
+  output_fingerprint: string;
+}
+
+/** Mirror of sdk/orchestrate.ts:computeScaleApprox. Inlined to keep mcp/
+ *  decoupled from sdk/. Search range identical (shift 8..23, mult 1..32767). */
+function mcpComputeScaleApprox(scaleFactor: number): { mult: number; shift: number } {
+  if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+    throw new Error(`compute_layer_reference: scale_factor must be > 0, got ${scaleFactor}.`);
+  }
+  let best = { mult: 1, shift: 8, err: Infinity };
+  for (let shift = 8; shift <= 23; shift += 1) {
+    const mult = Math.round(scaleFactor * Math.pow(2, shift));
+    if (mult >= 1 && mult < 32768) {
+      const err = Math.abs(mult / Math.pow(2, shift) - scaleFactor) / scaleFactor;
+      if (err < best.err) {
+        best = { mult, shift, err };
+      }
+    }
+  }
+  if (!Number.isFinite(best.err)) {
+    throw new Error(
+      `compute_layer_reference: scale_factor ${scaleFactor} outside representable mult/shift range.`,
+    );
+  }
+  return { mult: best.mult, shift: best.shift };
+}
+
+function loadSignedHex(path: string, expectedCount: number, byteWidth: 1 | 4): number[] {
+  const text = readFileSync(path, "utf8");
+  const out: number[] = [];
+  const limit = byteWidth === 1 ? 0xff : 0xffffffff;
+  const signBit = byteWidth === 1 ? 0x80 : 0x80000000;
+  const wrap = byteWidth === 1 ? 0x100 : 0x1_0000_0000;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.split("//")[0].trim();
+    if (!line) continue;
+    const v = Number.parseInt(line, 16);
+    if (Number.isNaN(v) || v < 0 || v > limit) {
+      throw new Error(
+        `compute_layer_reference: hex file '${path}' has invalid line '${rawLine.trim()}'.`,
+      );
+    }
+    out.push(v >= signBit ? v - wrap : v);
+  }
+  if (out.length !== expectedCount) {
+    throw new Error(
+      `compute_layer_reference: hex file '${path}' has ${out.length} entries, expected ${expectedCount}.`,
+    );
+  }
+  return out;
+}
+
+interface GoldenInputVector {
+  bytes: Uint8Array;
+}
+
+function loadGoldinVectors(path: string): {
+  num_vectors: number;
+  samples_per_vector: number;
+  bytes_per_sample: number;
+  vectors: GoldenInputVector[];
+} {
+  const buf = readFileSyncBytes(path);
+  if (buf.length < 20) {
+    throw new Error(`compute_layer_reference: '${path}' is shorter than the 20-byte header.`);
+  }
+  const magic = String.fromCharCode(buf[0], buf[1], buf[2], buf[3]);
+  if (magic !== "NN2V") {
+    throw new Error(`compute_layer_reference: '${path}' has wrong magic '${magic}', expected 'NN2V'.`);
+  }
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const version = view.getUint32(4, true);
+  const numVectors = view.getUint32(8, true);
+  const samplesPerVector = view.getUint32(12, true);
+  const bytesPerSample = view.getUint32(16, true);
+  if (version !== 2) {
+    throw new Error(`compute_layer_reference: '${path}' version ${version} unsupported (expected 2).`);
+  }
+  const wordsPerSample = Math.ceil(bytesPerSample / 4);
+  const perVecBytes = samplesPerVector * wordsPerSample * 4;
+  const vectors: GoldenInputVector[] = [];
+  for (let v = 0; v < numVectors; v += 1) {
+    const start = 20 + v * perVecBytes;
+    if (start + perVecBytes > buf.length) {
+      throw new Error(`compute_layer_reference: '${path}' is truncated at vector ${v}.`);
+    }
+    vectors.push({ bytes: buf.subarray(start, start + perVecBytes) });
+  }
+  return { num_vectors: numVectors, samples_per_vector: samplesPerVector, bytes_per_sample: bytesPerSample, vectors };
+}
+
+function readFileSyncBytes(p: string): Uint8Array {
+  // Local helper to keep this self-contained without pulling fs/promises sync apis.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  return fs.readFileSync(p);
+}
+
+function readFileSync(p: string, enc: "utf8"): string {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  return fs.readFileSync(p, enc);
+}
+
+interface LayerIRForCompute {
+  module_id: string;
+  op_type: string;
+  input_shape: number[];
+  output_shape: number[];
+  weights_path: string;
+  bias_path: string | null;
+  weight_shape: number[];
+  scale_factor: number;
+  zero_point: number;
+  golden_inputs_path: string;
+  stride?: number[];
+  padding?: number[];
+  groups?: number;
+}
+
+function findLayer(layerIrPath: string, moduleId: string): LayerIRForCompute {
+  const text = readFileSync(layerIrPath, "utf8");
+  const ir = JSON.parse(text) as { layers: LayerIRForCompute[] };
+  const layer = ir.layers.find((l) => l.module_id === moduleId);
+  if (!layer) {
+    throw new Error(
+      `compute_layer_reference: module_id '${moduleId}' not found in '${layerIrPath}'.`,
+    );
+  }
+  return layer;
+}
+
+function clampInt8(v: number): number {
+  if (v > 127) return 127;
+  if (v < -128) return -128;
+  return v;
+}
+
+function fingerprintInt8(values: number[]): string {
+  // Deterministic short hash for cross-call equality checks. Not crypto.
+  let h = 0;
+  for (const v of values) {
+    h = ((h * 31) + v + 256) | 0;
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export async function compute_layer_reference(
+  input: ComputeLayerReferenceInput,
+): Promise<ComputeLayerReferenceOutput> {
+  const layerIrPath = path.resolve(repoRoot, "output", "layer_ir.json");
+  const layer = findLayer(layerIrPath, input.module_id);
+  if (layer.op_type !== "conv2d") {
+    throw new Error(
+      `compute_layer_reference: only op_type='conv2d' is supported, got '${layer.op_type}'.`,
+    );
+  }
+
+  const [, IC, IH, IW] = layer.input_shape;
+  const [, OC, OH, OW] = layer.output_shape;
+  const [W_OC, W_IC, KH, KW] = layer.weight_shape;
+  if (W_OC !== OC || W_IC !== IC) {
+    throw new Error(
+      `compute_layer_reference: weight_shape [${layer.weight_shape}] disagrees with OC=${OC}/IC=${IC}.`,
+    );
+  }
+  const [SH, SW] = layer.stride ?? [1, 1];
+  const [PH, PW] = layer.padding ?? [0, 0];
+  const groups = layer.groups ?? 1;
+  if (groups !== 1) {
+    throw new Error(`compute_layer_reference: groups=${groups} not yet supported (groups=1 only).`);
+  }
+
+  const { vector_idx, output_pixel_oy, output_pixel_ox } = input;
+  if (output_pixel_oy < 0 || output_pixel_oy >= OH || output_pixel_ox < 0 || output_pixel_ox >= OW) {
+    throw new Error(
+      `compute_layer_reference: output pixel (${output_pixel_oy},${output_pixel_ox}) out of bounds (OH=${OH}, OW=${OW}).`,
+    );
+  }
+  const ocStart = Math.max(0, input.oc_start ?? 0);
+  const ocEnd = Math.min(OC, input.oc_end ?? OC);
+  if (ocEnd <= ocStart) {
+    throw new Error(`compute_layer_reference: empty oc range [${ocStart}, ${ocEnd}).`);
+  }
+
+  const weightsPath = normalizePathForCurrentHost(layer.weights_path);
+  const biasPath = layer.bias_path ? normalizePathForCurrentHost(layer.bias_path) : null;
+  const goldinPath = normalizePathForCurrentHost(layer.golden_inputs_path);
+
+  const weights = loadSignedHex(weightsPath, OC * IC * KH * KW, 1);
+  const biases = biasPath ? loadSignedHex(biasPath, OC, 4) : new Array(OC).fill(0);
+  const goldin = loadGoldinVectors(goldinPath);
+  if (vector_idx < 0 || vector_idx >= goldin.num_vectors) {
+    throw new Error(
+      `compute_layer_reference: vector_idx=${vector_idx} out of range (num_vectors=${goldin.num_vectors}).`,
+    );
+  }
+  const vecBytes = goldin.vectors[vector_idx].bytes;
+
+  const { mult, shift } = mcpComputeScaleApprox(layer.scale_factor);
+  const HALF = 1 << (shift - 1);
+  const HALF_M1 = HALF - 1;
+
+  // Input layout in the goldin: linear `pixel*IC + channel` over IH*IW pixels.
+  function pixelChannel(iy: number, ix: number, ic: number): number {
+    if (iy < 0 || iy >= IH || ix < 0 || ix >= IW) return 0; // zero-padding
+    const idx = (iy * IW + ix) * IC + ic;
+    const b = vecBytes[idx];
+    return b >= 128 ? b - 256 : b;
+  }
+
+  const accs: number[] = [];
+  const biasedVals: number[] = [];
+  const scaledVals: number[] = [];
+  const vTmpVals: number[] = [];
+  const outputs: number[] = [];
+
+  for (let oc = ocStart; oc < ocEnd; oc += 1) {
+    let acc = 0;
+    const wBase = oc * IC * KH * KW;
+    for (let kh = 0; kh < KH; kh += 1) {
+      const iy = output_pixel_oy * SH - PH + kh;
+      for (let kw = 0; kw < KW; kw += 1) {
+        const ix = output_pixel_ox * SW - PW + kw;
+        const wRow = wBase + (kh * KW + kw) * IC;
+        for (let ic = 0; ic < IC; ic += 1) {
+          acc += weights[wRow + ic] * pixelChannel(iy, ix, ic);
+        }
+      }
+    }
+    const biased = acc + biases[oc];
+    const scaled = biased * mult;
+    const signBias = scaled < 0 ? HALF_M1 : HALF;
+    // Math.floor((scaled + signBias) / 2^shift) — JS // for negatives uses
+    // truncation; emulate floor via Math.floor on the float division which
+    // is exact for values < 2^53.
+    const vTmp = Math.floor((scaled + signBias) / Math.pow(2, shift));
+    const out = clampInt8(vTmp);
+
+    accs.push(acc);
+    biasedVals.push(biased);
+    scaledVals.push(scaled);
+    vTmpVals.push(vTmp);
+    outputs.push(out);
+  }
+
+  const result: ComputeLayerReferenceOutput = {
+    module_id: layer.module_id,
+    vector_idx,
+    output_pixel_oy,
+    output_pixel_ox,
+    oc_range: [ocStart, ocEnd],
+    scale_constants: { mult, shift },
+    output: outputs,
+    output_fingerprint: fingerprintInt8(outputs),
+  };
+  if (input.include_intermediates) {
+    result.intermediates = { acc: accs, biased: biasedVals, scaled: scaledVals, v_tmp: vTmpVals };
+  }
+  return result;
 }
 
 export async function readSidecarIfPresent(

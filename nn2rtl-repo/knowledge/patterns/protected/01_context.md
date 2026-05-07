@@ -57,7 +57,11 @@ canonical requantisation is:
 
 ```
 scaled_product = biased * SCALE_MULT
-rounded        = (scaled_product + SCALE_ROUND_BIAS) >>> SCALE_SHIFT
+half           = 1 << (SCALE_SHIFT - 1)
+// Arithmetic >>> always floors toward -inf. To get round-half-away-from-zero
+// for negatives without an extra +/-1, add (half - 1) instead of half.
+sign_bias      = (scaled_product >= 0) ? half : (half - 1)
+rounded        = (scaled_product + sign_bias) >>> SCALE_SHIFT
 out            = saturate_int8(rounded)
 ```
 
@@ -65,12 +69,21 @@ where `SCALE_MULT` / `SCALE_SHIFT` are derived so
 `SCALE_MULT / 2^SCALE_SHIFT ≈ scale_factor` with minimal relative error.
 Mark the fixed-point rounding expression `// [INVARIANT:ROUNDING]`.
 
-The Python golden model currently uses `torch.round`, which is
-round-to-nearest-even on exact `.5` ties. The RTL pattern below is the
-existing hardware approximation: add +0.5 LSB, then arithmetic-shift. That
-is not symmetric tie-even rounding; exact half-tie cases can differ by
-one LSB, and the static testbench tolerance is intentionally wide enough to
-absorb that. Do not describe `SCALE_ROUND_BIAS` as exact PyTorch rounding.
+The Python golden model uses `torch.round` — round-to-nearest-even on
+exact `.5` ties. For non-tie inputs (which is essentially every real
+quantised value) tie-even is identical to round-half-away-from-zero. The
+canonical RTL rounding is the **sign-aware** form below: add `HALF`
+(`= 1 << (SHIFT-1)`) when the value is non-negative and `HALF - 1` when
+it is negative, then arithmetic-shift-right. The "negative" case is NOT
+`-HALF` — Verilog `>>>` already floors toward -inf, so subtracting HALF
+would over-round by one LSB. Adding `HALF - 1` lets the floor land on
+the correct integer. This gives error symmetric around zero and matches
+the goldens bit-for-bit on all non-tie cases.
+
+The naive "add `+HALF` unconditionally" pattern (used in earlier RTL)
+biases negatives toward `+inf`, accumulates a positive drift across
+many outputs, and breaks bit-exact verification on layers with large
+fan-in (high `K_TOTAL`) — so it is no longer the canonical pattern.
 
 For `add`, use `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`
 together — the output is `saturate(((lhs * lhs_scale + rhs * rhs_scale) * scale)
@@ -153,25 +166,110 @@ independently to `lhs_scale_factor`, `rhs_scale_factor`, and `scale_factor`.
 ### Scale-shift rounding — MANDATORY
 
 A bare `>>> SCALE_SHIFT` in Verilog is arithmetic right-shift (floor), which
-biases every output toward `-inf` by up to one LSB per sample. The current RTL
-contract adds a half-LSB bias before the shift:
+biases every output toward `-inf` by up to one LSB per sample.
+
+The naive fix — adding `+0.5 LSB` unconditionally before the shift — biases
+**negative** values toward `+inf` instead. On layers with small fan-in this
+is hidden by the testbench tolerance, but on layers with large `K_TOTAL`
+(stage-3 1×1 expansions, stage-4 3×3, dram-backed-weights conv) the
+asymmetric drift accumulates and bit-exact verification fails (signed-diff
+distribution leans positive: more `+1` mismatches than `-1`).
+
+The canonical pattern is **sign-aware** rounding — add `HALF` (where
+`HALF = 1 << (SHIFT-1)`) for non-negative values and `HALF - 1` for
+negative values, then arithmetic shift. The "negative" case is NOT
+`-HALF` — Verilog `>>>` already floors toward -inf, so subtracting HALF
+over-rounds. Adding `HALF - 1` lets the floor land on the correct
+integer. This is symmetric around zero and matches `torch.round` for
+every non-tie case (which is every real quantised value):
+
+#### FORBIDDEN ROUNDING PATTERNS — read before coding
+
+The structural preflight gate fails the build immediately if it sees any of
+these. Do not write them, do not mark them `[INVARIANT:ROUNDING]`, and do not
+justify them as "sign-aware". If you find yourself reaching for one of these,
+stop that expression and use `HALF - 1` for the negative branch instead.
+
+1. `ROUND_BIAS_NEG = -...` — any negative constant named as the negative
+   rounding bias is wrong for Verilog `>>>`.
+2. `scaled[MSB] ? -HALF : HALF` — including aliases such as
+   `-SCALE_ROUND_HALF`, `-ROUND_HALF`, or `(-HALF)`.
+3. `(scaled + (scaled[MSB] ? -SCALE_ROUND_HALF : SCALE_ROUND_HALF)) >>> SHIFT`
+   — this over-rounds negative values by one LSB on the same cases the cheap
+   sign-aware form is meant to fix.
+
+The only cheap sign-aware form allowed here is:
+`(scaled + (scaled[MSB] ? (HALF - 1) : HALF)) >>> SHIFT`.
 
 ```verilog
-// WRONG — floor; every output biased by up to -1.
+// WRONG — floor; every output biased toward -inf by up to -1.
 v_tmp = scaled[oc] >>> SCALE_SHIFT;
 
-// CORRECT for the current RTL contract: half-up/toward-positive tie
-// approximation via +0.5 LSB bias, then arithmetic shift.
-localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS =
+// ALSO WRONG — unconditional +0.5 LSB; negatives biased toward +inf,
+// drift accumulates across many outputs.
+localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS_BAD =
     {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);
-v_tmp = (scaled[oc] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
+v_tmp = (scaled[oc] + SCALE_ROUND_BIAS_BAD) >>> SCALE_SHIFT;
+
+// CORRECT — sign-aware bias matching torch.round bit-exact on all
+// non-tie quantised values. Verilog >>> always floors toward -inf, so
+// for negatives the bias is (SCALE_ROUND_HALF - 1), NOT (-SCALE_ROUND_HALF).
+// Subtracting SCALE_ROUND_HALF would over-round (e.g. scaled=-23 with
+// SCALE_SHIFT=4 should give -1; -23 + (-8) = -31, shift = -2, wrong).
+// Adding (SCALE_ROUND_HALF - 1) = 7 gives -23 + 7 = -16, shift = -1.
+//
+// Inline the bias directly into the assignment — no `wire` declaration
+// inside the always block (Verilog-2001 forbids it), no module-scope
+// alias (the index `oc` is procedural and not a legal static index for
+// a wire). v_tmp is the canonical SCALED_W-wide reg already declared in
+// "Canonical register declarations".
+localparam signed [SCALED_W-1:0] SCALE_ROUND_HALF =
+    {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);
+v_tmp = (scaled[oc] +
+         (scaled[oc][SCALED_W-1] ? (SCALE_ROUND_HALF - 1)
+                                 : SCALE_ROUND_HALF)
+        ) >>> SCALE_SHIFT;
 ```
+
+#### Verilog signedness footgun on `(SCALE_ROUND_HALF - 1)`
+
+The `1` literal in `SCALE_ROUND_HALF - 1` is unsigned 32-bit by Verilog's
+default-type rules. Mixed signed/unsigned arithmetic can downgrade the
+expression's overall type to unsigned, which silently changes `>>>` from
+arithmetic shift to logical shift on the negative path. This was the
+source of a real, hard-to-find bug on dram-backed-weights layers where
+small-magnitude negative `scaled` values flipped sign through the shift
+and produced output 0 where -1 was expected.
+
+Either pre-compute the negative branch as a separate signed localparam
+(safest), or wrap the `1` as a typed signed literal:
+
+```verilog
+// Option A (preferred): pre-compute the negative-branch bias.
+localparam signed [SCALED_W-1:0] SCALE_ROUND_HALF_M1 =
+    SCALE_ROUND_HALF - {{(SCALED_W-1){1'b0}}, 1'b1};
+v_tmp = (scaled[oc] +
+         (scaled[oc][SCALED_W-1] ? SCALE_ROUND_HALF_M1 : SCALE_ROUND_HALF)
+        ) >>> SCALE_SHIFT;
+
+// Option B: explicitly $signed-cast the inline subtraction.
+v_tmp = (scaled[oc] +
+         $signed(scaled[oc][SCALED_W-1]
+                  ? (SCALE_ROUND_HALF - 1'sd1)
+                  : SCALE_ROUND_HALF)
+        ) >>> SCALE_SHIFT;
+```
+
+Exact PyTorch tie-even behaviour on `.5` ties needs an explicit tie
+detector (`(scaled[oc] & ((1 << SCALE_SHIFT) - 1)) == SCALE_ROUND_HALF`
+→ round to nearest even). The cheap form above gives
+round-half-away-from-zero on ties, which differs from tie-even by at
+most 1 LSB on exact half-tie inputs. INT8-quantised values rarely land
+exactly on a half-tie, so the cheap form matches `torch.round` for
+essentially every real value.
 
 Applies to every op that requantises (conv2d, add, any future scaled op).
 Mark the rounding expression `// [INVARIANT:ROUNDING]`.
-
-If exact PyTorch tie-even behavior becomes a hard requirement, update the
-golden/RTL contract together and add an explicit fixed-point tie detector.
 
 ---
 
@@ -229,8 +327,8 @@ independent of simulation results.
 
 ### Tags you MAY mark
 
-- `ROUNDING` — the current RTL requantisation approximation
-  `(scaled + SCALE_ROUND_BIAS) >>> SCALE_SHIFT`.
+- `ROUNDING` — the canonical sign-aware requantisation
+  `(scaled + (scaled[MSB] ? (HALF-1) : HALF)) >>> SCALE_SHIFT`.
 - `READY_IN_GATING` — the exact assertion/deassertion points for `ready_in`.
 - `VALID_OUT_LATENCY` — the line that drives `valid_out` high for the
   current pixel.
@@ -386,10 +484,16 @@ same always-block cycle that asserts `valid_out`:
 reg signed [SCALED_W-1:0] v_tmp;  // module scope
 integer global_oc;                // module scope
 
-// ST_OUTPUT body - one pass of the current oc_group's MP lanes:
+// ST_OUTPUT body - one pass of the current oc_group's MP lanes.
+// Sign-aware rounding bias: +HALF for non-negative, +(HALF-1) for
+// negative — see "Scale-shift rounding — MANDATORY" for why subtracting
+// HALF for negatives is WRONG with arithmetic >>> (it floors toward -inf,
+// so subtraction over-rounds).
 for (lane = 0; lane < MP; lane = lane + 1) begin
     global_oc = oc_group * MP + lane;
-    v_tmp = (scaled[lane] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
+    v_tmp = (scaled[lane] +
+             (scaled[lane][SCALED_W-1] ? (SCALE_ROUND_HALF - 1) : SCALE_ROUND_HALF)
+            ) >>> SCALE_SHIFT;
     data_out[global_oc*8 +: 8] <= (v_tmp > 127)  ?  8'sd127 :
                                   (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
 end

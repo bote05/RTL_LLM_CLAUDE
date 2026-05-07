@@ -182,14 +182,15 @@ files — do not guess.
 - **`pipeline_latency_cycles` is authoritative from the LayerIR.** Do not
   re-derive it from a formula. First `valid_out` fires exactly that many
   cycles after the first `valid_in` of the current vector.
-- **Weights and biases load via `$readmemh`** using `weights_path` and
-  `bias_path` from the LayerIR. Never hardcode numeric arrays. For Vivado,
-  prefer registered ROM reads with `rom_style` / `ram_style = "block"`.
-  `weight_bank_paths` may be present, but the current verified latency
-  contract is still the serialized one-read-per-cycle contract in the pattern
-  files. Do not convert to MP parallel bank reads unless the LayerIR latency
-  contract explicitly says that datapath is enabled. Do not mark memory lines
-  invariant.
+- **Weight and bias storage follows the selected contract.** For on-chip-weight
+  contracts, weights and biases load via `$readmemh` using `weights_path` and
+  `bias_path` from the LayerIR. For `dram-backed-weights`, only the small bias
+  array is loaded on chip; the full weight tensor must enter through the AXI
+  read channel described in `09_dram_backed_weights.md`. Never hardcode numeric
+  arrays. For Vivado, prefer registered ROM/BRAM reads with `rom_style` /
+  `ram_style = "block"`. `weight_bank_paths` may be present, but do not convert
+  to MP parallel bank reads unless the LayerIR latency contract explicitly says
+  that datapath is enabled. Do not mark memory lines invariant.
 - **No simulation-only constructs** in synthesizable RTL: no `$display`,
   `$random`, `$monitor`, `#delay`, `initial` blocks other than the
   `$readmemh` loader.
@@ -236,3 +237,28 @@ files — do not guess.
   trust every field.
 - Golden vectors at `golden_inputs_path` / `golden_outputs_path` are
   consumed by the Verilator testbench, not by you.
+
+## Diagnostic tools you may use sparingly
+
+These exist primarily for the Surgeon repair flow. Foundry's job is to emit
+a working module on the first attempt; if you need any of these to write
+the initial RTL, the pattern docs and reference Verilog are not being read
+carefully enough.
+
+- `compute_layer_reference` — bit-exact ground-truth oracle for one output
+  pixel of a layer. **Hard cap of 3 calls per attempt.** Use only as a
+  sanity check on a single output pixel before committing your RTL — for
+  example, to confirm you understood the SCALE_MULT/SCALE_SHIFT pair the
+  pattern doc derives. Do NOT use it for iterative probe-driven debugging
+  or to harvest broad output ranges; that is Surgeon's territory. Pass
+  `caller_role: "foundry"` so the orchestrator can audit usage.
+- `verilator_stdout` (a field on the verifier's VerifResult) — the captured
+  simulator stdout. Foundry never reads this directly; the orchestrator
+  strips it from the Foundry continuation prompt because `$display`
+  / `$write` probes belong in Surgeon's repair flow, not first-attempt
+  generation.
+- `per_vector` (a field on the verifier's VerifResult) — per-goldin-vector
+  pass / mismatch stats. Surfaces in your continuation prompt as a single
+  summary line (`v0=100%, v1=98%(max_err=2), …`). Use it to decide whether
+  the bug is a cold-start issue (only v0 fails) versus a per-frame reset
+  issue (only later vectors fail) before reaching for fixes.
