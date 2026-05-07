@@ -790,6 +790,24 @@ int main(int argc, char** argv) {
     int64_t positive_error_count = 0;
     int64_t negative_error_count = 0;
 
+    // Per-vector accumulators. Each entry mirrors the aggregate stats but
+    // restricted to a single golden vector. Surgeon uses these to localize
+    // failures (e.g. "v0 passes 100%, v2 fails 8%") without the simulation
+    // having to be re-run.
+    struct PerVectorAccum {
+      int64_t vector_idx = 0;
+      int64_t outputs_received = 0;
+      int64_t exact_match_count = 0;
+      int64_t mismatch_count = 0;
+      int64_t max_error = 0;
+      double sum_abs_error = 0.0;
+      int64_t sample_count = 0;
+      int64_t actual_cycles = -1;
+      int64_t first_mismatch_output_index = -1;
+    };
+    std::vector<PerVectorAccum> per_vector_accums;
+    per_vector_accums.reserve(golden_inputs.vectors.size());
+
     // Unified interleaved drive/sample loop. For each test vector we drive
     // packed input samples whenever the DUT is ready and we sample packed
     // outputs whenever valid_out is high, both in the same tick.
@@ -797,6 +815,9 @@ int main(int argc, char** argv) {
       const auto& inputs = golden_inputs.vectors[v];
       const auto& outputs = golden_outputs.vectors[v];
       total_outputs_expected += static_cast<int64_t>(outputs.size());
+
+      PerVectorAccum vacc;
+      vacc.vector_idx = static_cast<int64_t>(v);
 
       size_t input_idx = 0;
       size_t output_idx = 0;
@@ -852,8 +873,13 @@ int main(int argc, char** argv) {
             signed_error_sum += signed_diff;
             if (signed_diff == 0) {
               ++exact_match_count;
+              ++vacc.exact_match_count;
             } else {
               ++mismatch_count;
+              ++vacc.mismatch_count;
+              if (vacc.first_mismatch_output_index < 0) {
+                vacc.first_mismatch_output_index = static_cast<int64_t>(output_idx);
+              }
               if (signed_diff > 0) {
                 ++positive_error_count;
               } else {
@@ -865,12 +891,18 @@ int main(int argc, char** argv) {
             if (diff > max_abs_error) {
               max_abs_error = diff;
             }
+            if (diff > vacc.max_error) {
+              vacc.max_error = diff;
+            }
             sum_abs_error += static_cast<double>(diff);
+            vacc.sum_abs_error += static_cast<double>(diff);
             ++sample_count;
+            ++vacc.sample_count;
           }
 
           ++output_idx;
           ++total_outputs_received;
+          ++vacc.outputs_received;
           idle_cycles = 0;
         } else {
           ++idle_cycles;
@@ -917,6 +949,7 @@ int main(int argc, char** argv) {
         if (vector_actual > worst_vector_actual_cycles) {
           worst_vector_actual_cycles = vector_actual;
         }
+        vacc.actual_cycles = vector_actual;
       } else {
         std::cerr << "[NN2RTL_DEBUG] vec=" << v
                   << " first_in=" << vector_first_valid_in
@@ -924,6 +957,7 @@ int main(int argc, char** argv) {
                   << " (incomplete)\n";
         all_vectors_timing_ok = false;
       }
+      per_vector_accums.push_back(vacc);
     }
 
     dut->final();
@@ -1096,6 +1130,32 @@ int main(int argc, char** argv) {
         {"first_valid_in_cycle", first_valid_in_cycle},
         {"first_valid_out_cycle", first_valid_out_cycle},
     };
+
+    // Per-vector breakdown: one entry per vector that the loop reached
+    // before any stall. Stalled vectors are simply absent from the array
+    // (the aggregate `stall_vector_index` and `outputs_received` already
+    // pinpoint the stall site).
+    json per_vector_json = json::array();
+    for (const auto& vacc : per_vector_accums) {
+      const double v_mean =
+          vacc.sample_count
+              ? vacc.sum_abs_error / static_cast<double>(vacc.sample_count)
+              : 0.0;
+      per_vector_json.push_back({
+          {"vector_idx", vacc.vector_idx},
+          {"outputs_received", vacc.outputs_received},
+          {"exact_match_count", vacc.exact_match_count},
+          {"mismatch_count", vacc.mismatch_count},
+          {"max_error", vacc.max_error},
+          {"mean_error", v_mean},
+          {"actual_cycles", vacc.actual_cycles},
+          {"first_mismatch_output_index",
+           vacc.first_mismatch_output_index < 0
+               ? json(nullptr)
+               : json(vacc.first_mismatch_output_index)},
+      });
+    }
+    results["per_vector"] = per_vector_json;
     if (axi_weight_memory.applicable()) {
       const json trace = axi_weight_memory.traceJson();
       for (const auto& item : trace.items()) {

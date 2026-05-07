@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -742,6 +743,13 @@ describe("runPipeline", () => {
           suggestion: "Keep the contract and rebuild the output counter around the documented latency.",
           doc_fault: true,
           faulty_doc_paths: ["auto_test_active_doc_fault"],
+          // Doc_fault verdict: the existing artifact was generated against a
+          // bad doc, so a fresh Foundry regeneration with the doc archived is
+          // the right move. Explicitly select Foundry; the orchestrator's
+          // default would otherwise route this to Surgeon.
+          next_actor: "foundry",
+          base_artifact: "fresh",
+          repair_scope: "architecture_replacement",
         }),
       ],
     });
@@ -803,9 +811,16 @@ describe("runPipeline", () => {
       spec_hash: "conv2d_1x1x1x1_s1x1_i8_o8_iotiled-streaming_tile1",
       verilog_source: `${module.verilog_source}\n// tiled contract attempt\n`,
     };
-    const verifFail = JSON.parse(
-      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
-    );
+    // Inject `failure_category: "architectural_fit"` so the contract walker
+    // gate (which now blocks walking on code_bug) lets this test exercise
+    // the actual contract-walk path. The test's intent is to validate the
+    // walk, so we set up a walk-worthy failure category explicitly.
+    const verifFail = {
+      ...JSON.parse(
+        await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+      ),
+      failure_category: "architectural_fit",
+    };
     const verifPass = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verif_pass.json"), "utf8"),
     );
@@ -833,6 +848,13 @@ describe("runPipeline", () => {
         successResult({
           analysis: "The flat-bus contract keeps reproducing the same failure.",
           suggestion: "Try a channel-tiled interface so the datapath can be rebuilt under a simpler stream width.",
+          // The new policy defaults to Surgeon — but here the verdict is
+          // that the flat-bus contract is structurally wrong for the layer,
+          // so a fresh Foundry generation is required (and will be followed
+          // by the contract walk to tiled-streaming when this also fails).
+          next_actor: "foundry",
+          base_artifact: "fresh",
+          repair_scope: "interface_or_contract_fix",
         }),
       ],
     });
@@ -1004,9 +1026,15 @@ describe("runPipeline", () => {
     const module = JSON.parse(
       await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
     );
-    const verifFail = JSON.parse(
-      await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
-    );
+    // Inject `architectural_fit` so the contract walker fires (the new
+    // code_bug gate blocks walking otherwise; this test specifically
+    // validates the walk-then-escalate path).
+    const verifFail = {
+      ...JSON.parse(
+        await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+      ),
+      failure_category: "architectural_fit",
+    };
 
     const foundryStep = async () => {
       await persistMockRtlDeliverable(module);
@@ -1050,6 +1078,73 @@ describe("runPipeline", () => {
 
     const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
     expect(log).toContain('"event":"human_escalation_required"');
+  });
+
+  it("does not walk contracts on code_bug failures (escalates straight to manual)", async () => {
+    // Regression guard for the contract-walker gate: when failure_category
+    // is `code_bug`, the orchestrator must NOT walk to another contract
+    // because the bug is in how the agent wrote the RTL, not in the
+    // contract's fit. Walking would just give the agent a fresh chance to
+    // make new code-bugs on a different bus shape while discarding the
+    // failure-corpus signal built up on the original contract (observed
+    // wasting ~$5–6 on node_conv_292 walking dram-backed → weight-tiling).
+    await writePipelineIrFixture();
+    const module = JSON.parse(
+      await readFile(path.join(repoRoot, "test", "fixtures", "verilog_module.json"), "utf8"),
+    );
+    // Explicitly mark the failure as code_bug so the new gate fires.
+    const verifFail = {
+      ...JSON.parse(
+        await readFile(path.join(repoRoot, "test", "fixtures", "verif_fail.json"), "utf8"),
+      ),
+      failure_category: "code_bug",
+    };
+
+    const foundryStep = async () => {
+      await persistMockRtlDeliverable(module);
+      return successResult(module, "flat-session");
+    };
+    const queryFn = createQueryMock({
+      // One Foundry attempt + one Retrospector-led final Foundry attempt.
+      // If the gate is broken (walks anyway), the orchestrator would dispatch
+      // additional Foundry calls for downstream contracts and the test would
+      // fail at "no more mocks queued".
+      foundry: [foundryStep, foundryStep],
+      retrospector: [
+        successResult({
+          analysis: "Code bug: agent forgot to register the sliding window.",
+          suggestion: "Repair the indicted construct.",
+          next_actor: "foundry",
+          base_artifact: "fresh",
+          repair_scope: "targeted_fsm_or_datapath_fix",
+        }),
+      ],
+    });
+    const assayerFn = createAssayerMock([verifFail, verifFail]);
+    const synthesisFn = createVivadoMock([]);
+
+    await runPipeline("checkpoint.pth", {
+      maxRetries: 0,
+      selfImprove: true,
+      runtime: createOrchestratorRuntime({ now: fixedNow, queryFn, synthesisFn, assayerFn }),
+    });
+
+    const state = JSON.parse(await readFile(path.join(outputRoot, "pipeline_state.json"), "utf8"));
+    expect(state.modules.unit_module).toBe("fail_abort");
+    expect(state.results.unit_module.failure_class).toBe("manual_correction_needed");
+
+    // The contract must NOT have been flagged — the contract isn't broken,
+    // the agents' RTL was. Future runs of this (module, contract) tuple
+    // should still be allowed to proceed.
+    const contractStatePath = path.join(outputRoot, "contract_state.json");
+    if (existsSync(contractStatePath)) {
+      const contractState = JSON.parse(await readFile(contractStatePath, "utf8"));
+      expect(contractState.contracts[fixtureContractKeys.flat]).toBeUndefined();
+    }
+
+    const log = await readFile(path.join(reportsDir, "run_log.jsonl"), "utf8");
+    expect(log).toContain('"reason":"code_bug_after_retrospector_exhausted"');
+    expect(log).not.toContain('"event":"contract_alternative_selected"');
   });
 
   it("writes successful self-improve draft docs to probationary", async () => {

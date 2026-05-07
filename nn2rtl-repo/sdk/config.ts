@@ -41,7 +41,14 @@ export const FAILURE_CLASSIFIER_CONFIG = {
 
 export const RETROSPECTOR_CONFIG = {
   model: "claude-opus-4-7" as const,
-  maxTurns: 4,
+  // 10 turns gives Retrospector room to read each prior attempt's RTL
+  // (foundryVersionsFor + failureAttemptsFor history can be 3-4 versions
+  // by the time it's invoked), correlate the per-vector + first-mismatch
+  // evidence with the failure-corpus signals, and emit the routing JSON
+  // (next_actor / base_artifact / repair_scope) without truncating its
+  // analysis. The previous 4-turn cap was tight on multi-attempt cases
+  // where Retrospector wanted to scan multiple versions.
+  maxTurns: 10,
   description: "Advises Foundry after the normal retry budget is exhausted.",
 } as const;
 
