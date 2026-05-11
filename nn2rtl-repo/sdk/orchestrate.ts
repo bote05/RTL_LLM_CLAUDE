@@ -741,17 +741,127 @@ async function materializeContractGoldenFile(inputPath: string, outputPath: stri
   return outputPath;
 }
 
+// For an add layer, both operands have shape == output_shape (elementwise),
+// so per-pixel channel count is the inner channel dim. Use NCHW index 1 when
+// the shape has >=2 dims; fall back to product/spatial otherwise. Verified
+// against the source goldin (bytesPerSample == OC*2) inside the retile.
+function addOutputChannelsFromLayer(layer: LayerIR): number {
+  const shape = layer.output_shape;
+  if (!Array.isArray(shape) || shape.length === 0) {
+    throw new Error(`add layer '${layer.module_id}' has no output_shape; cannot derive channel count.`);
+  }
+  if (shape.length >= 2) {
+    return shape[1]; // NCHW: [N, C, H, W] or [N, C]
+  }
+  return shape[0]; // 1-D fallback
+}
+
+// Add ops carry two operands packed `lhs[0..OC) | rhs[0..OC)` in each source
+// sample. Naive retile chops that flat byte stream into target-sized chunks,
+// scrambling the layout for tiled-streaming (which requires every beat to
+// carry `lhs_tile (CT bytes) | rhs_tile (CT bytes)` interleaved, where
+// CT = channel_tile). Tile-pair retile fixes that.
+function retileAddTiledGoldenInputs(
+  source: GoldenVectorFile,
+  channelTile: number,
+  outChannels: number,
+): GoldenVectorFile {
+  if (channelTile <= 0) {
+    throw new Error(`channelTile must be positive, got ${channelTile}.`);
+  }
+  if (outChannels <= 0 || outChannels % channelTile !== 0) {
+    throw new Error(
+      `outChannels (${outChannels}) must be a positive multiple of channelTile (${channelTile}) for add tile-pair retile.`,
+    );
+  }
+  const expectedSourceBytes = outChannels * 2; // lhs + rhs
+  if (source.bytesPerSample !== expectedSourceBytes) {
+    throw new Error(
+      `add goldin tile-pair retile expects bytesPerSample=${expectedSourceBytes} (lhs+rhs concat), got ${source.bytesPerSample}.`,
+    );
+  }
+  const targetBytesPerSample = channelTile * 2; // lhs_tile + rhs_tile per beat
+  const targetWordsPerSample = wordsPerSampleForBytes(targetBytesPerSample);
+  const beatsPerSourceSample = outChannels / channelTile;
+
+  const vectors = source.vectors.map((row) => {
+    const out: number[] = [];
+    for (let sample = 0; sample < source.samplesPerVector; sample += 1) {
+      const wordStart = sample * source.wordsPerSample;
+      const sampleWords = row.slice(wordStart, wordStart + source.wordsPerSample);
+      const sampleBytes = unpackSampleBytes(sampleWords, source.bytesPerSample);
+      // sampleBytes layout: [lhs[0..outChannels-1] | rhs[0..outChannels-1]].
+      for (let beat = 0; beat < beatsPerSourceSample; beat += 1) {
+        const base = beat * channelTile;
+        const beatBytes: number[] = [];
+        for (let i = 0; i < channelTile; i += 1) {
+          beatBytes.push(sampleBytes[base + i]); // lhs_tile byte i
+        }
+        for (let i = 0; i < channelTile; i += 1) {
+          beatBytes.push(sampleBytes[outChannels + base + i]); // rhs_tile byte i
+        }
+        out.push(...packSampleBytes(beatBytes, targetBytesPerSample));
+      }
+    }
+    return out;
+  });
+
+  return {
+    numVectors: source.numVectors,
+    samplesPerVector: source.samplesPerVector * beatsPerSourceSample,
+    bytesPerSample: targetBytesPerSample,
+    wordsPerSample: targetWordsPerSample,
+    vectors,
+  };
+}
+
+async function materializeAddTiledGoldenInputs(
+  inputPath: string,
+  outputPath: string,
+  targetBusBits: number,
+  channelTile: number,
+  outChannels: number,
+): Promise<string> {
+  const targetBytes = targetBusBits / 8;
+  const source = await readGoldenVectorFile(inputPath);
+  if (source.bytesPerSample === targetBytes) {
+    return normalizePathForCurrentHost(inputPath);
+  }
+  const transformed = retileAddTiledGoldenInputs(source, channelTile, outChannels);
+  if (transformed.bytesPerSample !== targetBytes) {
+    throw new Error(
+      `add tile-pair retile produced bytesPerSample=${transformed.bytesPerSample}, expected ${targetBytes} (channel_tile=${channelTile}).`,
+    );
+  }
+  await writeGoldenVectorFile(outputPath, transformed);
+  return outputPath;
+}
+
 async function materializeContractGoldens(layer: LayerIR): Promise<{
   goldenInputsPath: string;
   goldenOutputsPath: string;
 }> {
   const key = sanitizePathPart(`${layer.module_id}_${contractStateKeyForLayer(layer)}`);
   const dir = path.join(resolveFromSdk(PIPELINE_CONFIG.output_dir), "goldens", "contracts", key);
-  const goldenInputsPath = await materializeContractGoldenFile(
-    layer.golden_inputs_path,
-    path.join(dir, `${layer.module_id}.goldin`),
-    layer.input_width_bits,
-  );
+  const channelTile = layer.channel_tile;
+  const isTiledAdd =
+    layer.op_type === "add" &&
+    currentContractId(layer) !== "flat-bus" &&
+    typeof channelTile === "number" &&
+    channelTile > 0;
+  const goldenInputsPath = isTiledAdd
+    ? await materializeAddTiledGoldenInputs(
+        layer.golden_inputs_path,
+        path.join(dir, `${layer.module_id}.goldin`),
+        layer.input_width_bits,
+        channelTile as number,
+        addOutputChannelsFromLayer(layer),
+      )
+    : await materializeContractGoldenFile(
+        layer.golden_inputs_path,
+        path.join(dir, `${layer.module_id}.goldin`),
+        layer.input_width_bits,
+      );
   const goldenOutputsPath = await materializeContractGoldenFile(
     layer.golden_outputs_path,
     path.join(dir, `${layer.module_id}.goldout`),
@@ -2550,6 +2660,23 @@ function protectedPatternCandidatesForLayer(layer: LayerIR): Array<{ id: string;
 
 function protectedReferenceCandidatesForLayer(layer: LayerIR): Array<{ id: string; op_type: LayerIR["op_type"]; relPath: string }> {
   if (layer.op_type !== "conv2d") return [];
+  // dram-backed-weights conv2d has a fundamentally different MAC pipeline
+  // (AXI weight prefetch + ping-pong cache) than the on-chip-weights conv.
+  // Surface a contract-specific protected reference so agents see the
+  // correct prefetch-guard / cache-loaded gating shape, not the wrong one
+  // from conv1x1/3x3/7x7_passing_reference.v which assume on-chip weights.
+  const isDramBacked =
+    layer.contract_id === "dram-backed-weights" || layer.io_mode === "dram_backed_weights";
+  if (isDramBacked && layer.weight_shape[2] === 3 && layer.weight_shape[3] === 3) {
+    const file = "conv3x3_drambacked_passing_reference.v";
+    return [
+      {
+        id: `protected_${file.replace(/[^a-z0-9]+/gi, "_")}`,
+        op_type: "conv2d",
+        relPath: `knowledge/references/protected/${file}`,
+      },
+    ];
+  }
   const file =
     layer.weight_shape[2] === 1 && layer.weight_shape[3] === 1
       ? "conv1x1_passing_reference.v"
@@ -4697,6 +4824,286 @@ export function structuralPreflightViolations(
   return violations;
 }
 
+const SYNTH_PREFLIGHT_SCALAR_MEMORY_CELL_THRESHOLD = 16_384;
+
+function constantMapForLayer(layer: LayerIR): Map<string, number> {
+  const ic = layer.input_shape[1] ?? 1;
+  const oc = layer.output_shape[1] ?? 1;
+  const ih = layer.input_shape[2] ?? 1;
+  const iw = layer.input_shape[3] ?? 1;
+  const oh = layer.output_shape[2] ?? 1;
+  const ow = layer.output_shape[3] ?? 1;
+  const kh = layer.weight_shape[2] ?? 1;
+  const kw = layer.weight_shape[3] ?? 1;
+  const channelTile = layer.channel_tile ?? Math.max(1, Math.floor(layer.input_width_bits / 8));
+  const constants = new Map<string, number>();
+  const add = (name: string, value: number): void => {
+    if (Number.isFinite(value)) {
+      constants.set(name, value);
+      constants.set(name.toUpperCase(), value);
+    }
+  };
+
+  add("IC", ic);
+  add("OC", oc);
+  add("IH", ih);
+  add("IW", iw);
+  add("OH", oh);
+  add("OW", ow);
+  add("KH", kh);
+  add("KW", kw);
+  add("MP", layer.mac_parallelism ?? 1);
+  add("K_TOTAL", ic * kh * kw);
+  add("KH_KW", kh * kw);
+  add("TOTAL_IN_PIXELS", ih * iw);
+  add("TOTAL_OUT_PIXELS", oh * ow);
+  add("CHANNEL_TILE", channelTile);
+  add("BEAT_BITS", layer.input_width_bits);
+  add("INPUT_WIDTH_BITS", layer.input_width_bits);
+  add("OUTPUT_WIDTH_BITS", layer.output_width_bits);
+  add("IN_BEATS", Math.max(1, Math.ceil(ic / channelTile)));
+  add("OUT_BEATS", Math.max(1, Math.ceil(oc / channelTile)));
+  return constants;
+}
+
+function tokenizeConstantExpr(expr: string): string[] | null {
+  const compact = expr.replace(/_/g, "").trim();
+  const tokens: string[] = [];
+  const re = /\s*([A-Za-z_][A-Za-z0-9_$]*|\d+|[()+\-*/])\s*/gy;
+  let cursor = 0;
+  while (cursor < compact.length) {
+    re.lastIndex = cursor;
+    const match = re.exec(compact);
+    if (!match) return null;
+    tokens.push(match[1]);
+    cursor = re.lastIndex;
+  }
+  return tokens;
+}
+
+function evaluateConstantExpr(expr: string, constants: Map<string, number>): number | null {
+  const tokens = tokenizeConstantExpr(expr);
+  if (!tokens) return null;
+  const tokenList = tokens;
+  let cursor = 0;
+
+  const parseFactor = (): number | null => {
+    const token = tokenList[cursor];
+    if (token === undefined) return null;
+    if (token === "+") {
+      cursor += 1;
+      return parseFactor();
+    }
+    if (token === "-") {
+      cursor += 1;
+      const value = parseFactor();
+      return value === null ? null : -value;
+    }
+    if (token === "(") {
+      cursor += 1;
+      const value = parseExpr();
+      if (value === null || tokenList[cursor] !== ")") return null;
+      cursor += 1;
+      return value;
+    }
+    if (/^\d+$/.test(token)) {
+      cursor += 1;
+      return Number(token);
+    }
+    const value = constants.get(token) ?? constants.get(token.toUpperCase());
+    if (value === undefined) return null;
+    cursor += 1;
+    return value;
+  };
+
+  const parseTerm = (): number | null => {
+    let value = parseFactor();
+    if (value === null) return null;
+    while (tokenList[cursor] === "*" || tokenList[cursor] === "/") {
+      const op = tokenList[cursor];
+      cursor += 1;
+      const rhs = parseFactor();
+      if (rhs === null) return null;
+      if (op === "*") {
+        value *= rhs;
+      } else {
+        if (rhs === 0) return null;
+        value = Math.trunc(value / rhs);
+      }
+    }
+    return value;
+  };
+
+  function parseExpr(): number | null {
+    let value = parseTerm();
+    if (value === null) return null;
+    while (tokenList[cursor] === "+" || tokenList[cursor] === "-") {
+      const op = tokenList[cursor];
+      cursor += 1;
+      const rhs = parseTerm();
+      if (rhs === null) return null;
+      value = op === "+" ? value + rhs : value - rhs;
+    }
+    return value;
+  }
+
+  const value = parseExpr();
+  if (value === null || cursor !== tokenList.length || !Number.isFinite(value)) return null;
+  return value;
+}
+
+function constantsForModule(source: string, layer: LayerIR): Map<string, number> {
+  const constants = constantMapForLayer(layer);
+  const localparamRe =
+    /\b(?:localparam|parameter)\b(?:\s+(?:integer|signed))*\s+(?:\[[^\]]+\]\s*)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*([^;]+);/g;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let changed = false;
+    let match: RegExpExecArray | null;
+    localparamRe.lastIndex = 0;
+    while ((match = localparamRe.exec(source)) !== null) {
+      const name = match[1];
+      if (constants.has(name)) continue;
+      const value = evaluateConstantExpr(match[2], constants);
+      if (value !== null) {
+        constants.set(name, value);
+        constants.set(name.toUpperCase(), value);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  return constants;
+}
+
+function extractRanges(text: string): string[] {
+  return [...text.matchAll(/\[([^\]]+)\]/g)].map((match) => match[1]);
+}
+
+function rangeSize(range: string, constants: Map<string, number>): number | null {
+  const colon = range.indexOf(":");
+  if (colon === -1) return evaluateConstantExpr(range, constants);
+  const left = evaluateConstantExpr(range.slice(0, colon), constants);
+  const right = evaluateConstantExpr(range.slice(colon + 1), constants);
+  if (left === null || right === null) return null;
+  return Math.abs(left - right) + 1;
+}
+
+function rangeProduct(ranges: string[], constants: Map<string, number>, defaultValue = 1): number | null {
+  if (ranges.length === 0) return defaultValue;
+  let product = 1;
+  for (const range of ranges) {
+    const size = rangeSize(range, constants);
+    if (size === null || size <= 0) return null;
+    product *= size;
+  }
+  return product;
+}
+
+function largeScalarizedActivationMemoryViolations(
+  source: string,
+  layer: LayerIR,
+): StructuralPreflightViolation[] {
+  const violations: StructuralPreflightViolation[] = [];
+  const constants = constantsForModule(source, layer);
+  const memoryDeclRe =
+    /\b(?:reg|logic)\b\s+(?:signed\s+)?((?:\[[^\]]+\]\s*)*)([A-Za-z_][A-Za-z0-9_$]*)\s*((?:\[[^\]]+\]\s*)+)\s*;/g;
+  const activationMemoryNameRe =
+    /(?:^|_)(?:line_?buf|activation|feature|pixel|frame|input|in_?buf|act_?buf)(?:_|$)/i;
+  let match: RegExpExecArray | null;
+
+  while ((match = memoryDeclRe.exec(source)) !== null) {
+    const packedRanges = extractRanges(match[1]);
+    const name = match[2];
+    const unpackedRanges = extractRanges(match[3]);
+    if (!activationMemoryNameRe.test(name) || unpackedRanges.length < 2) continue;
+
+    const elementWidthBits = rangeProduct(packedRanges, constants, 1);
+    const entryCount = rangeProduct(unpackedRanges, constants, 1);
+    if (elementWidthBits === null || entryCount === null) continue;
+    if (elementWidthBits > 16 || entryCount < SYNTH_PREFLIGHT_SCALAR_MEMORY_CELL_THRESHOLD) continue;
+
+    violations.push({
+      rule: "large_scalarized_activation_memory",
+      detail:
+        `Memory '${name}' is declared as a large scalarized activation buffer ` +
+        `(element_width_bits=${elementWidthBits}, entries=${entryCount}, unpacked_dims=${unpackedRanges.length}). ` +
+        "This shape creates thousands of independently addressable byte/word cells and wide mux fabric that can make " +
+        "Vivado synthesis explode in runtime/RSS. Use a RAM-inferable packed beat/pixel memory with synchronous reads " +
+        "instead of a per-channel scalar cell array.",
+    });
+  }
+
+  return violations;
+}
+
+export function synthesisPreflightViolations(
+  module: VerilogModule,
+  layer: LayerIR,
+): StructuralPreflightViolation[] {
+  const source = stripVerilogComments(module.verilog_source);
+  return largeScalarizedActivationMemoryViolations(source, layer);
+}
+
+function synthesisPreflightMessage(violations: StructuralPreflightViolation[]): string {
+  const rules = violations.map((v) => v.rule).join(", ");
+  return [
+    "Deterministic synthesis preflight rejected the RTL before Vivado.",
+    `Violated rule(s): ${rules}.`,
+    "Functional simulation may pass, but this structural shape is known to cause pathological Vivado runtime/RSS.",
+    "Repair the indicted storage organization; do not change the public interface or functional behavior.",
+    "Violations:",
+    ...violations.map((v) => `- [${v.rule}] ${v.detail}`),
+  ].join("\n");
+}
+
+export function synthesisPreflightReport(
+  module: VerilogModule,
+  layer: LayerIR,
+  violations = synthesisPreflightViolations(module, layer),
+): SynthesisReport {
+  const report = synthesisPreflightMessage(violations);
+  return {
+    success: false,
+    tool: "vivado",
+    part: "xczu9eg-ffvb1156-2-e",
+    stage: "synth",
+    lut_count: 0,
+    ff_count: 0,
+    dsp_count: 0,
+    bram18_count: 0,
+    bram36_count: 0,
+    bram18_equiv: 0,
+    wns_ns: null,
+    setup_wns_ns: null,
+    hold_wns_ns: null,
+    timing_met: false,
+    fmax_mhz: 0,
+    report,
+  };
+}
+
+function synthesisPreflightAsVerifResult(
+  moduleId: string,
+  verifiedResult: VerifResult,
+  violations: StructuralPreflightViolation[],
+): VerifResult {
+  const rules = violations.map((v) => v.rule).join(",");
+  const message = synthesisPreflightMessage(violations);
+  return {
+    ...verifiedResult,
+    module_id: moduleId,
+    status: "fail",
+    failure_class: "structural_preflight_failed",
+    failure_category: "code_bug",
+    violated_constraint: `synthesis_preflight:${rules}`,
+    fix_hint: message,
+    classifier_reason:
+      "Deterministic synthesis preflight caught a Vivado-pathological storage shape before running synthesis.",
+  };
+}
+
 function normalizedExpr(text: string): string {
   return text.replace(/\s+/g, "").toLowerCase();
 }
@@ -5064,6 +5471,64 @@ async function processSynthesisOutcome(
   runtime: OrchestratorRuntime,
   selfImproveEnabled = false,
 ): Promise<void> {
+  const synthPreflightIssues = synthesisPreflightViolations(module, layer);
+  if (synthPreflightIssues.length > 0) {
+    const report = synthesisPreflightReport(module, layer, synthPreflightIssues);
+    await writeJsonFile(reportPath(`${moduleId}.vivado.json`), report);
+    const preflightFailure = synthesisPreflightAsVerifResult(
+      moduleId,
+      verifiedResult,
+      synthPreflightIssues,
+    );
+    await appendRunLog(
+      {
+        event: "synthesis_preflight_failed",
+        module_id: moduleId,
+        rules: synthPreflightIssues.map((issue) => issue.rule),
+        violations: synthPreflightIssues,
+      },
+      runtime,
+    );
+    await recordFailureAttempt(
+      layer,
+      "synthesis_preflight",
+      preflightFailure,
+      module,
+      runtime,
+      {
+        synthesis_report: report.report,
+        synthesis_metrics: {
+          success: report.success,
+          lut_count: report.lut_count,
+          ff_count: report.ff_count,
+          dsp_count: report.dsp_count,
+          bram18_count: report.bram18_count,
+          bram36_count: report.bram36_count,
+          bram18_equiv: report.bram18_equiv,
+          wns_ns: report.wns_ns,
+          setup_wns_ns: report.setup_wns_ns,
+          hold_wns_ns: report.hold_wns_ns,
+          timing_met: report.timing_met,
+          fmax_mhz: report.fmax_mhz,
+        },
+      },
+    );
+    if (selfImproveEnabled) {
+      await archiveProbationaryDocsForFailure(
+        layer,
+        moduleId,
+        "synthesis_preflight",
+        runtime,
+      );
+    }
+    const before = manager.getState().modules[moduleId];
+    manager.applyVerifResult(moduleId, preflightFailure);
+    const after = manager.getState().modules[moduleId];
+    await logStateTransition(manager, moduleId, before, after, "synthesis_preflight_failed", runtime);
+    await manager.saveState(statePath);
+    return;
+  }
+
   let report: SynthesisReport;
   try {
     report = await runtime.synthesisFn(module, layer);
@@ -5721,6 +6186,52 @@ export async function runAssayerDeterministic(
   layer: LayerIR,
 ): Promise<VerifResult> {
   assayerLayerBusContractZod.parse(layer);
+
+  // Truncation/stub guard. Foundry/Surgeon agents occasionally hit their
+  // output token cap mid-module and emit a placeholder ("// See output/rtl/
+  // ...v on disk for the full source") or a self-truncated stub. Catch
+  // those deterministically before iverilog gets a chance to fail with
+  // STATUS_NOT_IMPLEMENTED. The check is conservative: it only fires when
+  // the source contains an explicit truncation marker AND is far below
+  // the smallest plausible canonical RTL we've seen for any contract.
+  // Patterns the agent uses when it hits its output cap mid-module and
+  // tries to "outsource" the body. Each one is the agent's confession that
+  // the file does NOT contain real RTL — even if line count is plausible.
+  // Add new variants here as they're observed in failure_corpus.
+  const truncationMarkers = [
+    /See\s+output\/rtl\//i,
+    /persisted\s+to\s+output\/rtl\//i,
+    /written\s+to\s+output\/rtl\//i,
+    /full\s+(FSM|module|source|datapath|body)\s+persisted/i,
+    /full\s+(FSM|module|source|datapath|body)\s+(in|on)\s+disk/i,
+    /(write_verilog|mcp__nn2rtl-tools__write_verilog).*unavailable/i,
+    /truncated\s+here/i,
+    /See\s+full\s+source/i,
+    /the\s+full\s+\d+-line\s+source/i,
+    /full\s+source\s+(in|on)\s+disk/i,
+    /\(adapted\s+from\b.*\bsee\s+file\s+on\s+disk/i,
+  ];
+  const sourceLines = module.verilog_source.split("\n").length;
+  const hasTruncationMarker = truncationMarkers.some((re) => re.test(module.verilog_source));
+  if (hasTruncationMarker || sourceLines < 30) {
+    const stubMessage = [
+      "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.",
+      `Detected ${sourceLines} lines${hasTruncationMarker ? " and a truncation marker" : ""}.`,
+      "Treat as agent_max_turns_exhausted and force a fresh attempt or template clone.",
+      "Do NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure.",
+    ].join("\n");
+    return {
+      module_id: module.module_id,
+      status: "fail",
+      timing_pass: false,
+      timing_actual_cycles: 0,
+      timing_expected_cycles: layer.pipeline_latency_cycles,
+      failure_class: "agent_max_turns_exhausted",
+      failure_category: "code_bug",
+      fix_hint: stubMessage,
+      iverilog_stderr: stubMessage,
+    };
+  }
 
   const preflightIssues = preflightVerilogModule(module, layer);
   if (preflightIssues.length > 0) {
@@ -7392,13 +7903,20 @@ export function computeExpectedSpecHash(layer: LayerIR): string {
   return `${layer.op_type}_${ic}x${oc}_${spatial}_i${layer.input_width_bits}_o${layer.output_width_bits}${contractSuffix}`;
 }
 
-/** Choose SCALE_MULT/SCALE_SHIFT that minimise the relative approximation error. */
+/** Choose SCALE_MULT/SCALE_SHIFT that minimise the relative approximation error.
+ *
+ * Shift range is 0..23. The 0-end is needed for deep-network layers whose
+ * scale_factor exceeds ~128 (mult @ shift=8 would overflow INT16). The
+ * loop still picks the LARGEST shift that fits — bigger shift = more
+ * fractional precision — so layers with small scale_factors continue to
+ * pick high shifts as before. Hit on node_relu_14 (scale=283.33) which
+ * required shift<=6 to fit mult<32768. */
 function computeScaleApprox(scaleFactor: number): { mult: number; shift: number } {
   if (scaleFactor <= 0) {
     throw new Error(`Scale factor must be positive; got ${scaleFactor}.`);
   }
-  let best = { mult: 1, shift: 8, err: Infinity };
-  for (let shift = 8; shift <= 23; shift++) {
+  let best = { mult: 1, shift: 0, err: Infinity };
+  for (let shift = 0; shift <= 23; shift++) {
     const mult = Math.round(scaleFactor * Math.pow(2, shift));
     if (mult >= 1 && mult < 32768) {
       const err = Math.abs(mult / Math.pow(2, shift) - scaleFactor) / scaleFactor;
@@ -7434,8 +7952,10 @@ function computeAddFusedScaleApprox(
     );
   }
   const ratio = inputScaleFactor / outputScaleFactor;
-  let best = { mult: 1, shift: 8, err: Infinity };
-  for (let shift = 8; shift <= 23; shift++) {
+  let best = { mult: 1, shift: 0, err: Infinity };
+  // Same lower-bound extension rationale as computeScaleApprox: deep-network
+  // layers can have ratios > 128, which need shift<8 to fit the 23-bit cap.
+  for (let shift = 0; shift <= 23; shift++) {
     const mult = Math.round(ratio * Math.pow(2, shift));
     if (mult >= 1 && mult < Math.pow(2, 23)) {
       const err = Math.abs(mult / Math.pow(2, shift) - ratio) / ratio;
@@ -7704,6 +8224,26 @@ function instantiateTemplateModule(
     /\bSCALE_SHIFT\b(\s*=\s*)\d*'?d?(\d+)/g,
     (_m, eq) => `SCALE_SHIFT${eq}5'd${newScale.shift}`,
   );
+  // 3a. If the source uses a DSP-banked HI*256 + LO split for SCALE_MULT,
+  //     recompute HI/LO from the new mult. Without this, a clone keeps the
+  //     source layer's HI/LO encoding the old SCALE_MULT — making the
+  //     effective multiplier wrong by a factor of (old_mult / new_mult).
+  //     Surfaced as systematic INT8 drift on node_conv_256 (got 0 instead
+  //     of -1, max_error=5, signed-error skew toward zero), which only
+  //     showed up because the cloned RTL embedded SCALE_HI=113 / SCALE_LO=83
+  //     from a 29011 split alongside the substituted SCALE_MULT=6427.
+  if (/\bSCALE_HI\b\s*=/.test(src) && /\bSCALE_LO\b\s*=/.test(src)) {
+    const hi = Math.floor(newScale.mult / 256);
+    const lo = newScale.mult % 256;
+    src = src.replace(
+      /\bSCALE_HI\b(\s*=\s*)\d*'?d?(\d+)/g,
+      (_m, eq) => `SCALE_HI${eq}${hi}`,
+    );
+    src = src.replace(
+      /\bSCALE_LO\b(\s*=\s*)\d*'?d?(\d+)/g,
+      (_m, eq) => `SCALE_LO${eq}${lo}`,
+    );
+  }
 
   if (
     targetLayer.op_type === "add" &&
@@ -8432,7 +8972,67 @@ export async function runPipeline(
     if (nextAction.action === "invoke_surgeon") {
       const layer = activeLayers.get(nextAction.module_id) ?? findLayer(pipelineIr, nextAction.module_id);
       const baseLayer = baseLayersByModule.get(nextAction.module_id) ?? layer;
-      const brokenModule = await loadPersistedVerilogModule(nextAction.module_id);
+
+      // If Foundry exhausted maxTurns (or otherwise crashed) without ever
+      // calling write_verilog, there's no RTL on disk for Surgeon to repair.
+      // Hit on node_add_7 (2026-05-08): Foundry max-turns'd in the
+      // create_new_doc_request flow for a fresh contract, never persisted
+      // RTL, then the next-action loop scheduled Surgeon. Without this
+      // guard the pipeline crashes with ENOENT mid-run. Instead: surface
+      // the existing foundry_max_turns failure as a clean fail_abort and
+      // let the orchestrator route through Retrospector / contract walker
+      // / human escalation per the standard error-flow taxonomy.
+      let brokenModule: VerilogModule;
+      try {
+        brokenModule = await loadPersistedVerilogModule(nextAction.module_id);
+      } catch (loadErr) {
+        const isMissing =
+          typeof loadErr === "object" &&
+          loadErr !== null &&
+          "code" in loadErr &&
+          (loadErr as { code?: string }).code === "ENOENT";
+        if (!isMissing) throw loadErr;
+        const priorResult = manager.getState().results[nextAction.module_id];
+        const escalated: VerifResult = {
+          ...(priorResult ?? {
+            module_id: nextAction.module_id,
+            status: "fail",
+            timing_pass: false,
+            timing_actual_cycles: 0,
+            timing_expected_cycles: layer.pipeline_latency_cycles,
+            failure_class: "agent_max_turns_exhausted",
+          }),
+          status: "fail",
+          failure_category:
+            (priorResult?.failure_category as VerifResult["failure_category"]) ?? "code_bug",
+          violated_constraint:
+            priorResult?.violated_constraint ?? "foundry_produced_no_rtl",
+          classifier_reason:
+            priorResult?.classifier_reason ??
+            "Foundry exhausted maxTurns without persisting any Verilog via write_verilog; Surgeon cannot repair a non-existent module. Escalating to fail_abort.",
+        };
+        const before = manager.getState().modules[nextAction.module_id];
+        manager.applyVerifResult(nextAction.module_id, escalated);
+        await logStateTransition(
+          manager,
+          nextAction.module_id,
+          before,
+          manager.getState().modules[nextAction.module_id],
+          "surgeon_skipped_no_rtl_on_disk",
+          runtime,
+        );
+        await appendRunLog(
+          {
+            event: "surgeon_skipped_no_rtl_on_disk",
+            module_id: nextAction.module_id,
+            reason: "foundry_produced_no_rtl",
+            result: escalated,
+          },
+          runtime,
+        );
+        await manager.saveState(statePath);
+        continue;
+      }
       const verifResult = manager.getState().results[nextAction.module_id];
 
       if (!verifResult) {

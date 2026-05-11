@@ -19,12 +19,16 @@ import {
   CONTRACT_PLANS,
   applyContractPlan,
   appendRunLog,
+  appendToolUseAudits,
   createOrchestratorRuntime,
+  extractToolUseAudits,
   findLayer,
   loadPluginAgentDefinition,
   pathExists,
   readJsonFile,
   requireStructuredOutput,
+  synthesisPreflightReport,
+  synthesisPreflightViolations,
   writeJsonFile,
   type ContractPlan,
   type OrchestratorRuntime,
@@ -759,12 +763,33 @@ function buildFoundryImprovePrompt(
 
   sections.push(
     "",
-    "== OUTPUT CONTRACT ==",
-    "Persist the improved RTL via the `mcp__nn2rtl-tools__write_verilog` MCP tool BEFORE returning — same `module_id` as the original. The orchestrator reads `<output_dir>/<module_id>.v` from disk after you return.",
-    "Then return EXACTLY this metadata-only JSON object and nothing else:",
+    "== OUTPUT CONTRACT (PERSISTENCE IS MANDATORY) ==",
+    "Your improved RTL MUST reach disk through ONE of the two paths below. Skipping both means the entire turn is discarded — the orchestrator detects empty turns and aborts the run.",
+    "",
+    "Path A — preferred — call the MCP tool BEFORE your final message:",
+    "  ```",
+    "  mcp__nn2rtl-tools__write_verilog({",
+    `    module: {`,
+    `      module_id: "${input.module_id}",`,
+    `      spec_hash: "${input.original_module.spec_hash}",`,
+    "      verilog_source: \"<your full improved Verilog source>\",",
+    "      generated_by: \"Foundry\",",
+    `      attempt: ${input.attempt_index}`,
+    "    },",
+    "    output_dir: \"output\"",
+    "  })",
+    "  ```",
+    "  The tool writes `output/rtl/<module_id>.v` and `output/rtl/<module_id>.meta.json` for you. The orchestrator reads the .v back from disk after your turn ends.",
+    "",
+    "Path B — acceptable fallback — inline the full source in your final structured-output JSON:",
+    `  { "module_id": "${input.module_id}", "spec_hash": "${input.original_module.spec_hash}", "generated_by": "Foundry", "attempt": ${input.attempt_index}, "verilog_source": "<full improved Verilog>" }`,
+    "  The orchestrator extracts the string and writes it to disk itself.",
+    "",
+    "If you used Path A, your final structured-output JSON may omit `verilog_source`:",
     `  { "module_id": "${input.module_id}", "spec_hash": "${input.original_module.spec_hash}", "generated_by": "Foundry", "attempt": ${input.attempt_index} }`,
-    "Do NOT include `verilog_source` in the final JSON. Re-serialising the full Verilog as a JSON-escaped string burns output tokens and routinely produces unparseable final messages.",
-    "No markdown fences, no commentary.",
+    "",
+    "Do NOT return ONLY metadata without first calling write_verilog. The orchestrator cannot improve the original RTL using metadata alone — it needs the new source.",
+    "No markdown fences in the final JSON, no commentary outside it.",
   );
 
   return sections.filter((line) => line !== undefined).join("\n");
@@ -869,9 +894,9 @@ const IMPROVE_MODE_PROMPT_ADDENDUM = [
   "",
   "Every rule in this system prompt about the canonical interface, INT8 quantization, scale-shift rounding, memory inference, the split-architecture for spatial convs, invariant markers, sign extension, and procedural declarations STILL APPLIES. Improvement does not waive correctness — Verilator runs first against the same goldens that pass the original, and any value mismatch fails the attempt instantly.",
   "",
-  "Output / persistence contract for improvement runs:",
-  "- Persist the improved RTL via the `mcp__nn2rtl-tools__write_verilog` MCP tool BEFORE returning. Use the same `module_id` as the original; the orchestrator reads `<output_dir>/<module_id>.v` from disk after you return.",
-  "- Your final JSON message contains METADATA ONLY: `{module_id, spec_hash, generated_by: \"Foundry\", attempt: <attempt_index>}`. Do NOT include `verilog_source` in the final JSON — re-serializing the source as a JSON-escaped string burns output tokens and routinely produces unparseable final messages.",
+  "Output / persistence contract for improvement runs (full call signatures are in the user prompt's OUTPUT CONTRACT section — read them):",
+  "- The improved RTL MUST reach disk through one of two paths: (A) call `mcp__nn2rtl-tools__write_verilog({ module: {...}, output_dir: \"output\" })` BEFORE returning, OR (B) inline the full `verilog_source` string in your final structured-output JSON. Path A is preferred (cheaper on output tokens). Returning ONLY metadata with NEITHER path is an empty turn and gets discarded.",
+  "- Use the same `module_id` as the original.",
   "- The orchestrator does not have `Bash`, `Read`, or `Write` available to you for this turn. Everything you need (original RTL, baseline metrics, prior attempts, Retrospector advice on attempt 3) is embedded in the user prompt.",
 ].join("\n");
 
@@ -919,6 +944,40 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
       if (isSdkResultMessage(message)) {
         finalResult = message;
       }
+    }
+
+    // Flush tool-use audits BEFORE anything else can throw. Without this,
+    // hydrate failures (empty turns, malformed structured output) blow away
+    // the only evidence of whether Foundry actually called write_verilog —
+    // making it impossible to tell "agent skipped the tool" from "agent
+    // called the tool and the tool failed".
+    try {
+      const improveAudits = extractToolUseAudits(messages, {
+        agent: "Foundry",
+        module_id: input.module_id,
+        nowIso: agentTurnStartTime.toISOString(),
+      });
+      await appendToolUseAudits(improveAudits);
+      await appendRunLog({
+        event: "improve_foundry_turn_audit",
+        agent: "Foundry",
+        module_id: input.module_id,
+        attempt: input.attempt_index,
+        tool_call_count: improveAudits.filter((a) => a.kind === "tool_use").length,
+        tools_called: improveAudits
+          .filter((a) => a.kind === "tool_use")
+          .map((a) => a.tool_name),
+        message_count: messages.length,
+        had_final_result: finalResult !== null,
+      });
+    } catch (auditErr) {
+      // Audit logging is best-effort; never let it mask the real failure.
+      await appendRunLog({
+        event: "improve_foundry_audit_failed",
+        module_id: input.module_id,
+        attempt: input.attempt_index,
+        reason: auditErr instanceof Error ? auditErr.message : String(auditErr),
+      });
     }
 
     if (!finalResult) {
@@ -1359,6 +1418,24 @@ export async function runImprove(
       attempt.failed_gate = "verilator";
       attempts.push(attempt);
       await persistAttempt(paths, moduleId, runId, attempt);
+      if (attemptIndex === 2) continue;
+      if (attemptIndex === 3) break;
+      continue;
+    }
+
+    const synthPreflightIssues = synthesisPreflightViolations(module, layer);
+    if (synthPreflightIssues.length > 0) {
+      attempt.failed_gate = "vivado";
+      attempt.vivado_report = synthesisPreflightReport(module, layer, synthPreflightIssues);
+      attempts.push(attempt);
+      await persistAttempt(paths, moduleId, runId, attempt);
+      await appendRunLog({
+        event: "improve_synthesis_preflight_failed",
+        module_id: moduleId,
+        attempt: attemptIndex,
+        rules: synthPreflightIssues.map((issue) => issue.rule),
+        violations: synthPreflightIssues,
+      });
       if (attemptIndex === 2) continue;
       if (attemptIndex === 3) break;
       continue;

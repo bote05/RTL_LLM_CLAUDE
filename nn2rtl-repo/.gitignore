@@ -57,6 +57,7 @@ output/dashboard/
 output/failure_corpus/
 output/contract_state.json.bak*
 output/pipeline_state.json.bak*
+output/pipeline_state.json.*.bak
 
 # Manual / one-off experiments (not part of the production pipeline)
 experiments/

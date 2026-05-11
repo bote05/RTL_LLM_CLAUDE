@@ -180,6 +180,39 @@ If a simpler first version fetches pass `N+1` only after pass `N` finishes, it
 must either still meet the declared latency or fail deterministically. Do not
 hide the added cycles by changing `pipeline_latency_cycles`.
 
+### Final-pass prefetch guard — `<=`, not `<` [INVARIANT:DRAM_PREFETCH_GUARD]
+
+The end-of-pass kick that schedules the *next* pass's prefetch must use `<=`
+on `OC_PASSES`, not `<`:
+
+```verilog
+// CORRECT — kick prefetch for pass N+1 whenever N+1 < OC_PASSES (i.e. there
+// IS a next pass to compute). With ping-pong double-buffering, the LAST
+// pass needs its weights too: when oc_pass = OC_PASSES - 2, oc_pass + 2 =
+// OC_PASSES, and we still need to fire ar_kick to load the cache the LAST
+// pass will read.
+if (oc_pass + 8'd2 <= OC_PASSES)
+    ar_kick <= 1'b1;
+```
+
+```verilog
+// WRONG — `<` skips the prefetch when oc_pass = OC_PASSES - 2, so the cache
+// the LAST pass reads keeps STALE contents from oc_pass - 2 (whichever
+// half of the ping-pong was loaded two passes ago). Surfaces as a clean
+// `sim_completed_mismatch` with timing_pass=true: ALL outputs received,
+// 1/OC_PASSES of channels per pixel are wrong (they used the stale OC's
+// weights). Bug pattern: max_error ≈ 6, ~0.5–1% mismatch rate, signed-
+// error skew toward whatever sign the stale OCs encode.
+if (oc_pass + 8'd2 < OC_PASSES)   // BUG
+    ar_kick <= 1'b1;
+```
+
+Diagnosed on node_conv_292 (3×3 stride=1 pad=1, OC=512, OC_PASSES=128): the
+`<` form left pass 127's cache holding pass 125's weights, so OC=508–511
+were computed against OC=500–503's weights. Probe at `oc_pass=127`
+showed `acc[0]=15` for pixel 1, vs golden's expected `−178` — exactly the
+value a pass-125-weights × pixel-1-inputs MAC produces.
+
 ## Output coordinates (stride > 1) — CRITICAL
 
 dram-backed-weights layers in this codebase routinely use stride > 1

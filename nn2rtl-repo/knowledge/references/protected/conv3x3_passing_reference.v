@@ -179,12 +179,16 @@ module layer1_0_conv2 (
     // indexed accumulate) lives entirely inside conv_datapath.v. Vivado
     // infers a DSP48E1 for the multiplier via the `(* use_dsp = "yes" *)`
     // attribute on the registered `mul_q` inside the library module.
+    // TEMPLATE: WEIGHTS_PATH/BIAS_PATH must come from the LayerIR sidecar
+    // (sidecar.weights_path / sidecar.bias_path). Do not paste a literal
+    // user-machine prefix; the orchestrator injects the correct absolute
+    // path at generation time.
     conv_datapath #(
         .IC(IC), .OC(OC), .KH(KH), .KW(KW),
         .K_TOTAL(K_TOTAL), .MP(MP),
         .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv2_weights.hex"),
-        .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv2_bias.hex")
+        .WEIGHTS_PATH("output/weights/<MODULE_ID>_weights.hex"),
+        .BIAS_PATH("output/weights/<MODULE_ID>_bias.hex")
     ) dp (
         .clk(clk), .rst_n(rst_n),
         .window_flat(window_flat),

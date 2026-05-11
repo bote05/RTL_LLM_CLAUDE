@@ -846,14 +846,18 @@ def compute_scale_approx(scale_factor: float) -> tuple[int, int]:
     block; the golden model must use the same approximation, not the true
     float ``scale_factor``, to be bit-equivalent to RTL.
 
-    Search range ``shift ∈ [8, 23]`` and ``1 ≤ mult < 32768`` matches the
-    SDK exactly. Tie-break: the SDK keeps the FIRST shift that improves the
-    error (strict ``<``), so we replicate that ordering.
+    Search range ``shift ∈ [0, 23]`` and ``1 ≤ mult < 32768`` matches the
+    SDK exactly. Layers with scale_factor > 128 (e.g. node_relu_14 at
+    283.33) need shift < 8 to fit mult inside the 15-bit cap; clamping
+    Python to shift ≥ 8 left those layers with the (1, 8) sentinel while
+    the SDK picked a real (mult, shift) — the resulting golden vs RTL
+    constants disagreed silently. Tie-break: the SDK keeps the FIRST shift
+    that improves the error (strict ``<``), so we replicate that ordering.
     """
     if scale_factor <= 0.0:
         raise GoldenGenerationError(f"scale_factor must be positive, got {scale_factor}.")
-    best_mult, best_shift, best_err = 1, 8, float("inf")
-    for shift in range(8, 24):
+    best_mult, best_shift, best_err = 1, 0, float("inf")
+    for shift in range(0, 24):
         mult = round(scale_factor * (2 ** shift))
         if mult < 1 or mult >= 32768:
             continue

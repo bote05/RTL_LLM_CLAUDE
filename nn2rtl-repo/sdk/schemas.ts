@@ -456,6 +456,17 @@ export const pipelineStateSchema = z
             path: ["results", id],
             message: `module '${id}' is in 'fail_abort' but has no prior VerifResult in results`,
           });
+        } else if (result.status === "pass") {
+          // A passing assayer result must promote the module to 'pass';
+          // a manual override that flips the module to 'fail_abort' while
+          // leaving result.status='pass' produces a contradictory state
+          // that survives across resumes (and confuses the dashboard,
+          // failure corpus filters, and Vivado dispatch).
+          ctx.addIssue({
+            code: "custom",
+            path: ["results", id, "status"],
+            message: `module '${id}' is in 'fail_abort' but its VerifResult.status is 'pass'; either promote the module to 'pass' or set the result to a failing status with an appropriate failure_class.`,
+          });
         }
         const earlyAbort =
           result?.status_class === "tb_setup_error" ||

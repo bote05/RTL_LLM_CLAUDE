@@ -32,7 +32,7 @@ export const RTL_LIBRARY_SOURCES: readonly string[] = [
   path.resolve(repoRoot, "rtl_library", "conv_datapath.v"),
 ];
 export const VIVADO_DEFAULT_PART = "xczu9eg-ffvb1156-2-e";
-export const VIVADO_TIMEOUT_MS = 30 * 60 * 1000;
+export const VIVADO_TIMEOUT_MS = 90 * 60 * 1000;
 export const VIVADO_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 // Sim-threading default is 0 (= no `--threads` flag, single-threaded
 // model). Empirically, on the layers we run (stem 7x7 119M cycles, conv2
@@ -365,11 +365,31 @@ export async function withTempDir<T>(
   runtime: ToolsRuntime = createToolsRuntime(),
 ): Promise<T> {
   const tempDir = await mkdtemp(path.join(runtime.tmpDirRoot, prefix));
+  let result: T;
   try {
-    return await fn(tempDir);
+    result = await fn(tempDir);
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    // Windows + Vivado: child processes can hold file handles inside the
+    // temp dir for tens of seconds after vivado.exe returns, so an immediate
+    // rm fails with EBUSY/EPERM/ENOTEMPTY and torpedoes the otherwise-valid
+    // synthesis result. Retry a few times, then leak the dir rather than
+    // discard the report.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+        break;
+      } catch (cleanupErr) {
+        const code = (cleanupErr as { code?: string } | null)?.code;
+        const transient = code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+        if (!transient || attempt === 5) {
+          // Final attempt failed: leak the temp dir, don't mask the fn's result.
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
   }
+  return result;
 }
 
 // System-level spawn errors (ENOENT, EACCES, timeout, OOM) must not be
@@ -1647,13 +1667,15 @@ interface ComputeLayerReferenceOutput {
 }
 
 /** Mirror of sdk/orchestrate.ts:computeScaleApprox. Inlined to keep mcp/
- *  decoupled from sdk/. Search range identical (shift 8..23, mult 1..32767). */
+ *  decoupled from sdk/. Search range shift 0..23, mult 1..32767 — the
+ *  0-end is needed for deep-network layers whose scale_factor exceeds
+ *  ~128 (where shift>=8 would overflow the INT16 mult cap). */
 function mcpComputeScaleApprox(scaleFactor: number): { mult: number; shift: number } {
   if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
     throw new Error(`compute_layer_reference: scale_factor must be > 0, got ${scaleFactor}.`);
   }
-  let best = { mult: 1, shift: 8, err: Infinity };
-  for (let shift = 8; shift <= 23; shift += 1) {
+  let best = { mult: 1, shift: 0, err: Infinity };
+  for (let shift = 0; shift <= 23; shift += 1) {
     const mult = Math.round(scaleFactor * Math.pow(2, shift));
     if (mult >= 1 && mult < 32768) {
       const err = Math.abs(mult / Math.pow(2, shift) - scaleFactor) / scaleFactor;

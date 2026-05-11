@@ -99,6 +99,23 @@ function improvedModule(attempt: number): VerilogModule {
   };
 }
 
+function scalarizedLineBufModule(attempt: number): VerilogModule {
+  return {
+    module_id: "unit_module",
+    spec_hash: "fixture-hash",
+    verilog_source: [
+      "module unit_module;",
+      "  localparam IH = 14;",
+      "  localparam IW = 14;",
+      "  localparam IC = 512;",
+      "  reg signed [7:0] line_buf [0:IH*IW-1][0:IC-1];",
+      "endmodule",
+    ].join("\n"),
+    generated_by: "Foundry",
+    attempt,
+  };
+}
+
 function vivadoReport(overrides: Partial<SynthesisReport> = {}): SynthesisReport {
   return {
     success: true,
@@ -380,6 +397,76 @@ describe("runImprove", () => {
         has_retrospector_advice: false,
       },
     ]);
+  });
+
+  it("skips Vivado for a synthesis-preflight failure and retries the same conversation", async () => {
+    const root = await seedProject();
+    const spatialLayer: LayerIR = {
+      ...layerFixture(),
+      input_shape: [1, 512, 14, 14],
+      output_shape: [1, 512, 7, 7],
+      weight_shape: [512, 512, 3, 3],
+      num_weights: 512 * 512 * 3 * 3,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      channel_tile: 32,
+      pipeline_latency_cycles: 100,
+    };
+    await writeJson(path.join(root, "output", "layer_ir.json"), {
+      model_name: "fixture-net",
+      quantization: "int8_symmetric_per_tensor",
+      generated_at: "2026-05-02T12:00:00Z",
+      layers: [spatialLayer],
+    });
+    const resultMessage = {
+      type: "result",
+      subtype: "success",
+      result: "{}",
+      total_cost_usd: 0,
+      modelUsage: {},
+      session_id: "shared-foundry-session",
+    } as const;
+    const foundryFn = vi
+      .fn()
+      .mockResolvedValueOnce({
+        module: scalarizedLineBufModule(1),
+        result: resultMessage,
+        messages: [resultMessage],
+        session_id: "shared-foundry-session",
+      })
+      .mockResolvedValueOnce({
+        module: improvedModule(2),
+        result: resultMessage,
+        messages: [resultMessage],
+        session_id: "shared-foundry-session",
+      });
+    const assayerFn = vi.fn(async () => verifResult({ timing_expected_cycles: 100, timing_actual_cycles: 100 }));
+    const synthesisFn = vi.fn(async () => vivadoReport({ lut_count: 80 }));
+
+    const result = await runImprove("unit_module", {
+      targets: ["reduce-lut"],
+      paths: { repoRoot: root },
+      runtime: { now: fixedNow, foundryFn, assayerFn, synthesisFn },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.attempts).toMatchObject([
+      {
+        attempt_index: 1,
+        failed_gate: "vivado",
+        vivado_report: {
+          success: false,
+        },
+      },
+      { attempt_index: 2, failed_gate: null },
+    ]);
+    expect(result.attempts[0].vivado_report?.report).toContain("large_scalarized_activation_memory");
+    expect(synthesisFn).toHaveBeenCalledTimes(1);
+    expect(foundryFn).toHaveBeenCalledTimes(2);
+    expect(foundryFn.mock.calls[1][0]).toMatchObject({
+      attempt_index: 2,
+      resume_session_id: "shared-foundry-session",
+    });
   });
 
   it("keeps the original after three failed deterministic improvements and logs Retrospector advice", async () => {

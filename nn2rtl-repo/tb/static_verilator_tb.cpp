@@ -908,7 +908,20 @@ int main(int argc, char** argv) {
           ++idle_cycles;
         }
 
-        if (input_idx < inputs.size() && dut->ready_in) {
+        // After receiving the LAST output of this vector, do NOT drive
+        // any more inputs even if ready_in is still high. For stride>1
+        // pointwise convs the input grid (IH*IW) is larger than the
+        // output grid (OH*OW), so when the loop exits the FSM may have
+        // pending input beats. If the TB drives one of those v_n tail
+        // beats on the same iteration that samples the final output
+        // (because ready_in=1 in the same cycle that valid_out=1 fires
+        // for the last OC pass), the FSM mis-classifies the v_n tail
+        // beat as v_{n+1}'s active (0,0) pixel — diagnosed on
+        // node_conv_224 (1x1 stride-2 256->512). The DUT should not be
+        // forced to assert ready_in=0 in lockstep with valid_out just
+        // to dodge this; the TB knows when the vector is done.
+        const bool vector_done = (output_idx == outputs.size());
+        if (!vector_done && input_idx < inputs.size() && dut->ready_in) {
           if (first_valid_in_cycle < 0) {
             first_valid_in_cycle = cycle_counter;
           }

@@ -23,6 +23,7 @@ import {
   readJsonFile,
   requireStructuredOutput,
   structuralPreflightViolations,
+  synthesisPreflightViolations,
   toStringList,
   writeJsonFile,
 } from "../orchestrate.js";
@@ -616,6 +617,28 @@ describe("orchestrate helpers", () => {
           "  output reg valid_out,",
           "  output reg [511:0] data_out",
           ");",
+          "  // filler to keep this fixture past the truncated-stub guard",
+          "  // 01",
+          "  // 02",
+          "  // 03",
+          "  // 04",
+          "  // 05",
+          "  // 06",
+          "  // 07",
+          "  // 08",
+          "  // 09",
+          "  // 10",
+          "  // 11",
+          "  // 12",
+          "  // 13",
+          "  // 14",
+          "  // 15",
+          "  // 16",
+          "  // 17",
+          "  // 18",
+          "  // 19",
+          "  // 20",
+          "  // 21",
           "endmodule",
         ].join("\n"),
       },
@@ -816,6 +839,28 @@ describe("orchestrate helpers", () => {
           "  output reg valid_out,",
           "  output reg [511:0] data_out",
           ");",
+          "  // filler to keep this fixture past the short-stub guard",
+          "  // 01",
+          "  // 02",
+          "  // 03",
+          "  // 04",
+          "  // 05",
+          "  // 06",
+          "  // 07",
+          "  // 08",
+          "  // 09",
+          "  // 10",
+          "  // 11",
+          "  // 12",
+          "  // 13",
+          "  // 14",
+          "  // 15",
+          "  // 16",
+          "  // 17",
+          "  // 18",
+          "  // 19",
+          "  // 20",
+          "  // 21",
           "endmodule",
         ].join("\n"),
       },
@@ -951,6 +996,71 @@ describe("orchestrate helpers", () => {
     );
     const rules = violations.map((v) => v.rule);
     expect(rules).toContain("weights_packed_forbidden");
+  });
+
+  it("flags large scalarized activation memories before Vivado but accepts packed beat memories", () => {
+    const layer = {
+      module_id: "m1",
+      op_type: "conv2d" as const,
+      input_shape: [1, 512, 14, 14],
+      output_shape: [1, 512, 7, 7],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [512, 512, 3, 3],
+      num_weights: 512 * 512 * 3 * 3,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 100,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      channel_tile: 32,
+    };
+
+    const bad = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam IH = 14;",
+          "  localparam IW = 14;",
+          "  localparam IC = 512;",
+          "  reg signed [7:0] line_buf [0:IH*IW-1][0:IC-1];",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(bad.map((v) => v.rule)).toContain("large_scalarized_activation_memory");
+
+    const good = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam BEAT_BITS = 256;",
+          "  reg [BEAT_BITS-1:0] line_buf [0:63][0:15];",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(good).toEqual([]);
   });
 
   it("flags declarations inside always blocks as a structural violation", () => {
