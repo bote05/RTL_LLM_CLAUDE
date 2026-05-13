@@ -172,8 +172,6 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
   };
 }
 
-const pipelineIrOutputFormat = toOutputFormat(pipelineIrZod);
-const verifResultOutputFormat = toOutputFormat(verifResultZod);
 const failureClassificationOutputFormat = toOutputFormat(failureClassificationZod);
 const retrospectorAdviceOutputFormat = toOutputFormat(retrospectorAdviceZod);
 
@@ -1056,6 +1054,45 @@ export function summarizeToolUse(
   };
 }
 
+const NN2RTL_MCP_TOOL_PREFIX = "mcp__nn2rtl-tools__";
+const MCP_TOOL_PREFIX = "mcp__";
+
+export function isForeignMcpToolName(name: string): boolean {
+  return name.startsWith(MCP_TOOL_PREFIX) && !name.startsWith(NN2RTL_MCP_TOOL_PREFIX);
+}
+
+export function foreignMcpToolNames(audits: ToolUseAuditEntry[]): string[] {
+  return [
+    ...new Set(
+      audits
+        .filter((a) => a.kind === "tool_use" && typeof a.tool_name === "string")
+        .map((a) => a.tool_name as string)
+        .filter(isForeignMcpToolName),
+    ),
+  ];
+}
+
+export async function appendForeignMcpToolWarnings(
+  audits: ToolUseAuditEntry[],
+  runtime: OrchestratorRuntime = createOrchestratorRuntime(),
+): Promise<void> {
+  const tools = foreignMcpToolNames(audits);
+  if (tools.length === 0) return;
+  const first = audits.find((a) => a.kind === "tool_use" && a.tool_name && tools.includes(a.tool_name));
+  await appendRunLog(
+    {
+      event: "foreign_mcp_tool_used",
+      agent: first?.agent ?? null,
+      module_id: first?.module_id ?? null,
+      tools_called: tools,
+      tool_call_count: audits.filter((a) => a.kind === "tool_use" && a.tool_name && tools.includes(a.tool_name)).length,
+      policy: "warning_only",
+      note: "A non-nn2rtl MCP connector was visible to the agent. Persistence and verification gates still decide whether the attempt is usable.",
+    },
+    runtime,
+  );
+}
+
 export async function appendRunLog(
   entry: Record<string, unknown>,
   runtime: OrchestratorRuntime = createOrchestratorRuntime(),
@@ -1270,6 +1307,11 @@ function buildSurgeonRepairBrief(payload: unknown): string | null {
   if (Array.isArray(payload.failure_memory) && payload.failure_memory.length > 0) {
     lines.push(
       `- failure memory: ${payload.failure_memory.length} scored failed RTL attempt(s) are attached in payload.failure_memory. Each entry has rtl_path/failure_path; inspect only the relevant source paths before repeating a prior failed structure.`,
+    );
+  }
+  if (isRecord(payload.reference_evidence)) {
+    lines.push(
+      "- reference evidence: payload.reference_evidence was computed deterministically for the first mismatch via compute_layer_reference. Compare its expected INT8 output and integer-domain intermediates with the observed got value before changing rounding, channel indexing, or pixel traversal.",
     );
   }
   if (currentContractId(layer) !== "flat-bus") {
@@ -2987,7 +3029,6 @@ async function moveLifecycleFile(
 }
 
 async function archiveDocEntry(
-  state: DocLifecycleState,
   doc: DocLifecycleEntry,
   reason: string,
   runtime: OrchestratorRuntime,
@@ -3034,7 +3075,7 @@ async function archiveProbationaryDocsForFailure(
     if (!doc.failed_modules.includes(moduleId)) {
       doc.failed_modules.push(moduleId);
     }
-    await archiveDocEntry(state, doc, reason, runtime);
+    await archiveDocEntry(doc, reason, runtime);
   }
   await saveDocLifecycleState(state);
 }
@@ -3067,7 +3108,6 @@ async function archiveActiveDocsConfirmedByRetrospector(
       doc.failed_modules.push(moduleId);
     }
     await archiveDocEntry(
-      state,
       doc,
       `retrospector_doc_fault:${moduleId}`,
       runtime,
@@ -4228,16 +4268,6 @@ const assayerLayerBusContractZod = layerIrZod.superRefine((layer, ctx) => {
   }
 });
 
-const CANONICAL_TOP_PORTS = {
-  clk: { direction: "input" as const, width_bits: 1 },
-  rst_n: { direction: "input" as const, width_bits: 1 },
-  valid_in: { direction: "input" as const, width_bits: 1 },
-  ready_in: { direction: "output" as const, width_bits: 1 },
-  valid_out: { direction: "output" as const, width_bits: 1 },
-  data_in: { direction: "input" as const, width_key: "input_width_bits" as const },
-  data_out: { direction: "output" as const, width_key: "output_width_bits" as const },
-};
-
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -4388,14 +4418,6 @@ function parseAnsiTopPorts(portBlock: string): Map<string, ParsedTopPort> {
   }
 
   return ports;
-}
-
-function expectedTopPortWidthBits(
-  portName: keyof typeof CANONICAL_TOP_PORTS,
-  layer: LayerIR,
-): number {
-  const spec = CANONICAL_TOP_PORTS[portName];
-  return "width_key" in spec ? layer[spec.width_key] : spec.width_bits;
 }
 
 function evaluateContractPortWidthBits(widthExpr: string | undefined, widthBits: number | undefined, layer: LayerIR): number {
@@ -4575,20 +4597,26 @@ export function structuralPreflightViolations(
   // checks when the library modules are instantiated.
   const usesLineBufWindow  = /\bline_buf_window\b/.test(source);
   const usesConvDatapath   = /\bconv_datapath\b/.test(source);
-  const usesCoordScheduler = /\bcoord_scheduler\b/.test(source);
   const clockedAlwaysBlocks = extractClockedAlwaysBlocks(source);
 
-  // Rule 1: spatial conv requires a `line_buf` array-of-arrays / memory decl.
-  // Skipped when the top-level instantiates `line_buf_window` (the library
-  // module owns the line buffer).
+  // Rule 1: spatial conv requires a `line_buf*` reg memory declaration.
+  // Accepts the literal name `line_buf` AND banked variants
+  // (`line_buf_b0`, `line_buf_bank3`, `line_buf_lo`, etc.) so that a
+  // module which legitimately banks the activation buffer per
+  // [INVARIANT:ACTIVATION_BUFFER_BANKING] in pattern doc 09 is not forced
+  // to also keep a dummy `line_buf` stub just to pass this check (the
+  // stub then collides with the no-async-reset rule). Skipped when the
+  // top-level instantiates `line_buf_window` — the library module owns
+  // the line buffer in that case.
   if (isSpatialConv && !usesLineBufWindow) {
-    const lineBufRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?line_buf\s*\[/;
+    const lineBufRe = /\breg\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?line_buf(?:_[A-Za-z0-9$]+)?\s*\[/;
     if (!lineBufRe.test(source)) {
       violations.push({
         rule: "line_buffer_missing",
         detail:
           `Spatial conv2d (kernel=${layer.weight_shape[2]}x${layer.weight_shape[3]}) must ` +
-          `either instantiate line_buf_window or declare a line buffer 'line_buf' ` +
+          `either instantiate line_buf_window or declare a line buffer 'line_buf' (or a ` +
+          `banked variant like 'line_buf_b0', 'line_buf_bank3', 'line_buf_lo') ` +
           `as a multi-dimensional reg memory. Neither was found.`,
       });
     }
@@ -4825,6 +4853,25 @@ export function structuralPreflightViolations(
 }
 
 const SYNTH_PREFLIGHT_SCALAR_MEMORY_CELL_THRESHOLD = 16_384;
+// Vivado errors with [Synth 8-4556] on any single unpacked reg variable
+// whose total bits exceed ~1,048,576 (= 2^20). We cap at 900 Kb to leave
+// margin for parameterised dimension drift and to keep one bank fitting
+// in a clean LUT-RAM / BRAM mapping. Larger storage MUST be split into
+// multiple smaller arrays (banking).
+const SYNTH_PREFLIGHT_PER_VARIABLE_BIT_LIMIT = 900_000;
+// Minimum element width that counts as a "wide-word" entry (i.e. one
+// addressable cell holds a packed beat, not a single byte). Byte-cell
+// arrays are caught by `largeScalarizedActivationMemoryViolations` and
+// must not also fire the per-variable-bit-limit rule.
+const SYNTH_PREFLIGHT_WIDEWORD_ELEMENT_BITS_MIN = 32;
+// Total-bits threshold above which a 2D-unpacked activation memory
+// stops being acceptable: Vivado refuses to infer LUT-RAM for
+// 2D-unpacked × wide-packed arrays, and the resulting FF mapping
+// cripples post-synth `report_timing_summary -check_timing_verbose`.
+// Below this, FF mapping is tolerable (post-synth analysis still
+// completes in seconds-to-minutes — proven by conv_292's 200k-FF
+// pass that finished in ~7 min total wall).
+const SYNTH_PREFLIGHT_MULTIDIM_FF_TOLERATED_BITS = 300_000;
 
 function constantMapForLayer(layer: LayerIR): Map<string, number> {
   const ic = layer.input_shape[1] ?? 1;
@@ -4867,7 +4914,9 @@ function constantMapForLayer(layer: LayerIR): Map<string, number> {
 }
 
 function tokenizeConstantExpr(expr: string): string[] | null {
-  const compact = expr.replace(/_/g, "").trim();
+  // Strip Verilog's numeric-literal underscores (1_000 -> 1000) but
+  // preserve underscores inside identifiers (BEAT_BITS, K_TOTAL, etc.).
+  const compact = expr.replace(/(\d)_(?=\d)/g, "$1").trim();
   const tokens: string[] = [];
   const re = /\s*([A-Za-z_][A-Za-z0-9_$]*|\d+|[()+\-*/])\s*/gy;
   let cursor = 0;
@@ -5038,12 +5087,259 @@ function largeScalarizedActivationMemoryViolations(
   return violations;
 }
 
+function activationMemoryBitLimitViolations(
+  source: string,
+  layer: LayerIR,
+): StructuralPreflightViolation[] {
+  const violations: StructuralPreflightViolation[] = [];
+  const constants = constantsForModule(source, layer);
+  const memoryDeclRe =
+    /\b(?:reg|logic)\b\s+(?:signed\s+)?((?:\[[^\]]+\]\s*)*)([A-Za-z_][A-Za-z0-9_$]*)\s*((?:\[[^\]]+\]\s*)+)\s*;/g;
+  // Match line_buf / activation / window-style names AND banked variants
+  // (line_buf_b0, in_buf_bank3, etc.) so a partially-banked memory doesn't
+  // skate by because one bank is still oversized.
+  const activationMemoryNameRe =
+    /(?:^|_)(?:line_?buf|activation|feature|pixel|frame|input|in_?buf|act_?buf|window)(?:_|$|\d|b)/i;
+  let match: RegExpExecArray | null;
+
+  while ((match = memoryDeclRe.exec(source)) !== null) {
+    const packedRanges = extractRanges(match[1]);
+    const name = match[2];
+    const unpackedRanges = extractRanges(match[3]);
+    if (!activationMemoryNameRe.test(name) || unpackedRanges.length === 0) continue;
+
+    const elementWidthBits = rangeProduct(packedRanges, constants, 1);
+    if (elementWidthBits === null || elementWidthBits < SYNTH_PREFLIGHT_WIDEWORD_ELEMENT_BITS_MIN) continue;
+
+    const unpackedSizes: number[] = [];
+    let totalEntries = 1;
+    let unresolved = false;
+    for (const range of unpackedRanges) {
+      const size = rangeSize(range, constants);
+      if (size === null || size <= 0) { unresolved = true; break; }
+      unpackedSizes.push(size);
+      totalEntries *= size;
+    }
+    if (unresolved) continue;
+
+    const totalBits = totalEntries * elementWidthBits;
+    if (totalBits <= SYNTH_PREFLIGHT_PER_VARIABLE_BIT_LIMIT) continue;
+
+    // Compute the bank shape we'd recommend. Prefer 64-deep banks (clean
+    // LUT-RAM granule); if a 64-deep bank would still bust the cap because
+    // the inner dimensions are huge, drop to 32. The rule below is
+    // architecture-agnostic — same shape for any conv/op layer.
+    const innerDims = unpackedSizes.slice(1);
+    const innerEntries = innerDims.reduce((acc, dim) => acc * dim, 1);
+    const bitsPerOuterEntry = innerEntries * elementWidthBits;
+    let preferredBankDepth = 64;
+    if (preferredBankDepth * bitsPerOuterEntry > SYNTH_PREFLIGHT_PER_VARIABLE_BIT_LIMIT) {
+      preferredBankDepth = 32;
+    }
+    const logicalDepth = unpackedSizes[0];
+    const bankCount = Math.ceil(logicalDepth / preferredBankDepth);
+    const bitsPerBank = preferredBankDepth * bitsPerOuterEntry;
+
+    violations.push({
+      rule: "activation_memory_exceeds_vivado_variable_bit_limit",
+      detail:
+        `Memory '${name}' is a single unpacked reg variable totalling ${totalBits} bits ` +
+        `(depth=${logicalDepth}, inner=${innerDims.join("x") || "1"}, element_width_bits=${elementWidthBits}). ` +
+        `Vivado rejects any single variable above ${SYNTH_PREFLIGHT_PER_VARIABLE_BIT_LIMIT} bits (hard limit ~1,048,576 with [Synth 8-4556]). ` +
+        "Bank the memory into multiple smaller variables, each well under the cap. " +
+        `Recommended: ${bankCount} bank(s) of depth ${preferredBankDepth} ` +
+        `(bits_per_bank=${bitsPerBank}). ` +
+        "Sketch:\n" +
+        Array.from({ length: bankCount }, (_, i) =>
+          `  reg [${elementWidthBits - 1}:0] ${name}_b${i} [0:${preferredBankDepth - 1}]${innerDims.map((d) => `[0:${d - 1}]`).join("")};`,
+        ).join("\n") +
+        `\n  bank_idx = pixel_index / ${preferredBankDepth};` +
+        `\n  bank_addr = pixel_index % ${preferredBankDepth};` +
+        "\nDo NOT collapse the buffer further than the layer's logical pixel count; each bank just holds a contiguous slice.",
+    });
+  }
+
+  return violations;
+}
+
+function multiDimWideWordActivationMemoryViolations(
+  source: string,
+  layer: LayerIR,
+): StructuralPreflightViolation[] {
+  const constants = constantsForModule(source, layer);
+  const memoryDeclRe =
+    /\b(?:reg|logic)\b\s+(?:signed\s+)?((?:\[[^\]]+\]\s*)*)([A-Za-z_][A-Za-z0-9_$]*)\s*((?:\[[^\]]+\]\s*)+)\s*;/g;
+  // Match the line_buf-family names plus banked variants. Window and
+  // weight-style memories are NOT in scope: window is the dummy
+  // sliding-window register (small, dead in dram-backed), weight ROMs
+  // ARE allowed to be 2D unpacked because they're rarely read in this
+  // contract — the AXI cache holds the read-hot copy.
+  const activationMemoryNameRe =
+    /(?:^|_)(?:line_?buf|activation|feature|pixel|frame|input|in_?buf|act_?buf)(?:_|$|\d|b)/i;
+  let match: RegExpExecArray | null;
+
+  type Offender = {
+    name: string;
+    elementWidthBits: number;
+    unpackedSizes: number[];
+    totalBits: number;
+  };
+  const offenders: Offender[] = [];
+
+  while ((match = memoryDeclRe.exec(source)) !== null) {
+    const packedRanges = extractRanges(match[1]);
+    const name = match[2];
+    const unpackedRanges = extractRanges(match[3]);
+    if (!activationMemoryNameRe.test(name) || unpackedRanges.length < 2) continue;
+
+    const elementWidthBits = rangeProduct(packedRanges, constants, 1);
+    if (elementWidthBits === null || elementWidthBits < SYNTH_PREFLIGHT_WIDEWORD_ELEMENT_BITS_MIN) continue;
+
+    const unpackedSizes: number[] = [];
+    let unresolved = false;
+    let totalEntries = 1;
+    for (const range of unpackedRanges) {
+      const size = rangeSize(range, constants);
+      if (size === null || size <= 0) { unresolved = true; break; }
+      unpackedSizes.push(size);
+      totalEntries *= size;
+    }
+    if (unresolved) continue;
+
+    offenders.push({
+      name,
+      elementWidthBits,
+      unpackedSizes,
+      totalBits: totalEntries * elementWidthBits,
+    });
+  }
+
+  if (offenders.length === 0) return [];
+
+  // The cost is the aggregate FF mapping across every multi-dim
+  // activation memory in this module. One small array is tolerable
+  // (conv_292 with ~262k bits synthesised in ~7 min total). Many small
+  // arrays summing >300k bits is the conv_284 pathology that stalls
+  // post-synth analysis. Compare the SUM, not the max.
+  const aggregateBits = offenders.reduce((acc, o) => acc + o.totalBits, 0);
+  if (aggregateBits <= SYNTH_PREFLIGHT_MULTIDIM_FF_TOLERATED_BITS) return [];
+
+  // Build one violation per offender so each banked variant gets its
+  // own concrete fix suggestion.
+  return offenders.map<StructuralPreflightViolation>((o) => {
+    const outerDepth = o.unpackedSizes[0];
+    const innerDims = o.unpackedSizes.slice(1);
+    const innerEntries = innerDims.reduce((acc, dim) => acc * dim, 1);
+    const collapsedPackedBits = innerEntries * o.elementWidthBits;
+    return {
+      rule: "multidim_wideword_activation_memory",
+      detail:
+        `Memory '${o.name}' is a wide-word activation buffer with 2D+ unpacked dims ` +
+        `(element_width_bits=${o.elementWidthBits}, unpacked=[${o.unpackedSizes.join(",")}], total_bits=${o.totalBits}). ` +
+        `Aggregate across all such buffers in this module is ${aggregateBits} bits, ` +
+        `above the FF-mapping-tolerable threshold of ${SYNTH_PREFLIGHT_MULTIDIM_FF_TOLERATED_BITS}. ` +
+        "Vivado refuses to infer distributed LUT-RAM for multi-dim unpacked wide-word arrays and instead " +
+        "FF-maps the entire memory, which cripples post-synth report_timing_summary " +
+        "-check_timing_verbose wall time without changing PPA. " +
+        "Collapse the inner unpacked dimension(s) into the packed width so the array becomes 1D unpacked × " +
+        "wide packed — exactly the shape that the AXI prefetch cache_a / cache_b use and that Vivado maps " +
+        "cleanly to RAM64M8 primitives. " +
+        "Recommended:\n" +
+        `  reg [${collapsedPackedBits - 1}:0] ${o.name} [0:${outerDepth - 1}];\n` +
+        `  // write one inner slice: ${o.name}[addr][beat*${o.elementWidthBits} +: ${o.elementWidthBits}] <= narrow_data;\n` +
+        `  // read whole word, then bit-select downstream: word_q1 = ${o.name}[addr]; narrow_q2 = word_q1[beat*${o.elementWidthBits} +: ${o.elementWidthBits}];`,
+    };
+  });
+}
+
+function activationMemoryWithAsyncResetViolations(
+  source: string,
+  _layer: LayerIR,
+): StructuralPreflightViolation[] {
+  // Vivado's RAM-inference engine refuses to map a reg array to BRAM /
+  // distributed RAM if the array is written inside an always block that
+  // ALSO has an async reset edge (`always @(posedge clk or negedge rst_n)`).
+  // The failure shape is [Synth 8-4767] then [Synth 8-3391] when the
+  // dissolved-bit count exceeds the elaboration cap, hard-failing
+  // synth_design in ~8 seconds.
+  //
+  // This rule scans every async-reset always block and reports any
+  // activation-memory name written inside it. The check is conservative:
+  // a memory's NAME is matched against the activation-memory regex (same
+  // family the other gates use), and the violation only fires if there's
+  // a non-blocking assignment to `name[...]` inside the async-reset block.
+  const violations: StructuralPreflightViolation[] = [];
+  const activationMemoryNameRe =
+    /(?:^|_)(?:line_?buf|activation|feature|pixel|frame|input|in_?buf|act_?buf)(?:_|$|\d|b)/i;
+
+  // Use a tolerant matcher for always blocks that consumes nested begin/end.
+  // We don't try to perfectly parse SystemVerilog — just slice from the
+  // `always @(...)` header to the next top-level `endmodule` or next
+  // `always @` (whichever comes first), then look for writes inside.
+  const alwaysHeaderRe =
+    /always\s*@\s*\(([^)]*)\)\s*begin/g;
+  let match: RegExpExecArray | null;
+  while ((match = alwaysHeaderRe.exec(source)) !== null) {
+    const sensitivity = match[1];
+    // Async-reset sensitivity has `negedge` (or `posedge`) on a non-clock
+    // signal, paired with the main clock edge. We detect by presence of
+    // BOTH `posedge` AND `negedge` (the canonical pattern Vivado checks
+    // against). `always @(posedge clk)` alone is fine.
+    if (!/\bposedge\b/.test(sensitivity) || !/\bnegedge\b/.test(sensitivity)) continue;
+
+    // Slice the body up to the next `always @` header or end of file.
+    const start = match.index + match[0].length;
+    const nextAlways = source.indexOf("always", start);
+    const bodyEnd = nextAlways === -1 ? source.length : nextAlways;
+    const body = source.slice(start, bodyEnd);
+
+    // Find every non-blocking assignment to `name[...]` and check the
+    // name against the activation-memory regex. Skip names already
+    // recognised as non-memory (the test is on the name, not the index).
+    const writeRe =
+      /\b([A-Za-z_][A-Za-z0-9_$]*)\s*\[[^;]*<=/g;
+    const offenders = new Set<string>();
+    let w: RegExpExecArray | null;
+    while ((w = writeRe.exec(body)) !== null) {
+      const name = w[1];
+      if (activationMemoryNameRe.test(name)) {
+        offenders.add(name);
+      }
+    }
+    if (offenders.size === 0) continue;
+
+    for (const name of offenders) {
+      violations.push({
+        rule: "activation_memory_in_async_reset_block",
+        detail:
+          `Memory '${name}' is written inside an always block with async reset ` +
+          `(sensitivity = '${sensitivity.trim()}'). Vivado refuses RAM inference for ` +
+          "reset-sensitive memories and emits [Synth 8-4767] then hard-fails with " +
+          "[Synth 8-3391] because the dissolved-bit fallback exceeds the elaboration cap. " +
+          "Move the memory writes to a dedicated `always @(posedge clk) begin ... end` block " +
+          "with no reset clause — the cache_a / cache_b AXI prefetch arrays in this same " +
+          "contract use exactly that pattern and Vivado maps them to RAM64M8 primitives. " +
+          "The FSM state, counters, and handshake regs stay in the original async-reset block; " +
+          "only the memory writes move out. Pre-fill of the memory by the input-streaming path " +
+          "before the MAC reads from it is sufficient — no power-on reset of memory is needed.",
+      });
+    }
+  }
+
+  return violations;
+}
+
 export function synthesisPreflightViolations(
   module: VerilogModule,
   layer: LayerIR,
 ): StructuralPreflightViolation[] {
   const source = stripVerilogComments(module.verilog_source);
-  return largeScalarizedActivationMemoryViolations(source, layer);
+  return [
+    ...largeScalarizedActivationMemoryViolations(source, layer),
+    ...activationMemoryBitLimitViolations(source, layer),
+    ...multiDimWideWordActivationMemoryViolations(source, layer),
+    ...activationMemoryWithAsyncResetViolations(source, layer),
+  ];
 }
 
 function synthesisPreflightMessage(violations: StructuralPreflightViolation[]): string {
@@ -5425,7 +5721,7 @@ function expectedLatencyCyclesForContract(layer: LayerIR, sidecarFields: Record<
   }
 }
 
-async function loadRetrospectorKnowledgeDoc(layer: LayerIR): Promise<RtlKnowledgeDoc> {
+export async function loadRetrospectorKnowledgeDoc(layer: LayerIR): Promise<RtlKnowledgeDoc> {
   const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
     get_rtl_patterns: (
       op_type: string,
@@ -6147,6 +6443,7 @@ async function invokeFoundry(
     await recordDocUsageForAgent(layerIr, layerIr.module_id, foundryAudits, runtime);
   }
   await appendToolUseAudits(foundryAudits);
+  await appendForeignMcpToolWarnings(foundryAudits, runtime);
   await appendRunLog(
     {
       event: "agent_tool_use_summary",
@@ -6684,6 +6981,127 @@ function trimVerifResultForSurgeon(verif: VerifResult): VerifResult {
   };
 }
 
+type LayerReferenceEvidence = {
+  source: "compute_layer_reference";
+  reason: "first_mismatch";
+  request: {
+    module_id: string;
+    vector_idx: number;
+    output_pixel_oy: number;
+    output_pixel_ox: number;
+    oc_start: number;
+    oc_end: number;
+    include_intermediates: boolean;
+    caller_role: "assayer";
+  };
+  observed: {
+    first_mismatch_index: number | null;
+    first_mismatch_vector_index: number;
+    first_mismatch_output_index: number;
+    first_mismatch_channel_index: number;
+    first_mismatch_expected: number | null;
+    first_mismatch_got: number | null;
+  };
+  result: Record<string, unknown>;
+};
+
+function nonnegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function computeReferenceRequestForFirstMismatch(
+  layer: LayerIR,
+  verif: VerifResult,
+): LayerReferenceEvidence["request"] | null {
+  if (layer.op_type !== "conv2d") return null;
+  if ((layer.groups ?? 1) !== 1) return null;
+  if (layer.dilation?.some((value) => value !== 1)) return null;
+  const [, oc, oh, ow] = layer.output_shape;
+  if (![oc, oh, ow].every((value) => Number.isInteger(value) && value > 0)) return null;
+
+  const vectorIdx = verif.first_mismatch_vector_index;
+  const outputIdx = verif.first_mismatch_output_index;
+  const channelIdx = verif.first_mismatch_channel_index;
+  if (!nonnegativeInteger(vectorIdx) || !nonnegativeInteger(outputIdx) || !nonnegativeInteger(channelIdx)) {
+    return null;
+  }
+
+  // The testbench's first_mismatch_output_index is the emitted output beat
+  // within the current golden vector. A flat-bus conv emits one beat per
+  // output pixel; channel-tiled contracts emit ceil(OC/channels_per_beat)
+  // beats per pixel. Derive the pixel and absolute output channel from the
+  // LayerIR bus width so the oracle request is contract-neutral.
+  const channelsPerBeat = Math.min(oc, Math.max(1, Math.floor(layer.output_width_bits / 8)));
+  const beatsPerPixel = Math.max(1, Math.ceil(oc / channelsPerBeat));
+  const pixelIndex = Math.floor(outputIdx / beatsPerPixel);
+  if (pixelIndex < 0 || pixelIndex >= oh * ow) return null;
+  const beatIndex = outputIdx % beatsPerPixel;
+  const trueOc = beatIndex * channelsPerBeat + channelIdx;
+  if (trueOc < 0 || trueOc >= oc) return null;
+
+  return {
+    module_id: layer.module_id,
+    vector_idx: vectorIdx,
+    output_pixel_oy: Math.floor(pixelIndex / ow),
+    output_pixel_ox: pixelIndex % ow,
+    oc_start: trueOc,
+    oc_end: trueOc + 1,
+    include_intermediates: true,
+    caller_role: "assayer",
+  };
+}
+
+async function maybeComputeLayerReferenceEvidence(
+  layer: LayerIR,
+  verif: VerifResult,
+  runtime: OrchestratorRuntime,
+): Promise<LayerReferenceEvidence | null> {
+  const request = computeReferenceRequestForFirstMismatch(layer, verif);
+  if (!request) return null;
+  try {
+    const mcpTools = (await import(MCP_TOOLS_MODULE_PATH)) as {
+      compute_layer_reference: (input: typeof request) => Promise<Record<string, unknown>>;
+    };
+    const result = await mcpTools.compute_layer_reference(request);
+    await appendRunLog(
+      {
+        event: "layer_reference_evidence_preloaded",
+        module_id: layer.module_id,
+        source: "compute_layer_reference",
+        request,
+        output_fingerprint: typeof result.output_fingerprint === "string" ? result.output_fingerprint : null,
+      },
+      runtime,
+    );
+    return {
+      source: "compute_layer_reference",
+      reason: "first_mismatch",
+      request,
+      observed: {
+        first_mismatch_index: verif.first_mismatch_index ?? null,
+        first_mismatch_vector_index: verif.first_mismatch_vector_index ?? request.vector_idx,
+        first_mismatch_output_index: verif.first_mismatch_output_index ?? 0,
+        first_mismatch_channel_index: verif.first_mismatch_channel_index ?? request.oc_start,
+        first_mismatch_expected: verif.first_mismatch_expected ?? null,
+        first_mismatch_got: verif.first_mismatch_got ?? null,
+      },
+      result,
+    };
+  } catch (error: unknown) {
+    await appendRunLog(
+      {
+        event: "layer_reference_evidence_unavailable",
+        module_id: layer.module_id,
+        source: "compute_layer_reference",
+        request,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+      runtime,
+    );
+    return null;
+  }
+}
+
 async function invokeSurgeon(
   brokenModule: VerilogModule,
   verifResult: VerifResult,
@@ -6770,6 +7188,7 @@ async function invokeSurgeon(
     };
   });
   const failureMemory = await failureMemoryForLayer(layerIr);
+  const referenceEvidence = await maybeComputeLayerReferenceEvidence(layerIr, verifResult, runtime);
   const surgeonPayload = {
     broken_module: brokenModule,
     verif_result: trimmedVerif,
@@ -6779,6 +7198,7 @@ async function invokeSurgeon(
     prior_attempts,
     prior_foundry_attempts: priorFoundryAttempts,
     ...(failureMemory.length > 0 ? { failure_memory: failureMemory } : {}),
+    ...(referenceEvidence ? { reference_evidence: referenceEvidence } : {}),
     ...(options.retrospectorAdvice ? { retrospector_advice: options.retrospectorAdvice } : {}),
     ...(options.isFinalAttempt ? { is_final_attempt: true } : {}),
     retry_seed: retrySeed,
@@ -6909,6 +7329,7 @@ async function invokeSurgeon(
     await recordDocUsageForAgent(layerIr, brokenModule.module_id, surgeonAudits, runtime);
   }
   await appendToolUseAudits(surgeonAudits);
+  await appendForeignMcpToolWarnings(surgeonAudits, runtime);
   await appendRunLog(
     {
       event: "agent_tool_use_summary",

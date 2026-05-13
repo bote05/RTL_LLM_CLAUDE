@@ -18,12 +18,13 @@ import {
 import {
   CONTRACT_PLANS,
   applyContractPlan,
+  appendForeignMcpToolWarnings,
   appendRunLog,
   appendToolUseAudits,
   createOrchestratorRuntime,
   extractToolUseAudits,
   findLayer,
-  loadPluginAgentDefinition,
+  loadRetrospectorKnowledgeDoc,
   pathExists,
   readJsonFile,
   requireStructuredOutput,
@@ -32,6 +33,7 @@ import {
   writeJsonFile,
   type ContractPlan,
   type OrchestratorRuntime,
+  type RtlKnowledgeDoc,
 } from "./orchestrate.js";
 import {
   layerIrSchema,
@@ -57,11 +59,14 @@ const sdkRoot = path.resolve(
 );
 const defaultRepoRoot = path.resolve(sdkRoot, "..");
 const pluginPath = path.resolve(defaultRepoRoot, "nn2rtl-plugin");
+const improveFoundryPromptPath = path.join(pluginPath, "agents", "improve_foundry.md");
 
 export const IMPROVEMENT_TARGETS = [
   "use-dsp",
   "use-bram",
   "reduce-lut",
+  "reduce-ff",
+  "improve-fmax",
   "reduce-latency",
   "increase-throughput",
 ] as const;
@@ -71,20 +76,41 @@ export type SynthesisReport = z.infer<typeof synthesisReportSchema>;
 
 export type ImprovementMetrics = {
   lut: number;
+  ff: number;
   dsp: number;
   bram: number;
+  fmax_mhz?: number;
   latency_cycles?: number;
   ii?: number;
 };
 
 export type ImprovementCheckerConfig = {
   useDspThresholdMin: number;
+  useBramMinGain: number;
+  useBramMinLutDelta: number;
+  useBramMinFfDelta: number;
   reduceLutMinDelta: number;
+  reduceFfMinDelta: number;
+  improveFmaxMinDelta: number;
+  improveFmaxFloorMhz: number;
+  improveFmaxMinAdditiveMhz: number;
 };
 
 export const DEFAULT_IMPROVEMENT_CHECKER_CONFIG: ImprovementCheckerConfig = {
   useDspThresholdMin: parsePositiveIntEnv(process.env, "NN2RTL_IMPROVE_USE_DSP_MIN", 8),
+  useBramMinGain: parsePositiveIntEnv(process.env, "NN2RTL_IMPROVE_USE_BRAM_MIN_GAIN", 8),
+  useBramMinLutDelta: Number(process.env.NN2RTL_IMPROVE_USE_BRAM_MIN_LUT_DELTA ?? "") || 0.05,
+  useBramMinFfDelta: Number(process.env.NN2RTL_IMPROVE_USE_BRAM_MIN_FF_DELTA ?? "") || 0.05,
   reduceLutMinDelta: Number(process.env.NN2RTL_IMPROVE_REDUCE_LUT_MIN_DELTA ?? "") || 0.05,
+  reduceFfMinDelta: Number(process.env.NN2RTL_IMPROVE_REDUCE_FF_MIN_DELTA ?? "") || 0.10,
+  improveFmaxMinDelta: Number(process.env.NN2RTL_IMPROVE_FMAX_MIN_DELTA ?? "") || 0.05,
+  improveFmaxFloorMhz: Number(process.env.NN2RTL_IMPROVE_FMAX_FLOOR_MHZ ?? "") || 300,
+  // Below-floor baselines must close MEANINGFUL ground per attempt, not just
+  // clear the 5% relative bump. A 167 MHz module that only has to reach 175
+  // doesn't move the comparison-vs-deterministic-tool story. Require at
+  // least baseline + this many MHz, capped at the absolute floor.
+  improveFmaxMinAdditiveMhz:
+    Number(process.env.NN2RTL_IMPROVE_FMAX_MIN_ADDITIVE_MHZ ?? "") || 50,
 };
 
 export type ImprovementTargetResult = {
@@ -117,6 +143,8 @@ export type FoundryImproveInput = {
   baseline_metrics: ImprovementMetrics;
   baseline_vivado_report: SynthesisReport;
   layer_ir: LayerIR;
+  preloaded_rtl_patterns?: RtlKnowledgeDoc;
+  sequence_context?: ImproveSequenceContext[];
   previous_attempts: ImprovementAttemptRecord[];
   resume_session_id?: string;
   retrospector_advice?: RetrospectorAdvice;
@@ -135,6 +163,7 @@ export type ImprovementRetrospectorInput = {
   original_module: VerilogModule;
   baseline_metrics: ImprovementMetrics;
   attempts: ImprovementAttemptRecord[];
+  sequence_context?: ImproveSequenceContext[];
 };
 
 export type ImproveRuntime = Pick<OrchestratorRuntime, "now" | "queryFn" | "assayerFn" | "synthesisFn"> & {
@@ -172,18 +201,96 @@ export type ImproveResult = {
   retrospector_advice?: RetrospectorAdvice;
 };
 
+export type ImproveSequenceStepSummary = {
+  target: ImprovementTarget;
+  success: boolean;
+  final_action: ImproveResult["final_action"];
+  report_path: string;
+  error?: string;
+};
+
+export type ImproveSequenceContext = {
+  target: ImprovementTarget;
+  report_path: string;
+  final_action: ImproveResult["final_action"];
+  metrics?: ImprovementMetrics;
+  verdict?: ImprovementVerdict;
+};
+
+export type ImproveSequenceResult = ImproveResult & {
+  sequence_steps: ImproveSequenceStepSummary[];
+  requested_targets: ImprovementTarget[];
+  completed_targets: ImprovementTarget[];
+  failed_targets: ImprovementTarget[];
+  unattempted_targets: ImprovementTarget[];
+  remaining_targets: ImprovementTarget[];
+  partial_success: boolean;
+  overall_success: boolean;
+};
+
 export type RunImproveOptions = {
   targets: ImprovementTarget[];
   keepReference?: boolean;
   runtime?: ImproveRuntimeOverrides;
   paths?: Partial<ImprovePaths>;
   checkerConfig?: Partial<ImprovementCheckerConfig>;
+  sequenceContext?: ImproveSequenceContext[];
 };
 
 export type ImproveCliArgs = {
   moduleId: string;
   targets: ImprovementTarget[];
   keepReference: boolean;
+};
+
+export const IMPROVE_SWEEP_PRESETS = [
+  "ppa",
+  "ppa-no-dsp",
+  "use-dsp",
+  "reduce-lut",
+  "reduce-ff",
+  "improve-fmax",
+] as const;
+
+export type ImproveSweepPreset = typeof IMPROVE_SWEEP_PRESETS[number];
+
+export type ImproveSweepRecommendation = {
+  module_id: string;
+  op_type: string;
+  targets: ImprovementTarget[];
+  priority: number;
+  reasons: string[];
+  metrics: ImprovementMetrics;
+  num_weights: number;
+};
+
+export type ImproveSweepPlan = {
+  generated_at: string;
+  preset: ImproveSweepPreset;
+  recommendations: ImproveSweepRecommendation[];
+  skipped: Array<{ module_id: string; reason: string }>;
+};
+
+export type ImproveSweepResult = {
+  plan: ImproveSweepPlan;
+  ran: boolean;
+  keep_reference: boolean;
+  results: Array<{
+    module_id: string;
+    targets: ImprovementTarget[];
+    success: boolean;
+    final_action: ImproveResult["final_action"];
+    report_path: string;
+    error?: string;
+  }>;
+  report_path: string;
+};
+
+export type ImproveSweepCliArgs = {
+  preset: ImproveSweepPreset;
+  run: boolean;
+  keepReference: boolean;
+  maxModules?: number;
 };
 
 function toOutputFormat(schema: z.ZodType): OutputFormat {
@@ -193,11 +300,10 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
   };
 }
 
-// Improve Foundry SHOULD emit metadata only and persist `verilog_source`
-// via `mcp__nn2rtl-tools__write_verilog`. In practice Opus has a strong
-// prior from `foundry.md` to inline the source in the final JSON, and
-// even with the addendum it sometimes does that anyway. So the schema
-// accepts BOTH shapes:
+// Improve Foundry SHOULD persist `verilog_source` via
+// `mcp__nn2rtl-tools__write_verilog`, but the improve pipeline also accepts an
+// inline final JSON source as a resilient fallback. So the schema accepts BOTH
+// shapes:
 //   - metadata-only: `{module_id, spec_hash, generated_by, attempt}`
 //   - full:          `{module_id, spec_hash, verilog_source, generated_by, attempt}`
 // The orchestrator's hydrate step then either reads the .v from disk
@@ -246,9 +352,26 @@ function improvementStamp(date: Date): string {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
+function stripMarkdownFrontmatter(markdown: string): string {
+  if (!markdown.startsWith("---\n")) return markdown;
+  const end = markdown.indexOf("\n---", 4);
+  if (end === -1) return markdown;
+  return markdown.slice(end + "\n---".length).replace(/^\r?\n/, "");
+}
+
+async function loadImproveFoundrySystemPrompt(): Promise<string> {
+  return stripMarkdownFrontmatter(await readFile(improveFoundryPromptPath, "utf8"));
+}
+
 function uniqueTargets(targets: ImprovementTarget[]): ImprovementTarget[] {
-  const requested = new Set(targets);
-  return IMPROVEMENT_TARGETS.filter((target) => requested.has(target));
+  const seen = new Set<ImprovementTarget>();
+  const out: ImprovementTarget[] = [];
+  for (const target of targets) {
+    if (seen.has(target)) continue;
+    seen.add(target);
+    out.push(target);
+  }
+  return out;
 }
 
 export function parseImprovementTargets(raw: string): ImprovementTarget[] {
@@ -303,6 +426,62 @@ export function parseImproveCliArgs(argv: string[]): ImproveCliArgs {
   return { moduleId: positional[0], targets, keepReference };
 }
 
+export function parseImproveSweepCliArgs(argv: string[]): ImproveSweepCliArgs {
+  let preset: ImproveSweepPreset = "ppa";
+  let run = false;
+  let keepReference = true;
+  let maxModules: number | undefined;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--run") {
+      run = true;
+    } else if (arg === "--dry-run" || arg === "--plan") {
+      run = false;
+    } else if (arg === "--keep-reference") {
+      keepReference = true;
+    } else if (arg === "--replace") {
+      keepReference = false;
+    } else if (arg === "--preset") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--preset requires a sweep preset.");
+      }
+      if (!IMPROVE_SWEEP_PRESETS.includes(next as ImproveSweepPreset)) {
+        throw new Error(`Unknown sweep preset '${next}'. Allowed presets: ${IMPROVE_SWEEP_PRESETS.join(", ")}.`);
+      }
+      preset = next as ImproveSweepPreset;
+    } else if (arg.startsWith("--preset=")) {
+      const raw = arg.slice("--preset=".length);
+      if (!IMPROVE_SWEEP_PRESETS.includes(raw as ImproveSweepPreset)) {
+        throw new Error(`Unknown sweep preset '${raw}'. Allowed presets: ${IMPROVE_SWEEP_PRESETS.join(", ")}.`);
+      }
+      preset = raw as ImproveSweepPreset;
+    } else if (arg === "--max-modules") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--max-modules requires a positive integer.");
+      }
+      const parsed = Number(next);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`--max-modules must be a positive integer, got '${next}'.`);
+      }
+      maxModules = parsed;
+    } else if (arg.startsWith("--max-modules=")) {
+      const raw = arg.slice("--max-modules=".length);
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`--max-modules must be a positive integer, got '${raw}'.`);
+      }
+      maxModules = parsed;
+    } else {
+      throw new Error(`Unknown improve sweep flag '${arg}'.`);
+    }
+  }
+
+  return { preset, run, keepReference, maxModules };
+}
+
 function metricValue(metrics: ImprovementMetrics, target: ImprovementTarget): number | undefined {
   switch (target) {
     case "use-dsp":
@@ -311,6 +490,10 @@ function metricValue(metrics: ImprovementMetrics, target: ImprovementTarget): nu
       return metrics.bram;
     case "reduce-lut":
       return metrics.lut;
+    case "reduce-ff":
+      return metrics.ff;
+    case "improve-fmax":
+      return metrics.fmax_mhz;
     case "reduce-latency":
       return metrics.latency_cycles;
     case "increase-throughput":
@@ -354,14 +537,25 @@ export function evaluateImprovementTargets(
         };
       }
       case "use-bram": {
-        const satisfied = next.bram > 0;
+        const requiredBram = baseline.bram + config.useBramMinGain;
+        const requiredLut = baseline.lut * (1 - config.useBramMinLutDelta);
+        const requiredFf = baseline.ff * (1 - config.useBramMinFfDelta);
+        const bramGainSatisfied = next.bram >= requiredBram;
+        const lutDropSatisfied = next.lut < requiredLut;
+        const ffDropSatisfied = next.ff < requiredFf;
+        const satisfied = bramGainSatisfied && (lutDropSatisfied || ffDropSatisfied);
         return {
           target,
           satisfied,
           baseline_value: baseline.bram,
           new_value: next.bram,
-          required: "new.bram > 0",
-          reason: satisfied ? "BRAM usage target satisfied." : "new.bram is 0.",
+          required:
+            `new.bram >= baseline.bram + ${config.useBramMinGain} = ${requiredBram} ` +
+            `AND (new.lut < ${requiredLut} OR new.ff < ${requiredFf})`,
+          reason: satisfied
+            ? "BRAM usage target satisfied with meaningful LUT/FF reduction."
+            : `BRAM/PPA target missed: new.bram=${next.bram} (need >=${requiredBram}), ` +
+              `new.lut=${next.lut} (need <${requiredLut}), new.ff=${next.ff} (need <${requiredFf}).`,
         };
       }
       case "reduce-lut": {
@@ -374,6 +568,49 @@ export function evaluateImprovementTargets(
           new_value: next.lut,
           required: `new.lut < baseline.lut * (1 - ${config.reduceLutMinDelta}) = ${required}`,
           reason: satisfied ? "LUT reduction target satisfied." : `new.lut=${next.lut} is not below ${required}.`,
+        };
+      }
+      case "reduce-ff": {
+        const required = baseline.ff * (1 - config.reduceFfMinDelta);
+        const satisfied = next.ff < required;
+        return {
+          target,
+          satisfied,
+          baseline_value: baseline.ff,
+          new_value: next.ff,
+          required: `new.ff < baseline.ff * (1 - ${config.reduceFfMinDelta}) = ${required}`,
+          reason: satisfied ? "FF reduction target satisfied." : `new.ff=${next.ff} is not below ${required}.`,
+        };
+      }
+      case "improve-fmax": {
+        // Two floors, take the stricter:
+        //   relative = baseline * (1 + delta)         (always-on percentage bump)
+        //   additive = min(floor, baseline + addMhz)  (meaningful absolute jump,
+        //                                              capped at the absolute
+        //                                              quality floor)
+        // required = max(relative, additive)
+        // For an already-above-floor baseline (e.g. 350 MHz), `additive`
+        // collapses to `floor` (= 300) which is <= `relative`, so the rule
+        // reduces to the pure relative bump. For a below-floor baseline
+        // (e.g. 167 MHz, addMhz=50, floor=300), `additive` = 217 and
+        // `relative` = 175.35; max = 217, so the module has to close real
+        // ground per attempt instead of taking a 5% sliver.
+        const relative = baseline.fmax_mhz! * (1 + config.improveFmaxMinDelta);
+        const additive = Math.min(
+          config.improveFmaxFloorMhz,
+          baseline.fmax_mhz! + config.improveFmaxMinAdditiveMhz,
+        );
+        const required = Math.max(relative, additive);
+        const satisfied = next.fmax_mhz! > required;
+        return {
+          target,
+          satisfied,
+          baseline_value: baseline.fmax_mhz,
+          new_value: next.fmax_mhz,
+          required:
+            `new.fmax_mhz > max(baseline.fmax_mhz * (1 + ${config.improveFmaxMinDelta}), ` +
+            `min(${config.improveFmaxFloorMhz}, baseline.fmax_mhz + ${config.improveFmaxMinAdditiveMhz})) = ${required}`,
+          reason: satisfied ? "Fmax improvement target satisfied." : `new.fmax_mhz=${next.fmax_mhz} is not above ${required}.`,
         };
       }
       case "reduce-latency": {
@@ -410,8 +647,10 @@ export function evaluateImprovementTargets(
 function metricsFromReports(synthesis: SynthesisReport, verif?: VerifResult): ImprovementMetrics {
   return {
     lut: synthesis.lut_count,
+    ff: synthesis.ff_count,
     dsp: synthesis.dsp_count,
     bram: synthesis.bram18_equiv || synthesis.bram18_count + synthesis.bram36_count * 2,
+    fmax_mhz: synthesis.fmax_mhz,
     latency_cycles: verif?.timing_actual_cycles !== undefined && verif.timing_actual_cycles >= 0
       ? verif.timing_actual_cycles
       : undefined,
@@ -424,8 +663,10 @@ function metricsFromReports(synthesis: SynthesisReport, verif?: VerifResult): Im
 export const improvementMetricsSchema = z
   .object({
     lut: z.number().nonnegative(),
+    ff: z.number().nonnegative(),
     dsp: z.number().nonnegative(),
     bram: z.number().nonnegative(),
+    fmax_mhz: z.number().nonnegative().optional(),
     latency_cycles: z.number().nonnegative().optional(),
     ii: z.number().nonnegative().optional(),
   })
@@ -442,7 +683,6 @@ async function loadBaselineMetrics(paths: ImprovePaths, moduleId: string): Promi
   metrics: ImprovementMetrics;
 }> {
   const metricsPath = path.join(paths.reportsDir, `${moduleId}.metrics.json`);
-  const metrics = await readOptionalJson<ImprovementMetrics>(metricsPath, improvementMetricsSchema);
   const vivadoReport = await readJsonFile<SynthesisReport>(
     path.join(paths.reportsDir, `${moduleId}.vivado.json`),
     synthesisReportSchema,
@@ -451,10 +691,26 @@ async function loadBaselineMetrics(paths: ImprovePaths, moduleId: string): Promi
     path.join(paths.reportsDir, `${moduleId}.results.json`),
     verifResultSchema,
   ) ?? undefined;
+  const derived = metricsFromReports(vivadoReport, verifResult);
+  const metricsRaw = await readOptionalJson<Record<string, unknown>>(
+    metricsPath,
+    z.record(z.string(), z.unknown()),
+  );
+  const metrics: ImprovementMetrics = metricsRaw
+    ? {
+        lut: typeof metricsRaw.lut === "number" ? metricsRaw.lut : derived.lut,
+        ff: typeof metricsRaw.ff === "number" ? metricsRaw.ff : derived.ff,
+        dsp: typeof metricsRaw.dsp === "number" ? metricsRaw.dsp : derived.dsp,
+        bram: typeof metricsRaw.bram === "number" ? metricsRaw.bram : derived.bram,
+        fmax_mhz: typeof metricsRaw.fmax_mhz === "number" ? metricsRaw.fmax_mhz : derived.fmax_mhz,
+        latency_cycles: typeof metricsRaw.latency_cycles === "number" ? metricsRaw.latency_cycles : derived.latency_cycles,
+        ii: typeof metricsRaw.ii === "number" ? metricsRaw.ii : derived.ii,
+      }
+    : derived;
   return {
     vivadoReport,
     verifResult,
-    metrics: metrics ?? metricsFromReports(vivadoReport, verifResult),
+    metrics,
   };
 }
 
@@ -519,6 +775,219 @@ async function loadLayer(paths: ImprovePaths, moduleId: string): Promise<LayerIR
   return applyContractPlan(baseLayer, plan);
 }
 
+const DEFAULT_SWEEP_THRESHOLDS = {
+  bigConvMinWeights: parsePositiveIntEnv(process.env, "NN2RTL_SWEEP_BIG_CONV_MIN_WEIGHTS", 4096),
+  bigConvMinLut: parsePositiveIntEnv(process.env, "NN2RTL_SWEEP_BIG_CONV_MIN_LUT", 10_000),
+  reduceLutMin: parsePositiveIntEnv(process.env, "NN2RTL_SWEEP_REDUCE_LUT_MIN", 100_000),
+  reduceFfMin: parsePositiveIntEnv(process.env, "NN2RTL_SWEEP_REDUCE_FF_MIN", 100_000),
+  reduceFfAddMin: parsePositiveIntEnv(process.env, "NN2RTL_SWEEP_REDUCE_FF_ADD_MIN", 20_000),
+  fmaxBelowMhz: Number(process.env.NN2RTL_SWEEP_FMAX_BELOW_MHZ ?? "") || 220,
+} as const;
+
+function presetIncludesTarget(preset: ImproveSweepPreset, target: ImprovementTarget): boolean {
+  if (preset === "ppa") return true;
+  // ppa-no-dsp: everything ppa would include, minus the (structurally hard
+  // and frequently unattainable on Foundry's default MAC ladder) use-dsp
+  // target. Useful when you want to harvest LUT/FF/Fmax wins without
+  // burning attempts on the absolute DSP>=8 threshold.
+  if (preset === "ppa-no-dsp") return target !== "use-dsp";
+  return preset === target;
+}
+
+function targetPriority(target: ImprovementTarget): number {
+  switch (target) {
+    case "use-dsp":
+      return 1;
+    case "reduce-lut":
+      return 2;
+    case "reduce-ff":
+      return 3;
+    case "improve-fmax":
+      return 4;
+    case "use-bram":
+      return 5;
+    case "reduce-latency":
+      return 6;
+    case "increase-throughput":
+      return 7;
+  }
+}
+
+function recommendationPriority(targets: ImprovementTarget[]): number {
+  return Math.min(...targets.map(targetPriority));
+}
+
+function buildRecommendationForLayer(
+  layer: LayerIR,
+  metrics: ImprovementMetrics,
+  preset: ImproveSweepPreset,
+): ImproveSweepRecommendation | null {
+  const targets: ImprovementTarget[] = [];
+  const reasons: string[] = [];
+
+  const isBigConv =
+    layer.op_type === "conv2d" &&
+    metrics.dsp < DEFAULT_IMPROVEMENT_CHECKER_CONFIG.useDspThresholdMin &&
+    ((layer.num_weights ?? 0) >= DEFAULT_SWEEP_THRESHOLDS.bigConvMinWeights ||
+      metrics.lut >= DEFAULT_SWEEP_THRESHOLDS.bigConvMinLut);
+  if (presetIncludesTarget(preset, "use-dsp") && isBigConv) {
+    targets.push("use-dsp");
+    reasons.push(
+      `conv2d uses ${metrics.dsp} DSPs with ${layer.num_weights ?? 0} weights / ${metrics.lut} LUTs; candidate for DSP-parallel MAC rewrite.`,
+    );
+  }
+
+  if (presetIncludesTarget(preset, "reduce-lut") && metrics.lut >= DEFAULT_SWEEP_THRESHOLDS.reduceLutMin) {
+    targets.push("reduce-lut");
+    reasons.push(`LUT count ${metrics.lut} >= sweep threshold ${DEFAULT_SWEEP_THRESHOLDS.reduceLutMin}.`);
+  }
+
+  const ffThreshold = layer.op_type === "add"
+    ? DEFAULT_SWEEP_THRESHOLDS.reduceFfAddMin
+    : DEFAULT_SWEEP_THRESHOLDS.reduceFfMin;
+  if (presetIncludesTarget(preset, "reduce-ff") && metrics.ff >= ffThreshold) {
+    targets.push("reduce-ff");
+    reasons.push(`FF count ${metrics.ff} >= sweep threshold ${ffThreshold}.`);
+  }
+
+  if (
+    presetIncludesTarget(preset, "improve-fmax") &&
+    metrics.fmax_mhz !== undefined &&
+    metrics.fmax_mhz > 0 &&
+    metrics.fmax_mhz < DEFAULT_SWEEP_THRESHOLDS.fmaxBelowMhz
+  ) {
+    targets.push("improve-fmax");
+    reasons.push(`Fmax ${metrics.fmax_mhz.toFixed(2)} MHz < sweep threshold ${DEFAULT_SWEEP_THRESHOLDS.fmaxBelowMhz} MHz.`);
+  }
+
+  const unique = uniqueTargets(targets);
+  if (unique.length === 0) return null;
+  return {
+    module_id: layer.module_id,
+    op_type: layer.op_type,
+    targets: unique,
+    priority: recommendationPriority(unique),
+    reasons,
+    metrics,
+    num_weights: layer.num_weights ?? 0,
+  };
+}
+
+export async function buildImproveSweepPlan(input: {
+  preset?: ImproveSweepPreset;
+  maxModules?: number;
+  paths?: Partial<ImprovePaths>;
+  runtime?: Pick<ImproveRuntime, "now">;
+} = {}): Promise<ImproveSweepPlan> {
+  const preset = input.preset ?? "ppa";
+  const paths = resolveImprovePaths(input.paths);
+  const now = input.runtime?.now ?? (() => new Date());
+  const pipelineIr = await readJsonFile<PipelineIR>(
+    path.join(paths.outputRoot, "layer_ir.json"),
+    pipelineIrSchema,
+  );
+  const recommendations: ImproveSweepRecommendation[] = [];
+  const skipped: ImproveSweepPlan["skipped"] = [];
+  for (const layer of pipelineIr.layers) {
+    let baseline: Awaited<ReturnType<typeof loadBaselineMetrics>>;
+    try {
+      baseline = await loadBaselineMetrics(paths, layer.module_id);
+    } catch (error: unknown) {
+      skipped.push({
+        module_id: layer.module_id,
+        reason: `missing or invalid baseline reports: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+    if (!baseline.vivadoReport.success || !baseline.vivadoReport.timing_met) {
+      skipped.push({
+        module_id: layer.module_id,
+        reason: "baseline Vivado report is not passing",
+      });
+      continue;
+    }
+    const recommendation = buildRecommendationForLayer(layer, baseline.metrics, preset);
+    if (recommendation) {
+      recommendations.push(recommendation);
+    }
+  }
+  recommendations.sort((a, b) => {
+    const priorityDelta = a.priority - b.priority;
+    if (priorityDelta !== 0) return priorityDelta;
+    const targetDelta = b.targets.length - a.targets.length;
+    if (targetDelta !== 0) return targetDelta;
+    const lutDelta = b.metrics.lut - a.metrics.lut;
+    if (lutDelta !== 0) return lutDelta;
+    return a.module_id.localeCompare(b.module_id);
+  });
+  return {
+    generated_at: now().toISOString(),
+    preset,
+    recommendations: input.maxModules ? recommendations.slice(0, input.maxModules) : recommendations,
+    skipped,
+  };
+}
+
+export async function runImproveSweep(input: {
+  preset?: ImproveSweepPreset;
+  run?: boolean;
+  keepReference?: boolean;
+  maxModules?: number;
+  paths?: Partial<ImprovePaths>;
+  checkerConfig?: Partial<ImprovementCheckerConfig>;
+  runtime?: ImproveRuntimeOverrides;
+} = {}): Promise<ImproveSweepResult> {
+  const paths = resolveImprovePaths(input.paths);
+  const runtime = createImproveRuntime(input.runtime, paths);
+  const plan = await buildImproveSweepPlan({
+    preset: input.preset,
+    maxModules: input.maxModules,
+    paths,
+    runtime,
+  });
+  const keepReference = input.keepReference ?? true;
+  const results: ImproveSweepResult["results"] = [];
+  if (input.run === true) {
+    for (const item of plan.recommendations) {
+      try {
+        const result = await runImproveSequence(item.module_id, {
+          targets: item.targets,
+          keepReference,
+          paths,
+          checkerConfig: input.checkerConfig,
+          runtime: input.runtime,
+        });
+        results.push({
+          module_id: item.module_id,
+          targets: result.targets,
+          success: result.success,
+          final_action: result.final_action,
+          report_path: result.report_path,
+        });
+      } catch (error: unknown) {
+        results.push({
+          module_id: item.module_id,
+          targets: item.targets,
+          success: false,
+          final_action: "no-change",
+          report_path: "",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  const report: Omit<ImproveSweepResult, "report_path"> = {
+    plan,
+    ran: input.run === true,
+    keep_reference: keepReference,
+    results,
+  };
+  const reportPath = path.join(paths.reportsDir, `sweep_improve_${improvementStamp(runtime.now())}.json`);
+  await writeJsonFile(reportPath, { ...report, report_path: reportPath });
+  return { ...report, report_path: reportPath };
+}
+
 function extractSessionId(messages: SDKMessage[] | undefined, result?: SDKResultMessage): string | null {
   const candidates: unknown[] = [...(messages ?? [])].reverse();
   if (result) candidates.unshift(result);
@@ -561,14 +1030,18 @@ const TARGET_GUIDANCE: Record<ImprovementTarget, string> = {
     "  - Adding lanes increases LUT fan-out around the adder tree. If you also have `reduce-lut` in the targets, balance carefully — banking too aggressively trades DSPs for LUTs.",
   ].join("\n"),
   "use-bram": [
-    "GOAL: store weight (and any large constant) memories in BRAM18/BRAM36 instead of distributed LUT-RAM.",
+    "GOAL: store the actual weight / large-constant memories in BRAM18/BRAM36 instead of distributed LUT-RAM, and produce a measurable PPA win. Token BRAM allocations that leave LUT/FF essentially unchanged are rejected.",
     "HOW:",
+    "  - First identify which large arrays dominate LUT-as-memory / scalar ROM cost in the original RTL. Move THOSE arrays to BRAM-backed synchronous memories; do not create a small unused or duplicate BRAM just to make `bram18_equiv` nonzero.",
     "  - Annotate the array on its declaration line: `(* rom_style = \"block\", ram_style = \"block\" *) reg signed [7:0] weights [0:OC*K_TOTAL-1];`. The attribute MUST sit immediately before the `reg` declaration.",
     "  - Reads MUST be synchronous: `reg signed [7:0] w_q; always @(posedge clk) w_q <= weights[addr];`. Async reads (`assign w = weights[addr];`) force LUTRAM no matter what attribute is set.",
     "  - Initialize with `$readmemh` inside an `initial begin ... end` block. Element-by-element assignment in initial blocks (`weights[0] = ..; weights[1] = ..;`) defeats Vivado's BRAM/ROM init pattern matching.",
+    "  - If a synchronous BRAM read adds a cycle, retime the address/control pipeline so `valid_out` still appears at exactly the LayerIR `pipeline_latency_cycles`. The checker treats a pure latency slip as a failure even when values match.",
+    "  - A good use-bram attempt should reduce LUT or FF materially while increasing BRAM. If your rewrite only changes BRAM by a few blocks with ~0% LUT/FF movement, it is the wrong approach.",
     "PITFALLS:",
     "  - Adding a registered read stage shifts the MAC schedule by one cycle; verify the FSM still drives `valid_out` after exactly `pipeline_latency_cycles` cycles.",
     "  - BRAM has fixed port counts. A weight memory read by N parallel MAC lanes either needs N replicated BRAMs (depth/width tradeoff) or a banked layout — see `weight_bank_paths` in the LayerIR.",
+    "  - Do not keep the old LUT ROM live beside the new BRAM ROM. If both copies remain addressable, Vivado may preserve both and the improvement becomes a token BRAM pass instead of a real area reduction.",
   ].join("\n"),
   "reduce-lut": [
     "GOAL: reduce CLB LUT count by at least the configured delta (`new.lut < baseline.lut * (1 - reduceLutMinDelta)`).",
@@ -579,6 +1052,28 @@ const TARGET_GUIDANCE: Record<ImprovementTarget, string> = {
     "PITFALLS:",
     "  - Do not eliminate logic that's required by the contract. The Verilator gate runs first; functional regressions are caught before the LUT count is even read.",
     "  - LUT count includes `LUT as Logic` AND `LUT as Memory` rows — moving distributed RAM to BRAM moves the count from `LUT as Memory` to BRAM18 only if the read is registered (see `use-bram`).",
+  ].join("\n"),
+  "reduce-ff": [
+    "GOAL: reduce flip-flop count by at least the configured delta (`new.ff < baseline.ff * (1 - reduceFfMinDelta)`).",
+    "HOW:",
+    "  - Move large activation or staging buffers out of scalar registers. Vivado infers memory most reliably from one-dimensional unpacked arrays with a packed-wide word: `reg [WORD_BITS-1:0] mem [0:DEPTH-1]`.",
+    "  - For line buffers, flatten bank/beat dimensions into one address (`addr = pixel_bank_addr * IN_BEATS + beat`) rather than declaring 2D unpacked memories like `[pixel][beat]`, which often map to FFs.",
+    "  - Remove write-only diagnostic windows or dummy structural arrays. If a buffer is not read by the datapath, it should not exist in the improved RTL.",
+    "  - For residual/add pipelines, stream or bank partial state instead of holding a full channel vector in registers when the interface is already tiled.",
+    "PITFALLS:",
+    "  - Do not trade the FF explosion for a single monolithic Verilog variable over Vivado's size limit. Bank large memories and keep each variable comfortably below the tool cap.",
+    "  - A BRAM/LUTRAM read usually adds a registered cycle. Preserve the verified valid_out timing contract or adjust only if the goldens support the changed latency.",
+  ].join("\n"),
+  "improve-fmax": [
+    "GOAL: improve post-synth Fmax by at least the configured delta, with a practical floor target for slow modules.",
+    "HOW:",
+    "  - Pipeline long multiply/shift/saturate chains. Register multiplier outputs, scaling results, and saturation decisions separately when WNS is dominated by arithmetic.",
+    "  - Break high-fanout control signals by registering local enables in the state that consumes them.",
+    "  - Replace very wide combinational muxes with registered memory reads or a balanced two-stage mux tree.",
+    "  - Keep the public latency contract in mind: extra internal registers are allowed only if the output timing remains bit/cycle exact against Verilator.",
+    "PITFALLS:",
+    "  - Do not reduce critical path by duplicating huge datapaths unless LUT/FF usage remains sane. The checker still requires Vivado timing to pass and area regressions will show up in the report.",
+    "  - Fmax is a timing result, not a cycle-count result. Do not pursue `reduce-latency` changes unless that target is explicitly requested.",
   ].join("\n"),
   "reduce-latency": [
     "GOAL: reduce cycles-to-first-output (`new.latency_cycles < baseline.latency_cycles`).",
@@ -614,9 +1109,13 @@ const TARGETS_COMMON_GUIDANCE = [
 function summarizeBaselineMetrics(metrics: ImprovementMetrics): string {
   const parts = [
     `LUT: ${metrics.lut}`,
+    `FF: ${metrics.ff}`,
     `DSP: ${metrics.dsp}`,
     `BRAM18-equivalent: ${metrics.bram}`,
   ];
+  if (metrics.fmax_mhz !== undefined) {
+    parts.push(`fmax_mhz: ${metrics.fmax_mhz}`);
+  }
   if (metrics.latency_cycles !== undefined) {
     parts.push(`latency_cycles: ${metrics.latency_cycles}`);
   }
@@ -642,12 +1141,36 @@ function checkerRulesForTargets(
         break;
       }
       case "use-bram":
-        lines.push(`  - use-bram: pass iff new.bram18_equiv > 0 (baseline = ${baseline.bram}).`);
+        lines.push(
+          `  - use-bram: pass iff new.bram18_equiv >= ${baseline.bram + config.useBramMinGain} ` +
+          `(baseline ${baseline.bram} + ${config.useBramMinGain}) AND either ` +
+          `new.lut < ${(baseline.lut * (1 - config.useBramMinLutDelta)).toFixed(0)} ` +
+          `or new.ff < ${(baseline.ff * (1 - config.useBramMinFfDelta)).toFixed(0)}. ` +
+          "Token BRAM allocations with no meaningful LUT/FF reduction fail.",
+        );
         break;
       case "reduce-lut": {
         const required = baseline.lut * (1 - config.reduceLutMinDelta);
         lines.push(
           `  - reduce-lut: pass iff new.lut < ${required.toFixed(0)} (= baseline.lut ${baseline.lut} * (1 - ${config.reduceLutMinDelta})).`,
+        );
+        break;
+      }
+      case "reduce-ff": {
+        const required = baseline.ff * (1 - config.reduceFfMinDelta);
+        lines.push(
+          `  - reduce-ff: pass iff new.ff < ${required.toFixed(0)} (= baseline.ff ${baseline.ff} * (1 - ${config.reduceFfMinDelta})).`,
+        );
+        break;
+      }
+      case "improve-fmax": {
+        const required = baseline.fmax_mhz !== undefined
+          ? baseline.fmax_mhz < config.improveFmaxFloorMhz
+            ? Math.min(config.improveFmaxFloorMhz, baseline.fmax_mhz * (1 + config.improveFmaxMinDelta))
+            : baseline.fmax_mhz * (1 + config.improveFmaxMinDelta)
+          : undefined;
+        lines.push(
+          `  - improve-fmax: pass iff new.fmax_mhz > ${required?.toFixed(2) ?? "(missing — baseline Vivado report needs fmax_mhz)"} (= relative +${config.improveFmaxMinDelta * 100}% with floor ${config.improveFmaxFloorMhz} MHz for slow modules).`,
         );
         break;
       }
@@ -699,7 +1222,7 @@ function summarizeAttemptForPrompt(attempt: ImprovementAttemptRecord): Record<st
   };
 }
 
-function buildFoundryImprovePrompt(
+export function buildFoundryImprovePrompt(
   input: FoundryImproveInput,
   config: ImprovementCheckerConfig = DEFAULT_IMPROVEMENT_CHECKER_CONFIG,
 ): string {
@@ -738,12 +1261,44 @@ function buildFoundryImprovePrompt(
     `clock_period_ns: ${input.layer_ir.clock_period_ns}`,
     `Baseline metrics: ${summarizeBaselineMetrics(input.baseline_metrics)}`,
     `Baseline Vivado: setup_wns_ns=${input.baseline_vivado_report.setup_wns_ns ?? input.baseline_vivado_report.wns_ns ?? "?"}, hold_wns_ns=${input.baseline_vivado_report.hold_wns_ns ?? "?"}, fmax_mhz=${input.baseline_vivado_report.fmax_mhz?.toFixed?.(2) ?? "?"}`,
+  ];
+
+  if (input.preloaded_rtl_patterns) {
+    sections.push(
+      "",
+      "== PRELOADED RTL KNOWLEDGE ==",
+      "The orchestrator fetched this deterministically for the current LayerIR/op/contract. Use it as local architectural guidance; do not spend a tool turn re-fetching it. Reference Verilog is intentionally omitted in improve mode; the ORIGINAL RTL below is the implementation source of truth.",
+      "",
+      "pattern_markdown:",
+      input.preloaded_rtl_patterns.pattern_markdown,
+    );
+    if (input.preloaded_rtl_patterns.license_notice) {
+      sections.push("", "license_notice:", input.preloaded_rtl_patterns.license_notice);
+    }
+  }
+
+  if (input.sequence_context && input.sequence_context.length > 0) {
+    sections.push(
+      "",
+      "== PRIOR SEQUENCE SUCCESSES (LOCKED) ==",
+      "This improve call is one step in a multi-target sequence. The ORIGINAL RTL below already includes these previously verified improvements. Preserve them; the sequence-level checker will re-check them after this step.",
+      JSON.stringify(input.sequence_context.map((step) => ({
+        target: step.target,
+        final_action: step.final_action,
+        metrics: step.metrics,
+        verdict: step.verdict,
+        report_path: step.report_path,
+      })), null, 2),
+    );
+  }
+
+  sections.push(
     "",
     "== ORIGINAL RTL (the source of truth — improve this) ==",
     "```verilog",
     input.original_module.verilog_source,
     "```",
-  ];
+  );
 
   if (input.previous_attempts.length > 0) {
     sections.push(
@@ -875,31 +1430,6 @@ async function hydrateImprovedModuleFromDisk(
   };
 }
 
-// Improve-mode addendum spliced onto the END of foundry.md's body. The
-// canonical Foundry contract (canonical port list, packed-channel bus
-// convention, INT8 quantization rules, scale-shift rounding mandate,
-// memory-inference hints, common bugs catalog, split-architecture rule
-// for spatial convs, invariant-marker policy, sign-extension warnings,
-// procedural-declaration scoping warnings, weights_packed_forbidden,
-// etc.) all still apply during improvement runs — Foundry must keep them
-// or the deterministic Verilator gate will fail. The addendum below adds
-// only the improve-specific output contract.
-const IMPROVE_MODE_PROMPT_ADDENDUM = [
-  "",
-  "---",
-  "",
-  "## Improvement-mode addendum",
-  "",
-  "You are running in QUALITY-IMPROVEMENT mode. The original RTL has already passed Verilator + Vivado on the configured target part; your job is to produce a functionally-equivalent variant that satisfies the per-target deterministic checker rules listed in the user prompt.",
-  "",
-  "Every rule in this system prompt about the canonical interface, INT8 quantization, scale-shift rounding, memory inference, the split-architecture for spatial convs, invariant markers, sign extension, and procedural declarations STILL APPLIES. Improvement does not waive correctness — Verilator runs first against the same goldens that pass the original, and any value mismatch fails the attempt instantly.",
-  "",
-  "Output / persistence contract for improvement runs (full call signatures are in the user prompt's OUTPUT CONTRACT section — read them):",
-  "- The improved RTL MUST reach disk through one of two paths: (A) call `mcp__nn2rtl-tools__write_verilog({ module: {...}, output_dir: \"output\" })` BEFORE returning, OR (B) inline the full `verilog_source` string in your final structured-output JSON. Path A is preferred (cheaper on output tokens). Returning ONLY metadata with NEITHER path is an empty turn and gets discarded.",
-  "- Use the same `module_id` as the original.",
-  "- The orchestrator does not have `Bash`, `Read`, or `Write` available to you for this turn. Everything you need (original RTL, baseline metrics, prior attempts, Retrospector advice on attempt 3) is embedded in the user prompt.",
-].join("\n");
-
 function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImproveInput, runtime: ImproveRuntime) => Promise<FoundryImproveResult> {
   return async function defaultFoundryImproveFn(
     input: FoundryImproveInput,
@@ -909,13 +1439,10 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
     let finalResult: SDKResultMessage | null = null;
     const agentTurnStartTime = runtime.now();
 
-    // Load the canonical Foundry agent definition (`nn2rtl-plugin/agents/foundry.md`)
-    // so improve-mode Foundry sees the same ~200-line system prompt the
-    // main pipeline gives it: canonical interface, packed-channel bus
-    // convention, INT8 quantization rules, scale-shift rounding, memory
-    // inference hints, common bugs catalog, etc. Without this, improve
-    // mode runs blind to the codebase's accumulated Verilog contract.
-    const foundryAgent = await loadPluginAgentDefinition("foundry");
+    // Improve mode uses a dedicated prompt instead of `foundry.md + addendum`.
+    // The normal generation prompt contains tool-reading and metadata-only
+    // instructions that are correct for fresh generation but confusing here.
+    const improveFoundryPrompt = await loadImproveFoundrySystemPrompt();
 
     for await (const message of runtime.queryFn({
       prompt: buildFoundryImprovePrompt(input),
@@ -925,7 +1452,7 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
-          append: `${foundryAgent.prompt}${IMPROVE_MODE_PROMPT_ADDENDUM}`,
+          append: improveFoundryPrompt,
         },
         // The agent needs `write_verilog` to persist the improved source;
         // everything else (Bash, Read, file Write) stays disabled to keep
@@ -958,6 +1485,7 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
         nowIso: agentTurnStartTime.toISOString(),
       });
       await appendToolUseAudits(improveAudits);
+      await appendForeignMcpToolWarnings(improveAudits);
       await appendRunLog({
         event: "improve_foundry_turn_audit",
         agent: "Foundry",
@@ -1028,7 +1556,7 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
 
 function buildImproveRetrospectorPrompt(input: ImprovementRetrospectorInput): string {
   const targets = uniqueTargets(input.targets);
-  return [
+  const sections = [
     "You are Retrospector for an RTL quality-improvement run.",
     "Two improvement attempts have failed against deterministic checker rules. Analyze the evidence and emit ONE advisory JSON object Foundry will see on its third attempt.",
     "",
@@ -1044,6 +1572,21 @@ function buildImproveRetrospectorPrompt(input: ImprovementRetrospectorInput): st
     "== EVIDENCE ==",
     `module_id: ${input.module_id}`,
     `Baseline metrics: ${summarizeBaselineMetrics(input.baseline_metrics)}`,
+  ];
+  if (input.sequence_context && input.sequence_context.length > 0) {
+    sections.push(
+      "",
+      "== PRIOR SEQUENCE SUCCESSES (MUST PRESERVE) ==",
+      "The current target is running after earlier sequence steps already passed. The original RTL shown below includes those changes. Your advice must preserve them while fixing the current failed target.",
+      JSON.stringify(input.sequence_context.map((step) => ({
+        target: step.target,
+        metrics: step.metrics,
+        verdict: step.verdict,
+        report_path: step.report_path,
+      })), null, 2),
+    );
+  }
+  sections.push(
     "",
     "Original passing RTL (FYI; do not re-derive):",
     "```verilog",
@@ -1057,7 +1600,8 @@ function buildImproveRetrospectorPrompt(input: ImprovementRetrospectorInput): st
     "Return EXACTLY this JSON object:",
     "  { \"analysis\": \"<concise reading of the two failures>\", \"suggestion\": \"<concrete, actionable next strategy>\" }",
     "No markdown, no commentary, no doc_fault flag (improve runs do not own knowledge docs).",
-  ].join("\n");
+  );
+  return sections.join("\n");
 }
 
 async function defaultImproveRetrospectorFn(
@@ -1266,7 +1810,22 @@ async function commitImprovedReference(input: {
   return referenceAbs;
 }
 
-async function writeImproveReport(paths: ImprovePaths, moduleId: string, targets: ImprovementTarget[], result: Omit<ImproveResult, "report_path">): Promise<string> {
+async function writeImproveReport(
+  paths: ImprovePaths,
+  moduleId: string,
+  targets: ImprovementTarget[],
+  result: Omit<ImproveResult, "report_path"> & Partial<Pick<
+    ImproveSequenceResult,
+    | "sequence_steps"
+    | "requested_targets"
+    | "completed_targets"
+    | "failed_targets"
+    | "unattempted_targets"
+    | "remaining_targets"
+    | "partial_success"
+    | "overall_success"
+  >>,
+): Promise<string> {
   const reportPath = path.join(paths.reportsDir, `improve_${sanitizePathPart(moduleId)}__${targetSlug(targets)}.json`);
   await writeJsonFile(reportPath, { ...result, report_path: reportPath });
   return reportPath;
@@ -1289,6 +1848,11 @@ export async function runImprove(
   const targets = uniqueTargets(options.targets);
   if (targets.length === 0) {
     throw new Error("runImprove requires at least one target.");
+  }
+  if (targets.length > 1) {
+    throw new Error(
+      "runImprove is a single-target primitive. Use runImproveSequence for multiple targets so each improvement runs on the previous improved RTL.",
+    );
   }
   // `reduce-latency` legitimately changes `pipeline_latency_cycles`. The
   // deterministic Verilator gate compares `timing_actual_cycles` against
@@ -1319,6 +1883,31 @@ export async function runImprove(
 
   const originalModule = await loadOriginalModule(paths, moduleId);
   const layer = await loadLayer(paths, moduleId);
+  let preloadedRtlPatterns: RtlKnowledgeDoc | undefined;
+  if (options.runtime?.foundryFn === undefined) {
+    try {
+      const loadedPatterns = await loadRetrospectorKnowledgeDoc(layer);
+      preloadedRtlPatterns = {
+        ...loadedPatterns,
+        reference_verilog: null,
+      };
+      await appendRunLog({
+        event: "improve_rtl_patterns_preloaded",
+        module_id: moduleId,
+        op_type: layer.op_type,
+        contract_id: layer.contract_id ?? "flat-bus",
+        pattern_markdown_chars: loadedPatterns.pattern_markdown.length,
+        reference_verilog_chars: 0,
+        reference_verilog_omitted: true,
+      });
+    } catch (error: unknown) {
+      await appendRunLog({
+        event: "improve_rtl_patterns_preload_failed",
+        module_id: moduleId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   const baseline = await loadBaselineMetrics(paths, moduleId);
   if (!baseline.vivadoReport.success || !baseline.vivadoReport.timing_met) {
     throw new Error(
@@ -1380,6 +1969,7 @@ export async function runImprove(
           original_module: originalModule,
           baseline_metrics: baseline.metrics,
           attempts,
+          sequence_context: options.sequenceContext,
         },
         runtime,
       );
@@ -1394,6 +1984,8 @@ export async function runImprove(
         baseline_metrics: baseline.metrics,
         baseline_vivado_report: baseline.vivadoReport,
         layer_ir: layer,
+        preloaded_rtl_patterns: preloadedRtlPatterns,
+        sequence_context: options.sequenceContext,
         previous_attempts: attempts,
         resume_session_id: resumeSessionId,
         retrospector_advice: attemptIndex === 3 ? retrospectorAdvice : undefined,
@@ -1538,9 +2130,285 @@ export async function runImprove(
   };
 }
 
+async function snapshotCanonicalFiles(paths: ImprovePaths, moduleId: string): Promise<Map<string, string>> {
+  const files = [
+    path.join(paths.rtlDir, `${moduleId}.v`),
+    path.join(paths.rtlDir, `${moduleId}.meta.json`),
+    path.join(paths.reportsDir, `${moduleId}.vivado.json`),
+    path.join(paths.reportsDir, `${moduleId}.results.json`),
+    path.join(paths.reportsDir, `${moduleId}.metrics.json`),
+  ];
+  const snapshots = new Map<string, string>();
+  for (const filePath of files) {
+    if (await pathExists(filePath)) {
+      snapshots.set(filePath, await readFile(filePath, "utf8"));
+    }
+  }
+  return snapshots;
+}
+
+async function restoreCanonicalFiles(snapshots: Map<string, string>): Promise<void> {
+  for (const [filePath, snapshot] of snapshots) {
+    await writeFile(filePath, snapshot, "utf8");
+  }
+}
+
+function cloneAttemptsWithoutMessages(attempts: ImprovementAttemptRecord[]): ImprovementAttemptRecord[] {
+  return attempts.map((attempt, index) => ({
+    ...attempt,
+    attempt_index: index + 1,
+    messages: undefined,
+  }));
+}
+
+function successfulAttemptFromResult(result: ImproveResult): ImprovementAttemptRecord | undefined {
+  return result.attempts.find((attempt) => attempt.verdict?.overall === true && attempt.metrics !== undefined);
+}
+
+export async function runImproveSequence(
+  moduleId: string,
+  options: RunImproveOptions,
+): Promise<ImproveSequenceResult> {
+  const targets = uniqueTargets(options.targets);
+  if (targets.length === 0) {
+    throw new Error("runImproveSequence requires at least one target.");
+  }
+  if (targets.length === 1) {
+    const single = await runImprove(moduleId, {
+      ...options,
+      targets,
+    });
+    return {
+      ...single,
+      sequence_steps: [{
+        target: targets[0],
+        success: single.success,
+        final_action: single.final_action,
+        report_path: single.report_path,
+      }],
+      requested_targets: targets,
+      completed_targets: single.success ? targets : [],
+      failed_targets: single.success ? [] : targets,
+      unattempted_targets: [],
+      remaining_targets: single.success ? [] : targets,
+      partial_success: false,
+      overall_success: single.success,
+    };
+  }
+
+  const paths = resolveImprovePaths(options.paths);
+  const runtime = createImproveRuntime(options.runtime, paths);
+  const checkerConfig = {
+    ...DEFAULT_IMPROVEMENT_CHECKER_CONFIG,
+    ...options.checkerConfig,
+  };
+  const originalSnapshots = await snapshotCanonicalFiles(paths, moduleId);
+  const originalBaseline = await loadBaselineMetrics(paths, moduleId);
+  const sequenceStartedAt = runtime.now();
+  const steps: ImproveResult[] = [];
+  const sequenceSteps: ImproveSequenceStepSummary[] = [];
+  const sequenceContext: ImproveSequenceContext[] = [];
+  let bestTargets: ImprovementTarget[] = [];
+  let bestSnapshots: Map<string, string> | null = null;
+  let bestMetrics: ImprovementMetrics | undefined;
+  let bestVerdict: ImprovementVerdict | undefined;
+  let finalVerdict: ImprovementVerdict | undefined;
+  let improvedReferencePath: string | undefined;
+  let committedModulePath: string | undefined;
+  let archivedOriginalPath: string | undefined;
+  let finalAction: ImproveResult["final_action"] = "no-change";
+  let success = false;
+  let shouldRestoreOriginal = true;
+
+  try {
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index];
+      const stepNow = new Date(sequenceStartedAt.getTime() + index * 1000);
+      let step: ImproveResult;
+      try {
+        step = await runImprove(moduleId, {
+          targets: [target],
+          keepReference: false,
+          paths,
+          checkerConfig,
+          runtime: {
+            ...options.runtime,
+            now: () => stepNow,
+          },
+          sequenceContext: [...sequenceContext],
+        });
+      } catch (error: unknown) {
+        await appendRunLog({
+          event: "improve_sequence_step_error",
+          module_id: moduleId,
+          target,
+          requested_targets: targets,
+          accepted_targets: bestTargets,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await restoreCanonicalFiles(bestSnapshots ?? originalSnapshots);
+        sequenceSteps.push({
+          target,
+          success: false,
+          final_action: "no-change",
+          report_path: "",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      steps.push(step);
+      const stepSummary: ImproveSequenceStepSummary = {
+        target,
+        success: false,
+        final_action: step.final_action,
+        report_path: step.report_path,
+      };
+      if (!step.success) {
+        await restoreCanonicalFiles(bestSnapshots ?? originalSnapshots);
+        sequenceSteps.push(stepSummary);
+        continue;
+      }
+      const successfulAttempt = successfulAttemptFromResult(step);
+      const candidateTargets = [...bestTargets, target];
+      const candidateBaseline = await loadBaselineMetrics(paths, moduleId);
+      const candidateVerdict = evaluateImprovementTargets(
+        originalBaseline.metrics,
+        candidateBaseline.metrics,
+        candidateTargets,
+        checkerConfig,
+      );
+      if (!candidateVerdict.overall) {
+        await appendRunLog({
+          event: "improve_sequence_prefix_regressed",
+          module_id: moduleId,
+          requested_targets: targets,
+          candidate_targets: candidateTargets,
+          final_verdict: candidateVerdict,
+          step_report_path: step.report_path,
+        });
+        await restoreCanonicalFiles(bestSnapshots ?? originalSnapshots);
+        sequenceSteps.push(stepSummary);
+        continue;
+      }
+      sequenceContext.push({
+        target,
+        report_path: step.report_path,
+        final_action: step.final_action,
+        metrics: successfulAttempt?.metrics,
+        verdict: step.final_verdict,
+      });
+      bestTargets = candidateTargets;
+      bestSnapshots = await snapshotCanonicalFiles(paths, moduleId);
+      bestMetrics = candidateBaseline.metrics;
+      bestVerdict = candidateVerdict;
+      archivedOriginalPath ??= step.archived_original_path;
+      committedModulePath = step.committed_module_path ?? committedModulePath;
+      stepSummary.success = true;
+      sequenceSteps.push(stepSummary);
+    }
+
+    if (bestTargets.length > 0 && bestSnapshots && bestMetrics && bestVerdict) {
+      await restoreCanonicalFiles(bestSnapshots);
+      finalVerdict = bestVerdict;
+      success = true;
+      if (options.keepReference) {
+        const finalModule = await loadOriginalModule(paths, moduleId);
+        const layer = await loadLayer(paths, moduleId);
+        improvedReferencePath = await commitImprovedReference({
+          paths,
+          moduleId,
+          module: finalModule,
+          layer,
+          targets: bestTargets,
+          metrics: bestMetrics,
+          verdict: bestVerdict,
+          runtime,
+        });
+        finalAction = "kept-as-variant";
+        shouldRestoreOriginal = true;
+      } else {
+        finalAction = "replaced";
+        shouldRestoreOriginal = false;
+      }
+    }
+  } finally {
+    if (shouldRestoreOriginal) {
+      await restoreCanonicalFiles(originalSnapshots);
+    }
+  }
+
+  const attempts = cloneAttemptsWithoutMessages(steps.flatMap((step) => step.attempts));
+  const retrospectorAdvice = [...steps]
+    .reverse()
+    .find((step) => step.retrospector_advice !== undefined)
+    ?.retrospector_advice;
+  const attemptedTargets = sequenceSteps.map((step) => step.target);
+  const reportTargets = success ? bestTargets : targets;
+  const completedTargets = success ? bestTargets : [];
+  const failedTargets = targets.filter(
+    (target) => attemptedTargets.includes(target) && !completedTargets.includes(target),
+  );
+  const unattemptedTargets = targets.filter((target) => !attemptedTargets.includes(target));
+  const remainingTargets = [...failedTargets, ...unattemptedTargets];
+  const overallSuccess = completedTargets.length === targets.length;
+  const reportWithoutPath: Omit<ImproveResult, "report_path"> & Pick<
+    ImproveSequenceResult,
+    | "sequence_steps"
+    | "requested_targets"
+    | "completed_targets"
+    | "failed_targets"
+    | "unattempted_targets"
+    | "remaining_targets"
+    | "partial_success"
+    | "overall_success"
+  > = {
+    module_id: moduleId,
+    targets: reportTargets,
+    final_action: finalAction,
+    success,
+    baseline_metrics: originalBaseline.metrics,
+    attempts,
+    final_verdict: finalVerdict ?? steps.at(-1)?.final_verdict,
+    committed_module_path: success && finalAction === "replaced" ? committedModulePath : undefined,
+    archived_original_path: success && finalAction === "replaced" ? archivedOriginalPath : undefined,
+    improved_reference_path: improvedReferencePath,
+    retrospector_advice: retrospectorAdvice,
+    sequence_steps: sequenceSteps,
+    requested_targets: targets,
+    completed_targets: completedTargets,
+    failed_targets: failedTargets,
+    unattempted_targets: unattemptedTargets,
+    remaining_targets: remainingTargets,
+    partial_success: success && !overallSuccess,
+    overall_success: overallSuccess,
+  };
+  const reportPath = await writeImproveReport(paths, moduleId, reportTargets, reportWithoutPath);
+  return {
+    ...reportWithoutPath,
+    report_path: reportPath,
+  };
+}
+
 export async function runImproveCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === "sweep") {
+    const cli = parseImproveSweepCliArgs(argv.slice(1));
+    const result = await runImproveSweep({
+      preset: cli.preset,
+      run: cli.run,
+      keepReference: cli.keepReference,
+      maxModules: cli.maxModules,
+    });
+    console.log(
+      `Improve sweep ${result.plan.preset}: ${result.plan.recommendations.length} recommendation(s); ` +
+        `${result.ran ? `ran ${result.results.length}` : "dry run"}; report: ${result.report_path}`,
+    );
+    for (const item of result.plan.recommendations) {
+      console.log(`  ${item.module_id}: ${item.targets.join(", ")} (${item.reasons.join("; ")})`);
+    }
+    return;
+  }
   const cli = parseImproveCliArgs(argv);
-  const result = await runImprove(cli.moduleId, {
+  const result = await runImproveSequence(cli.moduleId, {
     targets: cli.targets,
     keepReference: cli.keepReference,
   });

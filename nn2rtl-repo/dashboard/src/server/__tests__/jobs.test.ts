@@ -83,7 +83,36 @@ describe("job safety model", () => {
     expect(preview.command).toContain("improve node_conv_248");
     expect(preview.command).toContain("--keep-reference");
     expect(preview.costRisk).toBe("high");
-    expect(preview.canonicalRisk).toBe(false);
+    expect(preview.canonicalRisk).toBe(true);
+    expect(preview.title).toContain("sequence");
+  });
+
+  it("builds command previews for improve sweeps", () => {
+    const planPreview = previewJob({
+      type: "improve-sweep",
+      preset: "reduce-ff",
+      run: false,
+      keepReference: true,
+      maxModules: 8,
+    });
+    expect(planPreview.command).toContain("improve sweep");
+    expect(planPreview.command).toContain("--preset=reduce-ff");
+    expect(planPreview.command).toContain("--plan");
+    expect(planPreview.command).toContain("--max-modules 8");
+    expect(planPreview.costRisk).toBe("none");
+    expect(planPreview.expensive).toBe(false);
+
+    const runPreview = previewJob({
+      type: "improve-sweep",
+      preset: "ppa",
+      run: true,
+      keepReference: true,
+    });
+    expect(runPreview.command).toContain("--run");
+    expect(runPreview.command).toContain("--keep-reference");
+    expect(runPreview.costRisk).toBe("high");
+    expect(runPreview.canonicalRisk).toBe(true);
+    expect(runPreview.expensive).toBe(true);
   });
 
   it("requires confirmation before starting any job", async () => {

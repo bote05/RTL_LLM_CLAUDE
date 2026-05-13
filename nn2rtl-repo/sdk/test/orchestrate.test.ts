@@ -15,7 +15,9 @@ import {
   contractConformanceViolations,
   createOrchestratorRuntime,
   findLayer,
+  foreignMcpToolNames,
   handlePipelineError,
+  isForeignMcpToolName,
   loadPluginAgentDefinition,
   parseCliArgs,
   parseFrontmatter,
@@ -55,6 +57,42 @@ describe("orchestrate helpers", () => {
     expect(toStringList(["a", "b", "c"])).toEqual(["a", "b", "c"]);
     expect(toStringList(undefined)).toBeUndefined();
     expect(toStringList(null)).toBeUndefined();
+  });
+
+  it("detects foreign MCP tools without flagging nn2rtl tools", () => {
+    expect(isForeignMcpToolName("mcp__claude_ai_Google_Drive__create_file")).toBe(true);
+    expect(isForeignMcpToolName("mcp__nn2rtl-tools__write_verilog")).toBe(false);
+    expect(isForeignMcpToolName("Read")).toBe(false);
+    expect(
+      foreignMcpToolNames([
+        {
+          timestamp: "now",
+          agent: "Foundry",
+          module_id: "m1",
+          turn_index: 0,
+          kind: "tool_use",
+          tool_use_id: "a",
+          tool_name: "mcp__claude_ai_Google_Drive__create_file",
+          input: {},
+          is_error: null,
+          output_preview: null,
+          output_length: null,
+        },
+        {
+          timestamp: "now",
+          agent: "Foundry",
+          module_id: "m1",
+          turn_index: 1,
+          kind: "tool_use",
+          tool_use_id: "b",
+          tool_name: "mcp__nn2rtl-tools__write_verilog",
+          input: {},
+          is_error: null,
+          output_preview: null,
+          output_length: null,
+        },
+      ]),
+    ).toEqual(["mcp__claude_ai_Google_Drive__create_file"]);
   });
 
   it("parses YAML lists in frontmatter", () => {
@@ -181,6 +219,32 @@ describe("orchestrate helpers", () => {
         max_error: 1,
         first_mismatch_index: 100,
       },
+      reference_evidence: {
+        source: "compute_layer_reference",
+        reason: "first_mismatch",
+        request: {
+          module_id: "m1",
+          vector_idx: 0,
+          output_pixel_oy: 0,
+          output_pixel_ox: 1,
+          oc_start: 4,
+          oc_end: 5,
+          include_intermediates: true,
+          caller_role: "assayer",
+        },
+        observed: {
+          first_mismatch_index: 100,
+          first_mismatch_vector_index: 0,
+          first_mismatch_output_index: 1,
+          first_mismatch_channel_index: 4,
+          first_mismatch_expected: 7,
+          first_mismatch_got: 6,
+        },
+        result: {
+          output: [7],
+          intermediates: { acc: [1], biased: [2], scaled: [3], v_tmp: [7] },
+        },
+      },
       retrospector_advice: {
         analysis: "trailing input pixels desync the active counter",
         suggestion: "stop consuming inputs once active outputs reach OH*OW",
@@ -192,6 +256,7 @@ describe("orchestrate helpers", () => {
     expect(prompt).toContain("post-retrospector final attempt");
     expect(prompt).toContain("scope=targeted_fsm_or_datapath_fix");
     expect(prompt).toContain("highest-scoring artifact across all prior attempts");
+    expect(prompt).toContain("reference evidence");
   });
 
   it("retrospector prompt documents the next_actor / base_artifact / repair_scope routing fields", () => {
@@ -1061,6 +1126,263 @@ describe("orchestrate helpers", () => {
       layer,
     );
     expect(good).toEqual([]);
+  });
+
+  it("flags activation memory writes inside async-reset always blocks (Vivado RAM-inference killer)", () => {
+    const layer = {
+      module_id: "m1",
+      op_type: "conv2d" as const,
+      input_shape: [1, 512, 14, 14],
+      output_shape: [1, 512, 7, 7],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [512, 512, 3, 3],
+      num_weights: 512 * 512 * 3 * 3,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 100,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      channel_tile: 32,
+    };
+
+    // line_buf write lives in an async-reset always — Vivado refuses RAM inference.
+    const bad = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  reg [255:0] line_buf [0:3135];",
+          "  always @(posedge clk or negedge rst_n) begin",
+          "    if (!rst_n) begin",
+          "      state <= 0;",
+          "    end else begin",
+          "      if (we) line_buf[addr] <= data_in;",
+          "    end",
+          "  end",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(bad.map((v) => v.rule)).toContain("activation_memory_in_async_reset_block");
+    const detail = bad.find((v) => v.rule === "activation_memory_in_async_reset_block")?.detail ?? "";
+    expect(detail).toMatch(/dedicated `always @\(posedge clk\)/);
+    expect(detail).toMatch(/RAM64M8/);
+
+    // Same line_buf, but writes are in a separate posedge-only block.
+    // No violation — this is the cache_a/cache_b pattern that Vivado infers cleanly.
+    const good = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  reg [255:0] line_buf [0:3135];",
+          "  always @(posedge clk or negedge rst_n) begin",
+          "    if (!rst_n) state <= 0;",
+          "    else state <= next_state;",
+          "  end",
+          "  always @(posedge clk) begin",
+          "    if (we) line_buf[addr] <= data_in;",
+          "  end",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(good).toEqual([]);
+  });
+
+  it("flags 2D-unpacked wide-word activation memories above the FF-tolerable threshold", () => {
+    const layer = {
+      module_id: "m1",
+      op_type: "conv2d" as const,
+      input_shape: [1, 512, 14, 14],
+      output_shape: [1, 512, 7, 7],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [512, 512, 3, 3],
+      num_weights: 512 * 512 * 3 * 3,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 100,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      channel_tile: 32,
+    };
+
+    // 4 banks × 64 × 16 × 256 = 1,048,576 bits total across 4 variables
+    // — each variable is under the Vivado 1M-bit cap (so the earlier
+    // rule doesn't fire), BUT each is still 2D-unpacked. Vivado will
+    // FF-map all four, producing >1M FFs and the post-synth time pit.
+    const multidim = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam BEAT_BITS = 256;",
+          "  reg [BEAT_BITS-1:0] line_buf_b0 [0:63][0:15];",
+          "  reg [BEAT_BITS-1:0] line_buf_b1 [0:63][0:15];",
+          "  reg [BEAT_BITS-1:0] line_buf_b2 [0:63][0:15];",
+          "  reg [BEAT_BITS-1:0] line_buf_b3 [0:63][0:15];",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(multidim.map((v) => v.rule)).toContain("multidim_wideword_activation_memory");
+    const detail = multidim.find((v) => v.rule === "multidim_wideword_activation_memory")?.detail ?? "";
+    expect(detail).toMatch(/1D unpacked × wide packed/);
+    expect(detail).toMatch(/RAM64M8/);
+
+    // 1D-unpacked × wide-packed shape: same total bits, but Vivado can
+    // infer LUT-RAM cleanly. Must NOT trip the rule.
+    const collapsed = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam BEAT_BITS = 256;",
+          "  localparam IN_BEATS = 16;",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b0 [0:63];",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b1 [0:63];",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b2 [0:63];",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b3 [0:63];",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(collapsed).toEqual([]);
+
+    // Small 2D-unpacked stays acceptable (proven by conv_292 which had
+    // ~200k FFs of line_buf and still synthesised in ~7 min). The rule
+    // is sized for memories that actually break post-synth analysis.
+    const smallMultidim = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam BEAT_BITS = 256;",
+          "  reg [BEAT_BITS-1:0] line_buf [0:63][0:15];",   // 64*16*256 = 262144 bits — under threshold
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(smallMultidim).toEqual([]);
+  });
+
+  it("flags activation memories over the Vivado 1M-bit per-variable cap and proposes banking", () => {
+    const layer = {
+      module_id: "m1",
+      op_type: "conv2d" as const,
+      input_shape: [1, 512, 14, 14],
+      output_shape: [1, 512, 7, 7],
+      weights_path: "/tmp/w.hex",
+      bias_path: "/tmp/b.hex",
+      weight_shape: [512, 512, 3, 3],
+      num_weights: 512 * 512 * 3 * 3,
+      scale_factor: 0.5,
+      zero_point: 0,
+      pipeline_latency_cycles: 100,
+      clock_period_ns: 20,
+      input_width_bits: 256,
+      output_width_bits: 256,
+      clock_signal: "clk" as const,
+      reset_signal: "rst_n" as const,
+      valid_in_signal: "valid_in" as const,
+      valid_out_signal: "valid_out" as const,
+      ready_in_signal: "ready_in" as const,
+      data_in_signal: "data_in" as const,
+      data_out_signal: "data_out" as const,
+      golden_inputs_path: "/tmp/in.goldin",
+      golden_outputs_path: "/tmp/out.goldout",
+      channel_tile: 32,
+    };
+
+    // 256 deep * 16 beats * 256 bit = 1,048,576 bits — the exact size that
+    // tripped Vivado's [Synth 8-4556] on the real conv_284 run. Preflight
+    // must fail this BEFORE the toolchain wastes 7 seconds rejecting it.
+    const oversized = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam BEAT_BITS = 256;",
+          "  reg [BEAT_BITS-1:0] line_buf [0:255][0:15];",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    const oversizedRules = oversized.map((v) => v.rule);
+    expect(oversizedRules).toContain("activation_memory_exceeds_vivado_variable_bit_limit");
+    const detail = oversized.find((v) => v.rule === "activation_memory_exceeds_vivado_variable_bit_limit")?.detail ?? "";
+    expect(detail).toMatch(/bank/);
+    expect(detail).toMatch(/depth 64/);
+
+    // Four banks of 64 deep × 4096-bit wide-packed = 262,144 bits each.
+    // 1D unpacked × wide packed avoids both the per-variable cap AND the
+    // 2D-unpacked FF-mapping pathology, so the preflight must accept it.
+    const banked = synthesisPreflightViolations(
+      {
+        module_id: "m1",
+        spec_hash: "hash",
+        generated_by: "Foundry" as const,
+        attempt: 1,
+        verilog_source: [
+          "module m1();",
+          "  localparam BEAT_BITS = 256;",
+          "  localparam IN_BEATS = 16;",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b0 [0:63];",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b1 [0:63];",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b2 [0:63];",
+          "  reg [IN_BEATS*BEAT_BITS-1:0] line_buf_b3 [0:63];",
+          "endmodule",
+        ].join("\n"),
+      },
+      layer,
+    );
+    expect(banked).toEqual([]);
   });
 
   it("flags declarations inside always blocks as a structural violation", () => {

@@ -18,8 +18,17 @@ export type ImprovementTarget =
   | "use-dsp"
   | "use-bram"
   | "reduce-lut"
+  | "reduce-ff"
+  | "improve-fmax"
   | "reduce-latency"
   | "increase-throughput";
+
+export type ImproveSweepPreset =
+  | "ppa"
+  | "use-dsp"
+  | "reduce-lut"
+  | "reduce-ff"
+  | "improve-fmax";
 
 export type DashboardKpis = {
   totalLayers: number;
@@ -111,8 +120,10 @@ export type ImprovementAttemptSummary = {
   failedGate?: string | null;
   metrics?: {
     lut?: number;
+    ff?: number;
     dsp?: number;
     bram?: number;
+    fmax_mhz?: number;
     latency_cycles?: number;
     ii?: number;
   };
@@ -194,6 +205,13 @@ export type JobAction =
       moduleId: string;
       targets: ImprovementTarget[];
       keepReference?: boolean;
+    }
+  | {
+      type: "improve-sweep";
+      preset?: ImproveSweepPreset;
+      run?: boolean;
+      keepReference?: boolean;
+      maxModules?: number;
     }
   | {
       type: "promote-variant";

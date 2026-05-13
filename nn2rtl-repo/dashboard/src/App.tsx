@@ -24,7 +24,6 @@ import {
   getJobLog,
   getSnapshot,
   previewJob,
-  promoteVariant,
   readFile,
   startJob,
   stopJob,
@@ -32,6 +31,7 @@ import {
 import type {
   DocSummary,
   FileReadResult,
+  ImproveSweepPreset,
   ImprovementReportSummary,
   ImprovementTarget,
   JobAction,
@@ -47,13 +47,19 @@ const targets: ImprovementTarget[] = [
   "use-dsp",
   "use-bram",
   "reduce-lut",
+  "reduce-ff",
+  "improve-fmax",
   "reduce-latency",
   "increase-throughput",
 ];
 
-function classNames(...values: Array<string | false | undefined>): string {
-  return values.filter(Boolean).join(" ");
-}
+const sweepPresets: ImproveSweepPreset[] = [
+  "ppa",
+  "use-dsp",
+  "reduce-lut",
+  "reduce-ff",
+  "improve-fmax",
+];
 
 function fmtNumber(value: number | undefined, digits = 0): string {
   if (value === undefined || !Number.isFinite(value)) return "n/a";
@@ -794,11 +800,11 @@ function Improvements({ reports, onOpenFile, onPromote }: {
             <div className="metric-strip">
               {report.attempts.map((attempt) => {
                 const cls = attempt.verdictOverall ? "good" : attempt.failedGate ? "bad" : "";
-                const fmax = attempt.vivado?.fmaxMhz;
+                const fmax = attempt.vivado?.fmaxMhz ?? attempt.metrics?.fmax_mhz;
                 const wns = attempt.vivado?.setupWnsNs;
                 return (
                   <span key={attempt.attemptIndex} className={cls}>
-                    <strong>#{attempt.attemptIndex}</strong> {attempt.failedGate ?? "pass"} · LUT {fmtNumber(attempt.metrics?.lut)} · DSP {fmtNumber(attempt.metrics?.dsp)} · BRAM {fmtNumber(attempt.metrics?.bram)}
+                    <strong>#{attempt.attemptIndex}</strong> {attempt.failedGate ?? "pass"} · LUT {fmtNumber(attempt.metrics?.lut)} · FF {fmtNumber(attempt.metrics?.ff)} · DSP {fmtNumber(attempt.metrics?.dsp)} · BRAM {fmtNumber(attempt.metrics?.bram)}
                     {fmax !== undefined ? ` · ${fmax.toFixed(0)} MHz` : ""}
                     {wns !== undefined && wns !== null ? ` · WNS ${wns.toFixed(2)} ns` : ""}
                   </span>
@@ -830,12 +836,25 @@ function Commands({ modules, onPreview }: {
   const [targetSet, setTargetSet] = useState<ImprovementTarget[]>(["use-dsp"]);
   const [targetSlug, setTargetSlug] = useState("use-dsp");
   const [except, setExcept] = useState("");
+  const [sweepPreset, setSweepPreset] = useState<ImproveSweepPreset>("ppa");
+  const [sweepMaxModules, setSweepMaxModules] = useState("");
   useEffect(() => {
     if (!moduleId && modules[0]) setModuleId(modules[0].moduleId);
   }, [modules, moduleId]);
 
   function toggleTarget(target: ImprovementTarget): void {
     setTargetSet((prev) => prev.includes(target) ? prev.filter((item) => item !== target) : [...prev, target]);
+  }
+
+  function sweepAction(run: boolean): JobAction {
+    const parsedMax = Number(sweepMaxModules);
+    return {
+      type: "improve-sweep",
+      preset: sweepPreset,
+      run,
+      keepReference: true,
+      maxModules: Number.isInteger(parsedMax) && parsedMax > 0 ? parsedMax : undefined,
+    };
   }
 
   return (
@@ -879,8 +898,27 @@ function Commands({ modules, onPreview }: {
             onClick={() => onPreview({ type: "improve", moduleId, targets: targetSet, keepReference: true })}
             disabled={targetSet.length === 0}
           >
-            <Rocket size={16} /> improve as variant
+            <Rocket size={16} /> {targetSet.length > 1 ? "improve sequence" : "improve as variant"}
           </button>
+          <div className="sweep-controls">
+            <select value={sweepPreset} onChange={(e) => setSweepPreset(e.target.value as ImproveSweepPreset)}>
+              {sweepPresets.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+            </select>
+            <input
+              value={sweepMaxModules}
+              onChange={(e) => setSweepMaxModules(e.target.value)}
+              placeholder="max modules"
+              inputMode="numeric"
+            />
+          </div>
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => onPreview(sweepAction(false))}>
+              <Search size={16} /> plan sweep
+            </button>
+            <button className="primary-button" onClick={() => onPreview(sweepAction(true))}>
+              <Rocket size={16} /> run sweep
+            </button>
+          </div>
         </div>
         <div className="command-block">
           <h3><ShieldCheck size={17} /> Checks</h3>

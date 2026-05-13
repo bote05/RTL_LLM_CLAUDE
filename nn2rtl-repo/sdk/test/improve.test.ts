@@ -5,10 +5,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildFoundryImprovePrompt,
+  buildImproveSweepPlan,
   evaluateImprovementTargets,
   parseImproveCliArgs,
+  parseImproveSweepCliArgs,
   runImprove,
+  runImproveSequence,
   type FoundryImproveInput,
+  type ImprovementRetrospectorInput,
   type ImprovementMetrics,
   type SynthesisReport,
 } from "../improve.js";
@@ -21,6 +26,8 @@ import type {
 } from "../types.js";
 
 const fixedNow = () => new Date("2026-05-02T12:00:00Z");
+
+vi.setConfig({ testTimeout: 30_000 });
 
 let tempRoot: string | null = null;
 
@@ -218,15 +225,22 @@ describe("evaluateImprovementTargets", () => {
   it("requires every requested target to pass its deterministic rule", () => {
     const baseline: ImprovementMetrics = {
       lut: 100,
+      ff: 1000,
       dsp: 0,
       bram: 0,
+      fmax_mhz: 200,
       latency_cycles: 10,
       ii: 4,
     };
+    // For a 200 MHz baseline (below the 300 MHz floor), improve-fmax now
+    // requires max(200*1.05=210, min(300, 200+50)=250) = 250. The next
+    // metric clears that with margin so the rule passes.
     const next: ImprovementMetrics = {
       lut: 90,
+      ff: 800,
       dsp: 8,
-      bram: 1,
+      bram: 8,
+      fmax_mhz: 260,
       latency_cycles: 9,
       ii: 3,
     };
@@ -234,7 +248,7 @@ describe("evaluateImprovementTargets", () => {
     const verdict = evaluateImprovementTargets(
       baseline,
       next,
-      ["use-dsp", "use-bram", "reduce-lut", "reduce-latency", "increase-throughput"],
+      ["use-dsp", "use-bram", "reduce-lut", "reduce-ff", "improve-fmax", "reduce-latency", "increase-throughput"],
     );
 
     expect(verdict.overall).toBe(true);
@@ -244,21 +258,99 @@ describe("evaluateImprovementTargets", () => {
       true,
       true,
       true,
+      true,
+      true,
     ]);
+  });
+
+  it("improve-fmax rejects a tiny relative bump when the baseline is well below the floor", () => {
+    const baseline: ImprovementMetrics = {
+      lut: 100, ff: 1000, dsp: 0, bram: 0, fmax_mhz: 167, latency_cycles: 10, ii: 4,
+    };
+    // Old rule required >= min(300, 167*1.05=175.35) = 175.35 — a trivial
+    // sliver of progress for a module that needs to reach ~300 to be
+    // competitive. New rule requires max(175.35, min(300, 167+50)=217) = 217.
+    // 200 MHz "improvement" no longer clears the new bar.
+    const weakImprovement: ImprovementMetrics = {
+      lut: 100, ff: 1000, dsp: 0, bram: 0, fmax_mhz: 200, latency_cycles: 10, ii: 4,
+    };
+    const weakVerdict = evaluateImprovementTargets(baseline, weakImprovement, ["improve-fmax"]);
+    expect(weakVerdict.overall).toBe(false);
+    expect(weakVerdict.targets[0]).toMatchObject({
+      target: "improve-fmax",
+      satisfied: false,
+      new_value: 200,
+    });
+
+    // A meaningful 220 MHz still doesn't clear the 217 bar by enough... actually 220 > 217 does pass.
+    // Confirm a real jump (250 MHz) passes the rule.
+    const strongImprovement: ImprovementMetrics = {
+      ...baseline, fmax_mhz: 250,
+    };
+    const strongVerdict = evaluateImprovementTargets(baseline, strongImprovement, ["improve-fmax"]);
+    expect(strongVerdict.overall).toBe(true);
+  });
+
+  it("improve-fmax above the floor falls back to pure relative bump (no additive penalty)", () => {
+    // Baseline 350 MHz, already above the 300 MHz floor. The additive
+    // component min(300, 350+50)=300 is then DOMINATED by the relative
+    // 350*1.05=367.5, so required = 367.5 (the pure relative bump). The
+    // test asserts a 5% lift exactly at 368 MHz satisfies and 360 does not.
+    const baseline: ImprovementMetrics = {
+      lut: 100, ff: 1000, dsp: 0, bram: 0, fmax_mhz: 350, latency_cycles: 10, ii: 4,
+    };
+    const justBelowRelative = evaluateImprovementTargets(
+      baseline,
+      { ...baseline, fmax_mhz: 360 },
+      ["improve-fmax"],
+    );
+    expect(justBelowRelative.targets[0].satisfied).toBe(false);
+
+    const justAboveRelative = evaluateImprovementTargets(
+      baseline,
+      { ...baseline, fmax_mhz: 368 },
+      ["improve-fmax"],
+    );
+    expect(justAboveRelative.targets[0].satisfied).toBe(true);
   });
 
   it("fails the whole improvement when any target misses its threshold", () => {
     const verdict = evaluateImprovementTargets(
-      { lut: 100, dsp: 0, bram: 0, latency_cycles: 10, ii: 4 },
-      { lut: 96, dsp: 1, bram: 0, latency_cycles: 10, ii: 5 },
+      { lut: 100, ff: 1000, dsp: 0, bram: 0, fmax_mhz: 200, latency_cycles: 10, ii: 4 },
+      { lut: 96, ff: 950, dsp: 1, bram: 0, fmax_mhz: 205, latency_cycles: 10, ii: 5 },
       ["reduce-lut", "use-bram"],
     );
 
     expect(verdict.overall).toBe(false);
     expect(verdict.targets).toMatchObject([
-      { target: "use-bram", satisfied: false },
       { target: "reduce-lut", satisfied: false },
+      { target: "use-bram", satisfied: false },
     ]);
+  });
+
+  it("rejects token BRAM usage without meaningful LUT or FF reduction", () => {
+    const baseline: ImprovementMetrics = {
+      lut: 1000,
+      ff: 1000,
+      dsp: 1,
+      bram: 0,
+      fmax_mhz: 250,
+      latency_cycles: 10,
+      ii: 4,
+    };
+    const tokenBram = evaluateImprovementTargets(
+      baseline,
+      { ...baseline, bram: 7, lut: 1001, ff: 1001 },
+      ["use-bram"],
+    );
+    expect(tokenBram.overall).toBe(false);
+
+    const realBram = evaluateImprovementTargets(
+      baseline,
+      { ...baseline, bram: 15, lut: 900, ff: 990 },
+      ["use-bram"],
+    );
+    expect(realBram.overall).toBe(true);
   });
 });
 
@@ -270,13 +362,144 @@ describe("parseImproveCliArgs", () => {
       "--keep-reference",
     ])).toEqual({
       moduleId: "unit_module",
-      targets: ["use-dsp", "reduce-lut"],
+      targets: ["reduce-lut", "use-dsp"],
       keepReference: true,
     });
   });
 });
 
+describe("parseImproveSweepCliArgs", () => {
+  it("parses sweep preset, run mode, keep-reference, and module cap", () => {
+    expect(parseImproveSweepCliArgs([
+      "--preset=reduce-ff",
+      "--run",
+      "--keep-reference",
+      "--max-modules",
+      "12",
+    ])).toEqual({
+      preset: "reduce-ff",
+      run: true,
+      keepReference: true,
+      maxModules: 12,
+    });
+  });
+});
+
+describe("buildImproveSweepPlan", () => {
+  it("selects passing modules and assigns recommended target bundles", async () => {
+    tempRoot = await mkdtemp(path.join(os.tmpdir(), "nn2rtl-improve-sweep-"));
+    const outputRoot = path.join(tempRoot, "output");
+    const reportsDir = path.join(outputRoot, "reports");
+    await mkdir(reportsDir, { recursive: true });
+    const layers: LayerIR[] = [
+      {
+        ...layerFixture(),
+        module_id: "conv_big",
+        op_type: "conv2d",
+        weight_shape: [512, 512, 3, 3],
+        num_weights: 512 * 512 * 3 * 3,
+      },
+      {
+        ...layerFixture(),
+        module_id: "add_ff",
+        op_type: "add",
+        weight_shape: [],
+        num_weights: 0,
+      },
+      {
+        ...layerFixture(),
+        module_id: "relu_skip",
+        op_type: "relu",
+        weight_shape: [],
+        num_weights: 0,
+      },
+    ];
+    await writeJson(path.join(outputRoot, "layer_ir.json"), {
+      model_name: "fixture-net",
+      quantization: "int8_symmetric_per_tensor",
+      generated_at: "2026-05-02T12:00:00Z",
+      layers,
+    });
+    await writeJson(path.join(reportsDir, "conv_big.vivado.json"), vivadoReport({
+      lut_count: 150_000,
+      ff_count: 260_000,
+      dsp_count: 1,
+      fmax_mhz: 205,
+    }));
+    await writeJson(path.join(reportsDir, "conv_big.results.json"), verifResult());
+    await writeJson(path.join(reportsDir, "add_ff.vivado.json"), vivadoReport({
+      lut_count: 40_000,
+      ff_count: 49_000,
+      dsp_count: 0,
+      fmax_mhz: 300,
+    }));
+    await writeJson(path.join(reportsDir, "add_ff.results.json"), verifResult());
+    await writeJson(path.join(reportsDir, "relu_skip.vivado.json"), vivadoReport({
+      lut_count: 200,
+      ff_count: 50,
+      dsp_count: 0,
+      fmax_mhz: 500,
+    }));
+    await writeJson(path.join(reportsDir, "relu_skip.results.json"), verifResult());
+
+    const plan = await buildImproveSweepPlan({
+      paths: { repoRoot: tempRoot },
+      runtime: { now: fixedNow },
+    });
+
+    expect(plan.generated_at).toBe("2026-05-02T12:00:00.000Z");
+    expect(plan.recommendations.map((item) => item.module_id)).toEqual(["conv_big", "add_ff"]);
+    expect(plan.recommendations[0]).toMatchObject({
+      module_id: "conv_big",
+      targets: ["use-dsp", "reduce-lut", "reduce-ff", "improve-fmax"],
+    });
+    expect(plan.recommendations[1]).toMatchObject({
+      module_id: "add_ff",
+      targets: ["reduce-ff"],
+    });
+  });
+});
+
+describe("buildFoundryImprovePrompt", () => {
+  it("includes preloaded pattern markdown but omits reference Verilog in improve mode", () => {
+    const prompt = buildFoundryImprovePrompt({
+      attempt_index: 1,
+      module_id: "unit_module",
+      targets: ["use-bram"],
+      original_module: originalModule(),
+      baseline_metrics: { lut: 100, ff: 100, dsp: 0, bram: 0, fmax_mhz: 200, latency_cycles: 10, ii: 4 },
+      baseline_vivado_report: vivadoReport(),
+      layer_ir: layerFixture(),
+      preloaded_rtl_patterns: {
+        pattern_markdown: "PATTERN_DOC_SENT_TO_IMPROVE_FOUNDRY",
+        reference_verilog: "module reference_should_not_be_sent; endmodule",
+        license_notice: null,
+      },
+      previous_attempts: [],
+    });
+
+    expect(prompt).toContain("PATTERN_DOC_SENT_TO_IMPROVE_FOUNDRY");
+    expect(prompt).toContain("Reference Verilog is intentionally omitted in improve mode");
+    expect(prompt).not.toContain("reference_verilog:");
+    expect(prompt).not.toContain("reference_should_not_be_sent");
+  });
+});
+
 describe("runImprove", () => {
+  it("rejects multiple targets so a single Foundry turn cannot combine improvements", async () => {
+    const root = await seedProject();
+    await expect(runImprove("unit_module", {
+      targets: ["use-dsp", "reduce-lut"],
+      paths: { repoRoot: root },
+      runtime: {
+        now: fixedNow,
+        foundryFn: foundryMock(),
+        assayerFn: vi.fn(async () => verifResult()),
+        synthesisFn: vi.fn(async () => vivadoReport()),
+      },
+    })).rejects.toThrow("single-target primitive");
+  });
+
   it("refuses to improve a module whose saved baseline is not already passing", async () => {
     const root = await seedProject();
     await writeJson(
@@ -333,7 +556,7 @@ describe("runImprove", () => {
     const root = await seedProject();
     const foundryFn = foundryMock();
     const assayerFn = vi.fn(async () => verifResult());
-    const synthesisFn = vi.fn(async () => vivadoReport({ bram18_equiv: 1 }));
+    const synthesisFn = vi.fn(async () => vivadoReport({ lut_count: 90, bram18_equiv: 8 }));
 
     const result = await runImprove("unit_module", {
       targets: ["use-bram"],
@@ -541,4 +764,252 @@ describe("runImprove", () => {
       retrospector_advice: retrospectorAdvice,
     });
   });
+});
+
+describe("runImproveSequence", () => {
+  it("runs requested targets one by one and feeds each step the previous improved RTL", async () => {
+    const root = await seedProject();
+    const calls: Array<{ target: string; original: string }> = [];
+    const foundryFn = vi.fn(async (input: FoundryImproveInput) => {
+      const target = input.targets[0]!;
+      calls.push({
+        target,
+        original: input.original_module.verilog_source,
+      });
+      const resultMessage = {
+        type: "result",
+        subtype: "success",
+        result: "{}",
+        total_cost_usd: 0,
+        modelUsage: {},
+        session_id: `session-${target}`,
+      } as const;
+      return {
+        module: {
+          module_id: "unit_module",
+          spec_hash: "fixture-hash",
+          verilog_source: `module unit_module; // ${target} after ${input.original_module.verilog_source.includes("use-dsp") ? "use-dsp" : "original"}\nendmodule\n`,
+          generated_by: "Foundry",
+          attempt: input.attempt_index,
+        },
+        result: resultMessage,
+        messages: [resultMessage],
+        session_id: `session-${target}`,
+      };
+    });
+    const assayerFn = vi.fn(async () => verifResult());
+    const synthesisFn = vi.fn(async (module: VerilogModule) => {
+      if (module.verilog_source.includes("reduce-lut")) {
+        return vivadoReport({ lut_count: 80, dsp_count: 8 });
+      }
+      return vivadoReport({ lut_count: 100, dsp_count: 8 });
+    });
+
+    const result = await runImproveSequence("unit_module", {
+      targets: ["use-dsp", "reduce-lut"],
+      keepReference: true,
+      paths: { repoRoot: root },
+      runtime: { now: fixedNow, foundryFn, assayerFn, synthesisFn },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.final_action).toBe("kept-as-variant");
+    expect(result.sequence_steps).toMatchObject([
+      { target: "use-dsp", success: true },
+      { target: "reduce-lut", success: true },
+    ]);
+    expect(calls).toEqual([
+      { target: "use-dsp", original: "module unit_module; // original\nendmodule\n" },
+      { target: "reduce-lut", original: "module unit_module; // use-dsp after original\nendmodule\n" },
+    ]);
+    expect(result.final_verdict?.overall).toBe(true);
+    expect(result.final_verdict?.targets.map((target) => target.target)).toEqual(["use-dsp", "reduce-lut"]);
+    await expect(readFile(path.join(root, "output", "rtl", "unit_module.v"), "utf8"))
+      .resolves.toContain("original");
+    await expect(readFile(path.join(root, "knowledge", "references", "improved", "unit_module__use-dsp-reduce-lut.v"), "utf8"))
+      .resolves.toContain("reduce-lut after use-dsp");
+  }, 20_000);
+
+  it("skips a failed target, tries later targets on the last accepted RTL, and gives Retrospector prior-step context", async () => {
+    const root = await seedProject();
+    const calls: Array<{ target: string; original: string }> = [];
+    const foundryFn = vi.fn(async (input: FoundryImproveInput) => {
+      const target = input.targets[0]!;
+      calls.push({
+        target,
+        original: input.original_module.verilog_source,
+      });
+      const resultMessage = {
+        type: "result",
+        subtype: "success",
+        result: "{}",
+        total_cost_usd: 0,
+        modelUsage: {},
+        session_id: `session-${target}`,
+      } as const;
+      const prior = input.original_module.verilog_source.includes("use-dsp") ? "after-use-dsp" : "original";
+      return {
+        module: {
+          module_id: "unit_module",
+          spec_hash: "fixture-hash",
+          verilog_source: `module unit_module; // ${target} ${prior}\nendmodule\n`,
+          generated_by: "Foundry",
+          attempt: input.attempt_index,
+        },
+        result: resultMessage,
+        messages: [resultMessage],
+        session_id: `session-${target}`,
+      };
+    });
+    const assayerFn = vi.fn(async () => verifResult());
+    const synthesisFn = vi.fn(async (module: VerilogModule) => {
+      if (module.verilog_source.includes("reduce-ff")) {
+        return vivadoReport({ lut_count: 100, ff_count: 5, dsp_count: 8 });
+      }
+      if (module.verilog_source.includes("use-dsp")) {
+        return vivadoReport({ lut_count: 100, dsp_count: 8 });
+      }
+      return vivadoReport({ lut_count: 99, dsp_count: 8 });
+    });
+    const retrospectorInputs: ImprovementRetrospectorInput[] = [];
+    const retrospectorFn = vi.fn(async (input: ImprovementRetrospectorInput) => {
+      retrospectorInputs.push(input);
+      return {
+        analysis: "The reduce-lut step is not clearing the threshold.",
+        suggestion: "Try a structural LUT reduction while preserving prior DSP mapping.",
+      };
+    });
+
+    const result = await runImproveSequence("unit_module", {
+      targets: ["use-dsp", "reduce-lut", "reduce-ff"],
+      keepReference: true,
+      paths: { repoRoot: root },
+      runtime: { now: fixedNow, foundryFn, assayerFn, synthesisFn, retrospectorFn },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.partial_success).toBe(true);
+    expect(result.targets).toEqual(["use-dsp", "reduce-ff"]);
+    expect(result.completed_targets).toEqual(["use-dsp", "reduce-ff"]);
+    expect(result.failed_targets).toEqual(["reduce-lut"]);
+    expect(result.unattempted_targets).toEqual([]);
+    expect(result.remaining_targets).toEqual(["reduce-lut"]);
+    expect(result.overall_success).toBe(false);
+    expect(result.sequence_steps).toMatchObject([
+      { target: "use-dsp", success: true },
+      { target: "reduce-lut", success: false },
+      { target: "reduce-ff", success: true },
+    ]);
+    expect(calls.at(-1)).toEqual({
+      target: "reduce-ff",
+      original: "module unit_module; // use-dsp original\nendmodule\n",
+    });
+    expect(retrospectorFn).toHaveBeenCalledTimes(1);
+    expect(retrospectorInputs[0].sequence_context).toMatchObject([
+      {
+        target: "use-dsp",
+        final_action: "replaced",
+      },
+    ]);
+    await expect(readFile(path.join(root, "output", "rtl", "unit_module.v"), "utf8"))
+      .resolves.toContain("original");
+    await expect(readFile(path.join(root, "knowledge", "references", "improved", "unit_module__use-dsp-reduce-ff.v"), "utf8"))
+      .resolves.toContain("reduce-ff after-use-dsp");
+    const report = JSON.parse(await readFile(result.report_path, "utf8"));
+    expect(report).toMatchObject({
+      targets: ["use-dsp", "reduce-ff"],
+      requested_targets: ["use-dsp", "reduce-lut", "reduce-ff"],
+      completed_targets: ["use-dsp", "reduce-ff"],
+      failed_targets: ["reduce-lut"],
+      unattempted_targets: [],
+      remaining_targets: ["reduce-lut"],
+      partial_success: true,
+      overall_success: false,
+    });
+  }, 20_000);
+
+  it("rejects a locally passing step when it regresses a prior accepted target", async () => {
+    const root = await seedProject();
+    const calls: Array<{ target: string; original: string }> = [];
+    const foundryFn = vi.fn(async (input: FoundryImproveInput) => {
+      const target = input.targets[0]!;
+      calls.push({
+        target,
+        original: input.original_module.verilog_source,
+      });
+      const resultMessage = {
+        type: "result",
+        subtype: "success",
+        result: "{}",
+        total_cost_usd: 0,
+        modelUsage: {},
+        session_id: `session-${target}`,
+      } as const;
+      const prior = input.original_module.verilog_source.includes("use-dsp") ? "after-use-dsp" : "original";
+      return {
+        module: {
+          module_id: "unit_module",
+          spec_hash: "fixture-hash",
+          verilog_source: `module unit_module; // ${target} ${prior}\nendmodule\n`,
+          generated_by: "Foundry",
+          attempt: input.attempt_index,
+        },
+        result: resultMessage,
+        messages: [resultMessage],
+        session_id: `session-${target}`,
+      };
+    });
+    const assayerFn = vi.fn(async () => verifResult());
+    const synthesisFn = vi.fn(async (module: VerilogModule) => {
+      if (module.verilog_source.includes("reduce-lut")) {
+        // This clears reduce-lut locally, but drops DSP usage back to 0.
+        // The sequence-level gate must reject it because the prior use-dsp
+        // target no longer passes against the original baseline.
+        return vivadoReport({ lut_count: 80, ff_count: 10, dsp_count: 0 });
+      }
+      if (module.verilog_source.includes("reduce-ff")) {
+        return vivadoReport({ lut_count: 100, ff_count: 5, dsp_count: 8 });
+      }
+      return vivadoReport({ lut_count: 100, ff_count: 10, dsp_count: 8 });
+    });
+
+    const result = await runImproveSequence("unit_module", {
+      targets: ["use-dsp", "reduce-lut", "reduce-ff"],
+      keepReference: true,
+      paths: { repoRoot: root },
+      runtime: { now: fixedNow, foundryFn, assayerFn, synthesisFn },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.partial_success).toBe(true);
+    expect(result.overall_success).toBe(false);
+    expect(result.targets).toEqual(["use-dsp", "reduce-ff"]);
+    expect(result.completed_targets).toEqual(["use-dsp", "reduce-ff"]);
+    expect(result.failed_targets).toEqual(["reduce-lut"]);
+    expect(result.unattempted_targets).toEqual([]);
+    expect(result.sequence_steps).toMatchObject([
+      { target: "use-dsp", success: true },
+      { target: "reduce-lut", success: false, final_action: "replaced" },
+      { target: "reduce-ff", success: true },
+    ]);
+    expect(calls).toEqual([
+      { target: "use-dsp", original: "module unit_module; // original\nendmodule\n" },
+      { target: "reduce-lut", original: "module unit_module; // use-dsp original\nendmodule\n" },
+      { target: "reduce-ff", original: "module unit_module; // use-dsp original\nendmodule\n" },
+    ]);
+    expect(result.final_verdict?.targets.map((target) => target.target)).toEqual(["use-dsp", "reduce-ff"]);
+    await expect(readFile(path.join(root, "knowledge", "references", "improved", "unit_module__use-dsp-reduce-ff.v"), "utf8"))
+      .resolves.toContain("reduce-ff after-use-dsp");
+    const report = JSON.parse(await readFile(result.report_path, "utf8"));
+    expect(report).toMatchObject({
+      targets: ["use-dsp", "reduce-ff"],
+      requested_targets: ["use-dsp", "reduce-lut", "reduce-ff"],
+      completed_targets: ["use-dsp", "reduce-ff"],
+      failed_targets: ["reduce-lut"],
+      unattempted_targets: [],
+      remaining_targets: ["reduce-lut"],
+      partial_success: true,
+      overall_success: false,
+    });
+  }, 20_000);
 });

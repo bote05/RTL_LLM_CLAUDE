@@ -14,8 +14,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { commitReplacement, defaultImprovePaths, improvementMetricsSchema } from "../sdk/improve.js";
-import { createOrchestratorRuntime } from "../sdk/orchestrate.js";
+import { commitReplacement, createImproveRuntime, defaultImprovePaths, improvementMetricsSchema } from "../sdk/improve.js";
 import {
   synthesisReportSchema,
   verifResultSchema,
@@ -87,9 +86,31 @@ async function main(): Promise<void> {
   });
   const vivadoReport = synthesisReportSchema.parse(winning.vivado_report);
   const verifResult = verifResultSchema.parse(winning.assayer_result);
-  const metrics = improvementMetricsSchema.parse(winning.metrics);
+  const rawMetrics = typeof winning.metrics === "object" && winning.metrics !== null
+    ? winning.metrics as Record<string, unknown>
+    : {};
+  const timingActualCycles = verifResult.timing_actual_cycles;
+  const metrics = improvementMetricsSchema.parse({
+    lut: typeof rawMetrics.lut === "number" ? rawMetrics.lut : vivadoReport.lut_count,
+    ff: typeof rawMetrics.ff === "number" ? rawMetrics.ff : vivadoReport.ff_count,
+    dsp: typeof rawMetrics.dsp === "number" ? rawMetrics.dsp : vivadoReport.dsp_count,
+    bram: typeof rawMetrics.bram === "number"
+      ? rawMetrics.bram
+      : vivadoReport.bram18_equiv || vivadoReport.bram18_count + vivadoReport.bram36_count * 2,
+    fmax_mhz: typeof rawMetrics.fmax_mhz === "number" ? rawMetrics.fmax_mhz : vivadoReport.fmax_mhz,
+    latency_cycles: typeof rawMetrics.latency_cycles === "number"
+      ? rawMetrics.latency_cycles
+      : typeof timingActualCycles === "number" && timingActualCycles >= 0
+        ? timingActualCycles
+        : undefined,
+    ii: typeof rawMetrics.ii === "number"
+      ? rawMetrics.ii
+      : typeof (verifResult as { initiation_interval_cycles?: unknown }).initiation_interval_cycles === "number"
+        ? (verifResult as { initiation_interval_cycles: number }).initiation_interval_cycles
+        : undefined,
+  });
 
-  const runtime = createOrchestratorRuntime({});
+  const runtime = createImproveRuntime({}, paths);
   const { committedPath, archivedOriginalPath } = await commitReplacement({
     paths,
     moduleId,
@@ -106,8 +127,8 @@ async function main(): Promise<void> {
   console.log(`  canonical .v       : ${committedPath}`);
   console.log(`  archived previous  : ${archivedOriginalPath}`);
   console.log(
-    `  metrics            : lut=${metrics.lut} dsp=${metrics.dsp} ` +
-      `bram=${metrics.bram} latency_cycles=${metrics.latency_cycles}`,
+    `  metrics            : lut=${metrics.lut} ff=${metrics.ff} dsp=${metrics.dsp} ` +
+      `bram=${metrics.bram} fmax=${metrics.fmax_mhz ?? "?"} latency_cycles=${metrics.latency_cycles}`,
   );
   console.log(
     `  vivado             : fmax=${vivadoReport.fmax_mhz?.toFixed?.(2) ?? "?"} ` +

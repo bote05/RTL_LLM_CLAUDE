@@ -272,3 +272,197 @@ already floors toward -inf). High-fan-in dram-backed layers
 (K_TOTAL ≥ 1024) accumulate the asymmetric drift faster than flat-bus
 layers and trip bit-exact verification with `max_error ≥ 8` and a
 positive-skewed signed-diff distribution.
+
+## Line-buffer storage — bank into LUT-RAM-friendly arrays under the Vivado variable-size cap [INVARIANT:ACTIVATION_BUFFER_BANKING]
+
+The structural preflight gate
+`activationMemoryBitLimitViolations` (in `sdk/orchestrate.ts`) fails the
+build before Vivado if any single wide-word activation reg variable
+(e.g. `line_buf`) totals more than 900,000 bits. Vivado hard-errors
+with `[Synth 8-4556]` on any single unpacked reg above ~1,048,576 bits.
+
+Two failure modes the gate prevents — both must be considered together:
+
+1. **Vivado variable-size cap (hard error).** A single
+   `reg [W-1:0] line_buf [0:D-1][0:M-1]` with `D*M*W > 1_048_576` is
+   rejected outright by `synth_design`. Rounding to the next pow2 makes
+   this WORSE, not better — e.g. `[0:255][0:15]` of 256-bit beats is
+   1,048,576 bits exactly and trips the cap, while the layer's actual
+   need was 196 pixels (under cap as one variable, but mapped to flops).
+2. **LUT-RAM granularity (slow-synth).** Vivado's distributed RAM
+   granule is 32- or 64-deep. A depth that aligns to neither (e.g. 196)
+   forces flip-flop mapping for the entire array, ballooning post-synth
+   `report_timing_summary -check_timing_verbose` wall time to 45+ min
+   on 800k+ FFs without affecting PPA usefully.
+
+**Solution — bank the memory AND keep each bank 1D-unpacked.** Split
+one logical line buffer into multiple `BANK_DEPTH=64` variables
+(LUT-RAM-friendly granule), AND collapse the inner unpacked dim into
+the packed width. The 1D-unpacked × wide-packed shape is the ONLY one
+Vivado reliably infers as distributed LUT-RAM for this contract — the
+`cache_a` / `cache_b` AXI prefetch buffers use this exact shape and
+get cleanly mapped to `RAM64M8` primitives.
+
+```verilog
+// IH=IW=14 (stride-2 input) → TOTAL_IN_PIXELS = 196 actual pixels.
+// preferred_bank_depth = 64 (LUT-RAM granule)
+// bank_count = ceil(196 / 64) = 4
+// bits_per_bank = 64 * IN_BEATS * BEAT_BITS = 64 * 16 * 256 = 262,144  ✓
+localparam BANK_DEPTH      = 64;
+localparam BANK_COUNT      = (TOTAL_IN_PIXELS + BANK_DEPTH - 1) / BANK_DEPTH; // 4
+localparam LINE_WORD_BITS  = IN_BEATS * BEAT_BITS;   // 16 * 256 = 4096
+
+// 1D unpacked × wide packed — Vivado infers LUT-RAM cleanly.
+(* ram_style = "distributed" *)
+reg [LINE_WORD_BITS-1:0] line_buf_b0 [0:BANK_DEPTH-1];
+(* ram_style = "distributed" *)
+reg [LINE_WORD_BITS-1:0] line_buf_b1 [0:BANK_DEPTH-1];
+(* ram_style = "distributed" *)
+reg [LINE_WORD_BITS-1:0] line_buf_b2 [0:BANK_DEPTH-1];
+(* ram_style = "distributed" *)
+reg [LINE_WORD_BITS-1:0] line_buf_b3 [0:BANK_DEPTH-1];
+
+wire [$clog2(BANK_COUNT)-1:0] bank_idx  = in_pixel_counter[$clog2(TOTAL_IN_PIXELS)-1:$clog2(BANK_DEPTH)];
+wire [$clog2(BANK_DEPTH)-1:0] bank_addr = in_pixel_counter[$clog2(BANK_DEPTH)-1:0];
+
+// Write: insert one beat into the wide word using a bit-select.
+// Vivado understands `wide_reg[var*W +: W] <= narrow` as a partial RAM
+// write (the unwritten bits are read-modify-write, inferred properly).
+always @(posedge clk) begin
+    case (bank_idx)
+        2'd0: line_buf_b0[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+        2'd1: line_buf_b1[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+        2'd2: line_buf_b2[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+        2'd3: line_buf_b3[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+    endcase
+end
+
+// Read: fetch the whole wide word, then beat-select downstream.
+reg [LINE_WORD_BITS-1:0] line_word_q1;
+reg [$clog2(IN_BEATS)-1:0] beat_sel_q1;
+always @(posedge clk) begin
+    case (mac_bank_idx_q1)
+        2'd0: line_word_q1 <= line_buf_b0[mac_bank_addr_q1];
+        2'd1: line_word_q1 <= line_buf_b1[mac_bank_addr_q1];
+        2'd2: line_word_q1 <= line_buf_b2[mac_bank_addr_q1];
+        2'd3: line_word_q1 <= line_buf_b3[mac_bank_addr_q1];
+    endcase
+    beat_sel_q1 <= mac_in_beat_q1;
+end
+
+reg [BEAT_BITS-1:0] line_buf_word_q2;
+always @(posedge clk) begin
+    line_buf_word_q2 <= line_word_q1[beat_sel_q1*BEAT_BITS +: BEAT_BITS];
+end
+```
+
+**Why this matters — empirical evidence (conv_284, 196 pixels):**
+
+| Storage shape | LUT-RAM? | Total FDRE | synth_design | post-synth wall |
+|---|---|---|---|---|
+| `[0:195][0:511]` per-byte | no (giant mux) | — | aborted at 4h | n/a |
+| `[0:255][0:15]` 2D wide-word (pow2 round) | no, hits 1 Mb cap | — | rejected | n/a |
+| `[0:63][0:15]` 2D × 4 banks | **no, FF-mapped** | 1,048,904 | 8m 58s | 40+ min (stuck in `report_timing_verbose`) |
+| `[0:63]` 1D × 4 banks of LINE_WORD_BITS | **yes (RAM64M8)** | ~250k | expected ~6 min | expected ~2 min |
+
+The 4× FDRE count from the 2D shape doesn't change PPA but it cripples
+`report_timing_summary -check_timing_verbose` because the verbose
+analysis walks every endpoint. 250k vs 1.05M endpoints is the
+difference between "synth finishes in 10 min" and "stuck for an hour".
+
+**Rule of thumb (architecture-agnostic):**
+
+```
+bits_per_array = depth * inner_dims_product * element_bits
+if bits_per_array >= 900_000:
+    bank_depth  = 64   (drop to 32 if 64 * inner * width still busts the cap)
+    bank_count  = ceil(logical_depth / bank_depth)
+else:
+    one variable is fine, just keep `depth` aligned to a LUT-RAM granule
+    (16, 32, 64, 128 are clean) when possible.
+```
+
+**Memory writes must live in a posedge-clk-only block — NO async reset
+on the activation memory itself [INVARIANT:RAM_NO_ASYNC_RESET].**
+
+Vivado refuses to infer block-RAM or distributed-RAM for any reg array
+that is ALSO written inside an `always @(posedge clk or negedge rst_n)`
+block. The synth log emits these tells:
+
+```
+WARNING: [Synth 8-4767] Trying to implement RAM 'X' in registers.
+   Block RAM or DRAM implementation is not possible
+   Reason: RAM is sensitive to asynchronous reset signal.
+ERROR:   [Synth 8-3391] Unable to infer a block/distributed RAM ...
+   Failed to dissolve the memory into bits because the number of bits
+   (...) is too large
+```
+
+Vivado then can't fall back to flip-flops because the dissolved-bit count
+exceeds the elaboration limit, and synth_design HARD-FAILS in ~8 seconds.
+
+Even if the always block's reset branch never assigns to `line_buf`
+(e.g. only resets neighbouring FSM state), Vivado's RAM-inference checker
+sees the storage in a reset-sensitive block and refuses. The reset has
+to be syntactically absent from the memory's owning always.
+
+**Do this** — put activation memory writes in a dedicated always block
+with `@(posedge clk)` only, no `or negedge rst_n`, no reset clause. The
+cache_a/cache_b AXI-prefetch arrays in this same module already use
+exactly this pattern and Vivado maps them to `RAM64M8` primitives.
+
+```verilog
+// RIGHT — line_buf banks have their own posedge-only always, no reset.
+// (The "stale data on power-up" is harmless: ST_INPUT pre-fills every
+//  active address before the MAC pipeline ever reads from line_buf.)
+always @(posedge clk) begin
+    case (bank_idx)
+        2'd0: line_buf_b0[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+        2'd1: line_buf_b1[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+        // ... other banks
+    endcase
+end
+
+// WRONG — touching line_buf inside the async-reset always voids RAM inference
+// even if the reset branch only clears unrelated state:
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        state <= ST_INIT;
+        // ... resets for OTHER state ...
+    end else begin
+        case (state)
+            ST_INPUT: if (valid_in && ready_in)
+                line_buf_b0[bank_addr][in_beat_index*BEAT_BITS +: BEAT_BITS] <= data_in;
+        endcase
+    end
+end
+```
+
+The FSM state machine, counters, and handshake registers KEEP their
+`posedge clk or negedge rst_n` async-reset block — only the memory
+writes move to their own posedge-only block. The bank-select signals
+(`bank_idx`, `bank_addr`, `in_beat_index`, the gating condition like
+`valid_in && ready_in`) come in as combinational wires or registered
+values from the main FSM block, exactly like cache_a/cache_b receive
+their `cache_we`, `cache_we_addr`, `cache_we_data` from the AR
+state machine.
+
+**Why 64 banks instead of one rounded-pow2 variable**
+
+For `TOTAL_IN_PIXELS = 49` (conv_292): one 64-deep variable holds the
+whole buffer at 64*16*256 = 262 Kb — under the cap, and the depth-64
+matches a LUT-RAM granule. No banking required.
+
+For `TOTAL_IN_PIXELS = 196` (conv_284): rounding to 256 gives one
+1,048,576-bit variable that Vivado HARD-rejects. Banking into 4×64
+gives 4 variables of 262 Kb each — each maps into LUT-RAM cleanly,
+together they cover 256 logical entries (60 unused), and none
+trips the variable-size cap.
+
+For larger layers (e.g. `TOTAL_IN_PIXELS = 784`): 13 banks of 64.
+Generic addressing scales without per-layer hardcoding.
+
+**Do NOT** declare a single monolithic `line_buf` and rely on Vivado to
+shard it; the variable-size cap applies to the source RTL declaration,
+not the post-synth physical mapping. The banking must be in the Verilog
+the agent emits.

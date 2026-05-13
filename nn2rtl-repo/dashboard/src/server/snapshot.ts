@@ -160,8 +160,10 @@ async function loadImprovements(root: string): Promise<{
         failedGate: asString(attempt.failed_gate) ?? null,
         metrics: {
           lut: asNumber(metrics.lut),
+          ff: asNumber(metrics.ff),
           dsp: asNumber(metrics.dsp),
           bram: asNumber(metrics.bram),
+          fmax_mhz: asNumber(metrics.fmax_mhz),
           latency_cycles: asNumber(metrics.latency_cycles),
           ii: asNumber(metrics.ii),
         },

@@ -508,6 +508,12 @@ tbody tr:hover {
   color: #0f766e;
 }
 
+.sweep-controls {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(120px, 1fr) minmax(110px, 1fr);
+}
+
 .modal-backdrop {
   align-items: center;
   background: rgba(15, 23, 42, 0.38);
@@ -939,6 +945,10 @@ tbody tr:hover {
 
   .kpi-grid,
   .command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sweep-controls {
     grid-template-columns: 1fr;
   }
 

@@ -1481,7 +1481,17 @@ export async function get_rtl_patterns(
   // paths from the LayerIR; the architecture (FSM / library
   // instantiation / start_pulse) stays identical.
   const includeFlatBusProtectedReferences = (contract_id ?? "flat-bus") === "flat-bus";
-  if (includeFlatBusProtectedReferences && op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
+  const isDramBacked = contract_id === "dram-backed-weights";
+  if (isDramBacked && op_type === "conv2d" && kernel_h === 3 && kernel_w === 3) {
+    // dram-backed conv has a fundamentally different MAC pipeline than the
+    // flat-bus on-chip-weights references (AXI prefetch + ping-pong cache,
+    // no shared conv_datapath). Use the contract-specific reference so
+    // agents see the correct prefetch-guard / cache-loaded gating shape.
+    const ref = await readReferenceVariants("conv3x3_drambacked_passing_reference.v", lifecycleReferencePaths);
+    if (ref !== null) {
+      reference_verilog = ref;
+    }
+  } else if (includeFlatBusProtectedReferences && op_type === "conv2d" && kernel_h === 1 && kernel_w === 1) {
     const ref = await readReferenceVariants("conv1x1_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;

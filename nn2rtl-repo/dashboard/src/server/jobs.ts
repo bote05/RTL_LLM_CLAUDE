@@ -2,7 +2,7 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { dashboardRoot, ensureDashboardDirs, jobsDir, jobsLogPath, repoRoot, toRepoRelative } from "./paths.js";
-import type { JobAction, JobPreview, JobRecord, JobState } from "../shared/types.js";
+import type { JobAction, JobPreview, JobRecord } from "../shared/types.js";
 
 type RunningJob = {
   record: JobRecord;
@@ -97,6 +97,7 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
     }
     case "improve": {
       const targets = [...new Set(action.targets)];
+      const isSequence = targets.length > 1;
       const args = [
         "--import",
         tsxLoaderPath(),
@@ -107,17 +108,58 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
       ];
       if (action.keepReference !== false) args.push("--keep-reference");
       return {
-        title: `Improve ${action.moduleId}`,
+        title: isSequence ? `Improve ${action.moduleId} sequence` : `Improve ${action.moduleId}`,
         commandBin: nodeCommand(),
         args,
         cwd: repoRoot,
-        writes: action.keepReference === false
-          ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/"]
+        writes: action.keepReference === false || isSequence
+          ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/", "knowledge/references/improved/", "knowledge/patterns/improved/"]
           : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"],
         costRisk: "high",
-        canonicalRisk: action.keepReference === false,
+        canonicalRisk: action.keepReference === false || isSequence,
         expensive: true,
-        stopWarning: "Stopping interrupts Foundry/Vivado if they are running, but any completed attempt artifacts remain on disk.",
+        stopWarning: isSequence
+          ? "Stopping a multi-target improve can leave the current sequential step's canonical RTL in place; use the generated reports/archives to inspect or restore."
+          : "Stopping interrupts Foundry/Vivado if they are running, but any completed attempt artifacts remain on disk.",
+      };
+    }
+    case "improve-sweep": {
+      const preset = action.preset ?? "ppa";
+      const run = action.run === true;
+      const maySequence = preset === "ppa";
+      const args = [
+        "--import",
+        tsxLoaderPath(),
+        path.join(repoRoot, "sdk", "main.ts"),
+        "improve",
+        "sweep",
+        `--preset=${preset}`,
+      ];
+      if (run) args.push("--run");
+      else args.push("--plan");
+      if (action.keepReference === false) args.push("--replace");
+      else args.push("--keep-reference");
+      if (action.maxModules !== undefined) {
+        args.push("--max-modules", String(action.maxModules));
+      }
+      return {
+        title: run ? `Run improve sweep (${preset})` : `Plan improve sweep (${preset})`,
+        commandBin: nodeCommand(),
+        args,
+        cwd: repoRoot,
+        writes: run
+          ? action.keepReference === false
+            ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/"]
+            : maySequence
+              ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/", "knowledge/references/improved/", "knowledge/patterns/improved/"]
+              : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"]
+          : ["output/reports/"],
+        costRisk: run ? "high" : "none",
+        canonicalRisk: run && (action.keepReference === false || maySequence),
+        expensive: run,
+        stopWarning: run
+          ? "Stopping interrupts the current Foundry/Vivado attempt, but completed sweep artifacts remain on disk."
+          : "Stopping a dry sweep plan only stops report generation; no RTL or knowledge files are changed.",
       };
     }
     case "promote-variant":
