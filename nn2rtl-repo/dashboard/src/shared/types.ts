@@ -21,6 +21,63 @@ export type ImprovementTarget =
   | "reduce-latency"
   | "increase-throughput";
 
+/** Improve-sweep presets — surfaced by the dashboard "Improve sweep" card.
+ *  Each preset maps to a fixed ordered target list; the sweep wrapper runs
+ *  every selected module through those targets one at a time. */
+export type ImproveSweepPreset =
+  | "ppa"
+  | "ppa-no-dsp"
+  | "use-dsp"
+  | "reduce-lut"
+  | "reduce-latency"
+  | "increase-throughput";
+
+export type ImproveSweepPresetSpec = {
+  id: ImproveSweepPreset;
+  label: string;
+  description: string;
+  targets: ImprovementTarget[];
+};
+
+export const IMPROVE_SWEEP_PRESETS: readonly ImproveSweepPresetSpec[] = [
+  {
+    id: "ppa",
+    label: "PPA (balanced)",
+    description: "Apply use-dsp, reduce-lut and reduce-latency in that order.",
+    targets: ["use-dsp", "reduce-lut", "reduce-latency"],
+  },
+  {
+    id: "ppa-no-dsp",
+    label: "PPA without DSP",
+    description: "Balanced PPA but avoids forcing DSP usage (good for DSP-tight devices).",
+    targets: ["reduce-lut", "reduce-latency"],
+  },
+  {
+    id: "use-dsp",
+    label: "Maximize DSP usage",
+    description: "Push every module towards multipliers in DSP blocks.",
+    targets: ["use-dsp"],
+  },
+  {
+    id: "reduce-lut",
+    label: "Reduce LUTs",
+    description: "Trim look-up-table count across the network.",
+    targets: ["reduce-lut"],
+  },
+  {
+    id: "reduce-latency",
+    label: "Reduce latency",
+    description: "Shrink end-to-end cycle counts.",
+    targets: ["reduce-latency"],
+  },
+  {
+    id: "increase-throughput",
+    label: "Increase throughput",
+    description: "Lower the initiation interval (more samples/second).",
+    targets: ["increase-throughput"],
+  },
+];
+
 export type DashboardKpis = {
   totalLayers: number;
   rtlGenerated: number;
@@ -180,9 +237,12 @@ export type JobRecord = JobPreview & {
   error?: string;
 };
 
+import type { NetworkId } from "./networks.js";
+
 export type JobAction =
   | {
       type: "pipeline";
+      networkId?: NetworkId;
       checkpointPath: string;
       resume?: boolean;
       maxRetries?: number;
@@ -191,12 +251,30 @@ export type JobAction =
     }
   | {
       type: "improve";
+      networkId?: NetworkId;
       moduleId: string;
       targets: ImprovementTarget[];
       keepReference?: boolean;
     }
   | {
+      type: "improve-sweep";
+      networkId?: NetworkId;
+      preset: ImproveSweepPreset;
+      /** If true, only print the plan — no Claude calls, no Vivado, no money spent. */
+      plan: boolean;
+      /** Cap on how many modules to sweep through (UI defaults to 17 for ResNet-50). */
+      maxModules?: number;
+      /** When `plan=false`, default true: keep the reference instead of overwriting canonical RTL. */
+      keepReference?: boolean;
+    }
+  | {
+      type: "resynth-module";
+      networkId?: NetworkId;
+      moduleId: string;
+    }
+  | {
       type: "promote-variant";
+      networkId?: NetworkId;
       moduleId: string;
       targetSlug: string;
     }
@@ -205,9 +283,24 @@ export type JobAction =
       check: "twins" | "sdk-typecheck" | "mcp-typecheck" | "dashboard-typecheck" | "dashboard-test" | "improve-test";
     };
 
+export type NetworkInfo = {
+  id: NetworkId;
+  label: string;
+  modelName: string;
+  description: string;
+  available: boolean;
+  defaultCheckpointPath: string;
+  /** Repo-relative output directory used to read snapshot artifacts. */
+  outputDir: string;
+};
+
 export type ProjectSnapshot = {
   generatedAt: string;
   repoRoot: string;
+  /** The network id this snapshot was built for. */
+  networkId: NetworkId;
+  /** Registry of all networks the dashboard knows about (so the UI shows the selector). */
+  networks: NetworkInfo[];
   modelName: string;
   quantization?: string;
   kpis: DashboardKpis;

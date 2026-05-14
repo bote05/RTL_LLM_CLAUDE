@@ -1,8 +1,10 @@
+import type { NetworkId } from "../shared/networks";
 import type {
   FileReadResult,
   JobAction,
   JobPreview,
   JobRecord,
+  NetworkInfo,
   ProjectSnapshot,
 } from "../shared/types";
 
@@ -21,8 +23,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function getSnapshot(): Promise<ProjectSnapshot> {
-  return request<ProjectSnapshot>("/api/snapshot");
+export function getSnapshot(networkId?: NetworkId): Promise<ProjectSnapshot> {
+  const query = networkId ? `?network=${encodeURIComponent(networkId)}` : "";
+  return request<ProjectSnapshot>(`/api/snapshot${query}`);
+}
+
+export function getNetworks(): Promise<{ defaultNetworkId: NetworkId; networks: NetworkInfo[] }> {
+  return request<{ defaultNetworkId: NetworkId; networks: NetworkInfo[] }>("/api/networks");
 }
 
 export function readFile(path: string): Promise<FileReadResult> {

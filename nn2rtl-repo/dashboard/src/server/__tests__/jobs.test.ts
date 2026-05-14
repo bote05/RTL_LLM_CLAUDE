@@ -86,6 +86,52 @@ describe("job safety model", () => {
     expect(preview.canonicalRisk).toBe(false);
   });
 
+  it("builds an improve-sweep preview in --plan mode that costs nothing", () => {
+    const preview = previewJob({
+      type: "improve-sweep",
+      preset: "ppa",
+      plan: true,
+      maxModules: 5,
+    });
+
+    expect(preview.command).toMatch(/scripts[\\/]+improve_sweep\.ts/);
+    expect(preview.command).toContain("--preset=ppa");
+    expect(preview.command).toContain("--targets=use-dsp,reduce-lut,reduce-latency");
+    expect(preview.command).toContain("--plan");
+    expect(preview.command).toContain("--max-modules=5");
+    expect(preview.costRisk).toBe("none");
+    expect(preview.canonicalRisk).toBe(false);
+    expect(preview.expensive).toBe(false);
+  });
+
+  it("builds an improve-sweep preview in --run mode flagged as expensive", () => {
+    const preview = previewJob({
+      type: "improve-sweep",
+      preset: "use-dsp",
+      plan: false,
+      keepReference: true,
+    });
+
+    expect(preview.command).toContain("--run");
+    expect(preview.command).toContain("--keep-reference");
+    expect(preview.costRisk).toBe("high");
+    expect(preview.expensive).toBe(true);
+    expect(preview.canonicalRisk).toBe(false);
+  });
+
+  it("builds a resynth-module preview that spawns the wrapper script", () => {
+    const preview = previewJob({
+      type: "resynth-module",
+      moduleId: "node_conv_42",
+    });
+
+    expect(preview.command).toMatch(/scripts[\\/]+vivado_resynth_module\.ts/);
+    expect(preview.command).toContain("node_conv_42");
+    expect(preview.command).toContain("--network=resnet-50");
+    expect(preview.costRisk).toBe("none");
+    expect(preview.canonicalRisk).toBe(false);
+  });
+
   it("requires confirmation before starting any job", async () => {
     await expect(startJob({ type: "check", check: "twins" }, false)).rejects.toThrow("confirmed=true");
   });

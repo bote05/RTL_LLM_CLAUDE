@@ -2,7 +2,8 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { dashboardRoot, ensureDashboardDirs, jobsDir, jobsLogPath, repoRoot, toRepoRelative } from "./paths.js";
-import type { JobAction, JobPreview, JobRecord, JobState } from "../shared/types.js";
+import { DEFAULT_NETWORK_ID, getNetwork } from "../shared/networks.js";
+import { IMPROVE_SWEEP_PRESETS, type JobAction, type JobPreview, type JobRecord, type JobState } from "../shared/types.js";
 
 type RunningJob = {
   record: JobRecord;
@@ -118,6 +119,70 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
         canonicalRisk: action.keepReference === false,
         expensive: true,
         stopWarning: "Stopping interrupts Foundry/Vivado if they are running, but any completed attempt artifacts remain on disk.",
+      };
+    }
+    case "improve-sweep": {
+      // Sweep is a thin orchestration script: it walks every module in the
+      // current network's pipeline state and runs `npx tsx sdk/main.ts improve`
+      // for each. When `--plan` is set, the script *prints* the plan and exits
+      // without spending money — exactly what the dashboard's "preset preview"
+      // button needs.
+      const preset = IMPROVE_SWEEP_PRESETS.find((entry) => entry.id === action.preset);
+      if (!preset) throw new Error(`Unknown improve sweep preset '${action.preset}'.`);
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
+      const args = [
+        "--import",
+        tsxLoaderPath(),
+        path.join(repoRoot, "scripts", "improve_sweep.ts"),
+        `--preset=${preset.id}`,
+        `--targets=${preset.targets.join(",")}`,
+        `--network=${networkId}`,
+      ];
+      if (action.plan) args.push("--plan");
+      else args.push("--run");
+      if (action.keepReference !== false) args.push("--keep-reference");
+      if (action.maxModules !== undefined && Number.isFinite(action.maxModules)) {
+        args.push(`--max-modules=${action.maxModules}`);
+      }
+      return {
+        title: action.plan
+          ? `Plan improve sweep (${preset.label})`
+          : `Improve sweep — ${preset.label}`,
+        commandBin: nodeCommand(),
+        args,
+        cwd: repoRoot,
+        writes: action.plan
+          ? ["(none — plan mode just prints the plan)"]
+          : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"],
+        costRisk: action.plan ? "none" : "high",
+        canonicalRisk: action.plan ? false : action.keepReference === false,
+        expensive: !action.plan,
+        stopWarning: action.plan
+          ? "Stopping the plan is harmless — no jobs were spawned."
+          : "Stopping the sweep interrupts the current module. Completed modules keep their artifacts; the next module is not started.",
+      };
+    }
+    case "resynth-module": {
+      // Thin wrapper around the existing Vivado integration: rebuilds Vivado
+      // reports for a single module that already has RTL on disk. No LLM
+      // calls, no money spent.
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
+      return {
+        title: `Resynth ${action.moduleId} (Vivado only)`,
+        commandBin: nodeCommand(),
+        args: [
+          "--import",
+          tsxLoaderPath(),
+          path.join(repoRoot, "scripts", "vivado_resynth_module.ts"),
+          action.moduleId,
+          `--network=${networkId}`,
+        ],
+        cwd: repoRoot,
+        writes: ["output/reports/<module>.vivado.json"],
+        costRisk: "none",
+        canonicalRisk: false,
+        expensive: false,
+        stopWarning: "Stopping interrupts Vivado; the existing report on disk is left alone.",
       };
     }
     case "promote-variant":

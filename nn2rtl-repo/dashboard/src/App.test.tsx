@@ -7,6 +7,18 @@ import type { JobPreview, ProjectSnapshot } from "./shared/types";
 const snapshot: ProjectSnapshot = {
   generatedAt: "2026-05-03T00:00:00Z",
   repoRoot: "/repo",
+  networkId: "resnet-50",
+  networks: [
+    {
+      id: "resnet-50",
+      label: "ResNet-50",
+      modelName: "resnet50",
+      description: "ImageNet classifier, INT8 PTQ, ~17 distinct modules",
+      available: true,
+      defaultCheckpointPath: "checkpoints/resnet50_int8.pth",
+      outputDir: "output",
+    },
+  ],
   modelName: "fixture-net",
   quantization: "int8_symmetric_per_tensor",
   kpis: {
@@ -103,7 +115,7 @@ afterEach(() => {
 function mockFetch(): void {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url === "/api/snapshot") {
+    if (url.startsWith("/api/snapshot")) {
       return new Response(JSON.stringify(snapshot), { status: 200 });
     }
     if (url === "/api/jobs/preview") {
@@ -132,9 +144,9 @@ describe("App", () => {
     render(<App />);
 
     await screen.findByText(/fixture-net/);
-    fireEvent.click(screen.getByRole("button", { name: /commands/i }));
-    await waitFor(() => expect(screen.getByText("Command Center")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "twins" }));
+    fireEvent.click(screen.getByRole("button", { name: /tasks/i }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: /^Tasks$/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Twin types/i }));
 
     expect(await screen.findByText("Run SDK/MCP twin check")).toBeInTheDocument();
     expect(screen.getByText("npm run check:twins")).toBeInTheDocument();

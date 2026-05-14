@@ -119,6 +119,23 @@ describe("buildSnapshot", () => {
     expect(snapshot.modules.map((module) => module.moduleId)).toEqual(["m0", "m1"]);
   });
 
+  it("exposes the network registry and the resolved networkId in the snapshot", async () => {
+    const root = await seedRepo();
+    const snapshot = await buildSnapshot(root);
+
+    expect(snapshot.networkId).toBe("resnet-50");
+    expect(snapshot.networks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "resnet-50",
+          modelName: "resnet50",
+          outputDir: "output",
+          available: true,
+        }),
+      ]),
+    );
+  });
+
   it("does not crash when reports are missing and links improvement/doc artifacts", async () => {
     const root = await seedRepo();
     const snapshot = await buildSnapshot(root);

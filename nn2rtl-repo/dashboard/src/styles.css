@@ -58,6 +58,108 @@ button:disabled {
   word-break: break-word;
 }
 
+.topbar-left {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.topbar p code {
+  background: #eef2f7;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 1px 5px;
+}
+
+.network-selector {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 10px;
+}
+
+.network-selector select {
+  background: #ffffff;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.network-selector .network-desc {
+  font-size: 12px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help-anchor {
+  align-items: center;
+  display: inline-flex;
+  margin-left: 4px;
+  outline: none;
+  position: relative;
+  vertical-align: middle;
+}
+
+.help-anchor:focus-visible .help-icon {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+.help-icon {
+  color: #94a3b8;
+  cursor: help;
+}
+
+.help-anchor:hover .help-icon,
+.help-anchor:focus-visible .help-icon {
+  color: #0f766e;
+}
+
+.help-bubble {
+  background: #0f172a;
+  border-radius: 6px;
+  bottom: calc(100% + 6px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  color: #e2e8f0;
+  display: block;
+  font-size: 12px;
+  left: 50%;
+  line-height: 1.45;
+  max-width: 260px;
+  min-width: 180px;
+  padding: 8px 10px;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: normal;
+  z-index: 60;
+}
+
+.help-bubble strong {
+  color: #f8fafc;
+  display: block;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.help-bubble span {
+  color: #cbd5e1;
+}
+
+.labeled-term {
+  align-items: center;
+  display: inline-flex;
+}
+
 .top-actions,
 .button-row,
 .modal-actions,
@@ -484,6 +586,168 @@ tbody tr:hover {
   font-size: 15px;
   gap: 7px;
   margin: 0;
+}
+
+/* Redesigned task cards (Commands tab). One card per real CLI command. */
+.task-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+
+.task-card {
+  background: #ffffff;
+  border: 1px solid #e1e8ef;
+  border-left-width: 4px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.task-card.task-pipeline { border-left-color: #0f766e; }
+.task-card.task-improve { border-left-color: #6d28d9; }
+.task-card.task-resynth { border-left-color: #1d4ed8; }
+.task-card.task-check { border-left-color: #475569; }
+
+.task-card header h3 {
+  align-items: center;
+  display: inline-flex;
+  font-size: 15px;
+  font-weight: 600;
+  gap: 6px;
+  margin: 0;
+}
+
+.task-card header p {
+  color: #52606d;
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
+.task-title {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.task-title svg {
+  color: #0f766e;
+}
+
+.task-card.task-improve .task-title svg { color: #6d28d9; }
+.task-card.task-resynth .task-title svg { color: #1d4ed8; }
+.task-card.task-check .task-title svg { color: #475569; }
+
+.task-card label {
+  color: #334155;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  font-weight: 500;
+  gap: 4px;
+}
+
+.task-card label input[type="text"],
+.task-card label input:not([type]),
+.task-card label select {
+  background: #ffffff;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.task-card label input[type="range"] {
+  accent-color: #0f766e;
+  padding: 6px 0;
+}
+
+.task-card .task-inline {
+  align-items: center;
+  flex-direction: row;
+  font-weight: 400;
+  gap: 8px;
+}
+
+.task-card .task-inline input[type="checkbox"],
+.task-card .task-inline input[type="radio"] {
+  margin: 0;
+}
+
+.task-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.task-card fieldset {
+  border: 1px solid #e1e8ef;
+  border-radius: 8px;
+  margin: 0;
+  padding: 8px 10px 10px;
+}
+
+.task-card fieldset legend {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.task-card .target-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.task-card .target {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  display: flex;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.task-card .target.active {
+  background: #f3efff;
+  border-color: #6d28d9;
+  color: #4c1d95;
+}
+
+.task-preset-desc {
+  font-size: 12px;
+  margin: 0;
+}
+
+.task-preset-desc em {
+  color: #475569;
+  font-style: normal;
+}
+
+.task-card footer {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.task-cost {
+  font-size: 12px;
+}
+
+.job-error {
+  color: #a33a2a;
+  font-size: 12px;
 }
 
 .target-grid {
