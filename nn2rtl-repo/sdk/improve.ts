@@ -654,10 +654,27 @@ function metricsFromReports(synthesis: SynthesisReport, verif?: VerifResult): Im
     latency_cycles: verif?.timing_actual_cycles !== undefined && verif.timing_actual_cycles >= 0
       ? verif.timing_actual_cycles
       : undefined,
-    ii: verif && typeof (verif as { initiation_interval_cycles?: unknown }).initiation_interval_cycles === "number"
-      ? (verif as { initiation_interval_cycles: number }).initiation_interval_cycles
-      : undefined,
+    ii: deriveInitiationIntervalCycles(verif),
   };
+}
+
+// Per-frame initiation interval. Prefer the explicit field if the testbench
+// emits it; otherwise derive from steady-state pulse positions:
+//   ii = (last_valid_out_cycle - first_valid_in_cycle) / num_frames
+// where num_frames = per_vector.length. This is the same quantity used in
+// output/reports/throughput_per_module.csv and is what increase-throughput
+// must lower for the acceptance gate to fire on real numbers.
+function deriveInitiationIntervalCycles(verif?: VerifResult): number | undefined {
+  if (!verif) return undefined;
+  const explicit = (verif as { initiation_interval_cycles?: unknown }).initiation_interval_cycles;
+  if (typeof explicit === "number" && Number.isFinite(explicit) && explicit >= 0) return explicit;
+  const first = verif.first_valid_in_cycle;
+  const last = verif.last_valid_out_cycle;
+  const numFrames = Array.isArray(verif.per_vector) ? verif.per_vector.length : 0;
+  if (typeof first !== "number" || typeof last !== "number" || numFrames <= 0) return undefined;
+  const span = last - first;
+  if (!Number.isFinite(span) || span <= 0) return undefined;
+  return span / numFrames;
 }
 
 export const improvementMetricsSchema = z
