@@ -2,11 +2,22 @@ import { access, mkdir, open, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_NETWORK_ID, getNetwork, type NetworkId } from "../shared/networks.js";
+
 export const dashboardRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const repoRoot = path.resolve(dashboardRoot, "..");
 export const outputDashboardDir = path.join(repoRoot, "output", "dashboard");
 export const jobsDir = path.join(outputDashboardDir, "jobs");
 export const jobsLogPath = path.join(outputDashboardDir, "jobs.jsonl");
+
+/**
+ * Resolve the absolute output directory for a given network. The registry
+ * stores repo-relative paths so we can keep ResNet-50 on the existing
+ * "output" tree while future networks live under "output/<id>".
+ */
+export function outputDirFor(networkId: NetworkId = DEFAULT_NETWORK_ID): string {
+  return path.resolve(repoRoot, getNetwork(networkId).outputDir);
+}
 
 export async function ensureDashboardDirs(): Promise<void> {
   await mkdir(jobsDir, { recursive: true });

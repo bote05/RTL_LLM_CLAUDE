@@ -91,21 +91,21 @@ describe("job safety model", () => {
     const planPreview = previewJob({
       type: "improve-sweep",
       preset: "reduce-ff",
-      run: false,
+      plan: true,
       keepReference: true,
       maxModules: 8,
     });
-    expect(planPreview.command).toContain("improve sweep");
+    expect(planPreview.command).toContain("improve_sweep");
     expect(planPreview.command).toContain("--preset=reduce-ff");
     expect(planPreview.command).toContain("--plan");
-    expect(planPreview.command).toContain("--max-modules 8");
+    expect(planPreview.command).toContain("--max-modules=8");
     expect(planPreview.costRisk).toBe("none");
     expect(planPreview.expensive).toBe(false);
 
     const runPreview = previewJob({
       type: "improve-sweep",
       preset: "ppa",
-      run: true,
+      plan: false,
       keepReference: true,
     });
     expect(runPreview.command).toContain("--run");
@@ -113,6 +113,55 @@ describe("job safety model", () => {
     expect(runPreview.costRisk).toBe("high");
     expect(runPreview.canonicalRisk).toBe(true);
     expect(runPreview.expensive).toBe(true);
+  });
+
+  it("builds an improve-sweep preview in --plan mode that costs nothing", () => {
+    const preview = previewJob({
+      type: "improve-sweep",
+      preset: "ppa",
+      plan: true,
+      maxModules: 5,
+    });
+
+    expect(preview.command).toMatch(/scripts[\\/]+improve_sweep\.ts/);
+    expect(preview.command).toContain("--preset=ppa");
+    expect(preview.command).toContain("--targets=use-dsp,reduce-lut,reduce-latency");
+    expect(preview.command).toContain("--plan");
+    expect(preview.command).toContain("--max-modules=5");
+    expect(preview.costRisk).toBe("none");
+    expect(preview.canonicalRisk).toBe(false);
+    expect(preview.expensive).toBe(false);
+  });
+
+  it("builds an improve-sweep preview in --run mode flagged as expensive", () => {
+    const preview = previewJob({
+      type: "improve-sweep",
+      preset: "use-dsp",
+      plan: false,
+      keepReference: true,
+    });
+
+    expect(preview.command).toContain("--run");
+    expect(preview.command).toContain("--keep-reference");
+    expect(preview.costRisk).toBe("high");
+    expect(preview.expensive).toBe(true);
+    // Sweep --run runs the multi-step sequence per module; canonical RTL is
+    // temporarily mutated between sequence steps even with --keep-reference,
+    // so the dashboard flags any --run sweep as canonical-risky.
+    expect(preview.canonicalRisk).toBe(true);
+  });
+
+  it("builds a resynth-module preview that spawns the wrapper script", () => {
+    const preview = previewJob({
+      type: "resynth-module",
+      moduleId: "node_conv_42",
+    });
+
+    expect(preview.command).toMatch(/scripts[\\/]+vivado_resynth_module\.ts/);
+    expect(preview.command).toContain("node_conv_42");
+    expect(preview.command).toContain("--network=resnet-50");
+    expect(preview.costRisk).toBe("none");
+    expect(preview.canonicalRisk).toBe(false);
   });
 
   it("requires confirmation before starting any job", async () => {

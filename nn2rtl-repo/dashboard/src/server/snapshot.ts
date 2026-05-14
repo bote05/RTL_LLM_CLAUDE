@@ -1,11 +1,18 @@
 import path from "node:path";
 import {
   listFilesRecursive,
+  outputDirFor,
   pathExists,
   readJson,
   repoRoot,
 } from "./paths.js";
 import { readJobs } from "./jobs.js";
+import {
+  DEFAULT_NETWORK_ID,
+  NETWORKS,
+  getNetwork,
+  type NetworkId,
+} from "../shared/networks.js";
 import type {
   DashboardKpis,
   DocSummary,
@@ -14,6 +21,7 @@ import type {
   ImprovementReportSummary,
   LayerSummary,
   ModuleStage,
+  NetworkInfo,
   ProjectSnapshot,
 } from "../shared/types.js";
 
@@ -39,12 +47,12 @@ function toRelative(root: string, filePath: string): string {
   return path.relative(root, filePath).split(path.sep).join("/");
 }
 
-function reportPath(root: string, moduleId: string, suffix: string): string {
-  return path.join(root, "output", "reports", `${moduleId}${suffix}`);
+function reportPath(outputBase: string, moduleId: string, suffix: string): string {
+  return path.join(outputBase, "reports", `${moduleId}${suffix}`);
 }
 
-function rtlPath(root: string, moduleId: string, suffix: string): string {
-  return path.join(root, "output", "rtl", `${moduleId}${suffix}`);
+function rtlPath(outputBase: string, moduleId: string, suffix: string): string {
+  return path.join(outputBase, "rtl", `${moduleId}${suffix}`);
 }
 
 function stageFor(input: {
@@ -130,11 +138,11 @@ async function loadDocs(root: string): Promise<DocSummary[]> {
   return docs.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function loadImprovements(root: string): Promise<{
+async function loadImprovements(root: string, outputBase: string): Promise<{
   reports: ImprovementReportSummary[];
   totalCostUsd: number;
 }> {
-  const files = (await listFilesRecursive(path.join(root, "output", "reports")))
+  const files = (await listFilesRecursive(path.join(outputBase, "reports")))
     .filter((file) => path.basename(file).startsWith("improve_") && file.endsWith(".json"));
   const reports: ImprovementReportSummary[] = [];
   // Sum cost from raw `messages[].total_cost_usd` while we have the full
@@ -206,16 +214,22 @@ async function loadImprovements(root: string): Promise<{
   return { reports, totalCostUsd };
 }
 
-async function loadImproveRuns(root: string): Promise<ImproveRunSummary[]> {
-  const improveRoot = path.join(root, "output", "improve");
+async function loadImproveRuns(root: string, outputBase: string): Promise<ImproveRunSummary[]> {
+  const improveRoot = path.join(outputBase, "improve");
   const files = await listFilesRecursive(improveRoot);
   const byRun = new Map<string, ImproveRunSummary>();
+  // Improve artifacts live at `<outputBase>/improve/<moduleId>/<runId>/...`.
+  // We strip the outputBase prefix so the moduleId/runId positions are stable
+  // regardless of whether outputBase is "output" (resnet-50) or
+  // "output/<network>" (future networks).
+  const improveRel = toRelative(root, improveRoot);
+  const improvePrefixLen = improveRel === "" ? 0 : improveRel.split("/").length;
   for (const file of files) {
     const rel = toRelative(root, file);
     const parts = rel.split("/");
-    if (parts.length < 4) continue;
-    const moduleId = parts[2];
-    const runId = parts[3];
+    if (parts.length < improvePrefixLen + 2) continue;
+    const moduleId = parts[improvePrefixLen];
+    const runId = parts[improvePrefixLen + 1];
     const key = `${moduleId}/${runId}`;
     const current = byRun.get(key) ?? {
       moduleId,
@@ -243,14 +257,37 @@ function docsForModule(moduleId: string, opType: string, docs: DocSummary[]): Do
   });
 }
 
-export async function buildSnapshot(root: string = repoRoot): Promise<ProjectSnapshot> {
-  const layerIr = asRecord(await readJson(path.join(root, "output", "layer_ir.json")));
-  const pipelineState = asRecord(await readJson(path.join(root, "output", "pipeline_state.json")));
-  const pipelineSummary = asRecord(await readJson(path.join(root, "output", "reports", "pipeline_summary.json")));
+export type BuildSnapshotOptions = {
+  /**
+   * Network whose artifacts to load. Defaults to the registry default
+   * (ResNet-50), which keeps the original `output/` flat layout working.
+   */
+  networkId?: NetworkId;
+  /**
+   * Override for the resolved output directory. Used by snapshot tests that
+   * seed a temp repo and want to point at a specific subtree.
+   */
+  outputBase?: string;
+};
+
+export async function buildSnapshot(
+  root: string = repoRoot,
+  options: BuildSnapshotOptions = {},
+): Promise<ProjectSnapshot> {
+  const networkId = options.networkId ?? DEFAULT_NETWORK_ID;
+  // When the caller passes a custom root (tests), resolve the output base
+  // relative to it. When using the default repo root, defer to the network
+  // registry so future networks can sit under `output/<network>/`.
+  const outputBase =
+    options.outputBase ??
+    (root === repoRoot ? outputDirFor(networkId) : path.join(root, "output"));
+  const layerIr = asRecord(await readJson(path.join(outputBase, "layer_ir.json")));
+  const pipelineState = asRecord(await readJson(path.join(outputBase, "pipeline_state.json")));
+  const pipelineSummary = asRecord(await readJson(path.join(outputBase, "reports", "pipeline_summary.json")));
   const layers = asArray<JsonRecord>(layerIr.layers);
   const docs = await loadDocs(root);
-  const { reports: improvements, totalCostUsd: improveCostUsd } = await loadImprovements(root);
-  const improveRuns = await loadImproveRuns(root);
+  const { reports: improvements, totalCostUsd: improveCostUsd } = await loadImprovements(root, outputBase);
+  const improveRuns = await loadImproveRuns(root, outputBase);
   const jobs = root === repoRoot ? await readJobs() : [];
   const moduleIds = new Set(layers.map((layer) => asString(layer.module_id)).filter(Boolean) as string[]);
 
@@ -258,10 +295,10 @@ export async function buildSnapshot(root: string = repoRoot): Promise<ProjectSna
   for (let index = 0; index < layers.length; index += 1) {
     const layer = layers[index];
     const moduleId = asString(layer.module_id) ?? `layer_${index}`;
-    const verifPath = reportPath(root, moduleId, ".results.json");
-    const vivadoPath = reportPath(root, moduleId, ".vivado.json");
-    const rtlFile = rtlPath(root, moduleId, ".v");
-    const metaFile = rtlPath(root, moduleId, ".meta.json");
+    const verifPath = reportPath(outputBase, moduleId, ".results.json");
+    const vivadoPath = reportPath(outputBase, moduleId, ".vivado.json");
+    const rtlFile = rtlPath(outputBase, moduleId, ".v");
+    const metaFile = rtlPath(outputBase, moduleId, ".meta.json");
     const verif = asRecord(await readJson(verifPath));
     const vivado = asRecord(await readJson(vivadoPath));
     const moduleImprovements = improvements.filter((report) => report.moduleId === moduleId);
@@ -290,8 +327,8 @@ export async function buildSnapshot(root: string = repoRoot): Promise<ProjectSna
       }),
       hasRtl,
       hasMeta: await pathExists(metaFile),
-      hasGoldenIn: await pathExists(path.join(root, "output", "goldens", `${moduleId}.goldin`)),
-      hasGoldenOut: await pathExists(path.join(root, "output", "goldens", `${moduleId}.goldout`)),
+      hasGoldenIn: await pathExists(path.join(outputBase, "goldens", `${moduleId}.goldin`)),
+      hasGoldenOut: await pathExists(path.join(outputBase, "goldens", `${moduleId}.goldout`)),
       pipelineStatus: asString(asRecord(pipelineState.modules)[moduleId]),
       pipelineAttempts: asNumber(asRecord(pipelineState.attempts)[moduleId]),
       verif: Object.keys(verif).length > 0 ? {
@@ -345,16 +382,27 @@ export async function buildSnapshot(root: string = repoRoot): Promise<ProjectSna
     if (typeof value !== "string") continue;
     stateCounts[value] = (stateCounts[value] ?? 0) + 1;
   }
-  const rtlArtifacts = (await listFilesRecursive(path.join(root, "output", "rtl")))
+  const rtlArtifacts = (await listFilesRecursive(path.join(outputBase, "rtl")))
     .filter((file) => file.endsWith(".v"))
     .map((file) => toRelative(root, file));
-  const reportArtifacts = (await listFilesRecursive(path.join(root, "output", "reports")))
+  const reportArtifacts = (await listFilesRecursive(path.join(outputBase, "reports")))
     .filter((file) => /\.(results|vivado)\.json$/.test(file))
     .map((file) => toRelative(root, file));
+  const networks: NetworkInfo[] = NETWORKS.map((network) => ({
+    id: network.id,
+    label: network.label,
+    modelName: network.modelName,
+    description: network.description,
+    available: network.available,
+    defaultCheckpointPath: network.defaultCheckpointPath,
+    outputDir: network.outputDir,
+  }));
   return {
     generatedAt: new Date().toISOString(),
     repoRoot: root,
-    modelName: asString(layerIr.model_name) ?? "unknown",
+    networkId,
+    networks,
+    modelName: asString(layerIr.model_name) ?? getNetwork(networkId).modelName,
     quantization: asString(layerIr.quantization),
     kpis,
     modules,

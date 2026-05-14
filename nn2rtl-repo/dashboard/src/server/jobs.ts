@@ -2,7 +2,8 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { dashboardRoot, ensureDashboardDirs, jobsDir, jobsLogPath, repoRoot, toRepoRelative } from "./paths.js";
-import type { JobAction, JobPreview, JobRecord } from "../shared/types.js";
+import { DEFAULT_NETWORK_ID, getNetwork } from "../shared/networks.js";
+import { IMPROVE_SWEEP_PRESETS, type JobAction, type JobPreview, type JobRecord, type JobState } from "../shared/types.js";
 
 type RunningJob = {
   record: JobRecord;
@@ -108,58 +109,95 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
       ];
       if (action.keepReference !== false) args.push("--keep-reference");
       return {
-        title: isSequence ? `Improve ${action.moduleId} sequence` : `Improve ${action.moduleId}`,
+        title: isSequence
+          ? `Improve ${action.moduleId} (sequence: ${targets.join(", ")})`
+          : `Improve ${action.moduleId} (${targets[0] ?? ""})`,
         commandBin: nodeCommand(),
         args,
         cwd: repoRoot,
-        writes: action.keepReference === false || isSequence
-          ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/", "knowledge/references/improved/", "knowledge/patterns/improved/"]
+        writes: action.keepReference === false
+          ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/"]
           : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"],
         costRisk: "high",
-        canonicalRisk: action.keepReference === false || isSequence,
+        // Multi-target improve is run as a SEQUENCE: each step's accepted RTL
+        // temporarily replaces canonical so the next step has a baseline to
+        // build on. Even with --keep-reference, canonical IS mutated during
+        // execution (restored at the end on success / on rollback on
+        // failure). Surface that as canonical-risky in the dashboard so the
+        // user is warned.
+        canonicalRisk: isSequence ? true : action.keepReference === false,
         expensive: true,
         stopWarning: isSequence
-          ? "Stopping a multi-target improve can leave the current sequential step's canonical RTL in place; use the generated reports/archives to inspect or restore."
+          ? "Stopping interrupts the current sequence step. Steps already accepted into the prefix are preserved; if --keep-reference was set, the canonical RTL may be in a temporary intermediate state until the next clean run."
           : "Stopping interrupts Foundry/Vivado if they are running, but any completed attempt artifacts remain on disk.",
       };
     }
     case "improve-sweep": {
-      const preset = action.preset ?? "ppa";
-      const run = action.run === true;
-      const maySequence = preset === "ppa";
+      // Sweep is a thin orchestration script: it walks every module in the
+      // current network's pipeline state and runs `npx tsx sdk/main.ts improve`
+      // for each. When `--plan` is set, the script *prints* the plan and exits
+      // without spending money — exactly what the dashboard's "preset preview"
+      // button needs.
+      const preset = IMPROVE_SWEEP_PRESETS.find((entry) => entry.id === action.preset);
+      if (!preset) throw new Error(`Unknown improve sweep preset '${action.preset}'.`);
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
       const args = [
         "--import",
         tsxLoaderPath(),
-        path.join(repoRoot, "sdk", "main.ts"),
-        "improve",
-        "sweep",
-        `--preset=${preset}`,
+        path.join(repoRoot, "scripts", "improve_sweep.ts"),
+        `--preset=${preset.id}`,
+        `--targets=${preset.targets.join(",")}`,
+        `--network=${networkId}`,
       ];
-      if (run) args.push("--run");
-      else args.push("--plan");
-      if (action.keepReference === false) args.push("--replace");
-      else args.push("--keep-reference");
-      if (action.maxModules !== undefined) {
-        args.push("--max-modules", String(action.maxModules));
+      if (action.plan) args.push("--plan");
+      else args.push("--run");
+      if (action.keepReference !== false) args.push("--keep-reference");
+      if (action.maxModules !== undefined && Number.isFinite(action.maxModules)) {
+        args.push(`--max-modules=${action.maxModules}`);
       }
       return {
-        title: run ? `Run improve sweep (${preset})` : `Plan improve sweep (${preset})`,
+        title: action.plan
+          ? `Plan improve sweep (${preset.label})`
+          : `Improve sweep — ${preset.label}`,
         commandBin: nodeCommand(),
         args,
         cwd: repoRoot,
-        writes: run
-          ? action.keepReference === false
-            ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/"]
-            : maySequence
-              ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/", "knowledge/references/improved/", "knowledge/patterns/improved/"]
-              : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"]
-          : ["output/reports/"],
-        costRisk: run ? "high" : "none",
-        canonicalRisk: run && (action.keepReference === false || maySequence),
-        expensive: run,
-        stopWarning: run
-          ? "Stopping interrupts the current Foundry/Vivado attempt, but completed sweep artifacts remain on disk."
-          : "Stopping a dry sweep plan only stops report generation; no RTL or knowledge files are changed.",
+        writes: action.plan
+          ? ["(none — plan mode just prints the plan)"]
+          : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"],
+        costRisk: action.plan ? "none" : "high",
+        // Sweep always runs the multi-step sequence per module, so a --run
+        // sweep is canonical-risky regardless of --keep-reference (canonical
+        // is temporarily replaced between sequence steps). --plan only
+        // prints and never mutates anything.
+        canonicalRisk: action.plan ? false : true,
+        expensive: !action.plan,
+        stopWarning: action.plan
+          ? "Stopping the plan is harmless — no jobs were spawned."
+          : "Stopping the sweep interrupts the current module. Completed modules keep their artifacts; the next module is not started.",
+      };
+    }
+    case "resynth-module": {
+      // Thin wrapper around the existing Vivado integration: rebuilds Vivado
+      // reports for a single module that already has RTL on disk. No LLM
+      // calls, no money spent.
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
+      return {
+        title: `Resynth ${action.moduleId} (Vivado only)`,
+        commandBin: nodeCommand(),
+        args: [
+          "--import",
+          tsxLoaderPath(),
+          path.join(repoRoot, "scripts", "vivado_resynth_module.ts"),
+          action.moduleId,
+          `--network=${networkId}`,
+        ],
+        cwd: repoRoot,
+        writes: ["output/reports/<module>.vivado.json"],
+        costRisk: "none",
+        canonicalRisk: false,
+        expensive: false,
+        stopWarning: "Stopping interrupts Vivado; the existing report on disk is left alone.",
       };
     }
     case "promote-variant":

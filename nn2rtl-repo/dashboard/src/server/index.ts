@@ -12,6 +12,7 @@ import {
   resolveReadablePath,
 } from "./paths.js";
 import { buildSnapshot } from "./snapshot.js";
+import { DEFAULT_NETWORK_ID, NETWORKS, isKnownNetworkId } from "../shared/networks.js";
 import type { JobAction } from "../shared/types.js";
 
 const HOST = "127.0.0.1";
@@ -83,7 +84,25 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, url: URL):
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (req.method === "GET" && url.pathname === "/api/snapshot") {
-    sendJson(res, await buildSnapshot());
+    const requested = url.searchParams.get("network");
+    const networkId = isKnownNetworkId(requested) ? requested : DEFAULT_NETWORK_ID;
+    sendJson(res, await buildSnapshot(undefined, { networkId }));
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/networks") {
+    sendJson(res, {
+      defaultNetworkId: DEFAULT_NETWORK_ID,
+      networks: NETWORKS.map((network) => ({
+        id: network.id,
+        label: network.label,
+        modelName: network.modelName,
+        description: network.description,
+        available: network.available,
+        defaultCheckpointPath: network.defaultCheckpointPath,
+        outputDir: network.outputDir,
+      })),
+    });
     return;
   }
 
