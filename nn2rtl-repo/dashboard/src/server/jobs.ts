@@ -68,11 +68,13 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
 } {
   switch (action.type) {
     case "pipeline": {
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
       const args = [
         "--import",
         tsxLoaderPath(),
         path.join(repoRoot, "sdk", "main.ts"),
         resolveRepoInputPath(action.checkpointPath),
+        `--network=${networkId}`,
       ];
       if (action.resume) args.push("--resume");
       if (action.maxRetries !== undefined) args.push("--max-retries", String(action.maxRetries));
@@ -89,7 +91,7 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
         commandBin: nodeCommand(),
         args,
         cwd: repoRoot,
-        writes: ["output/", "knowledge/"],
+        writes: [`${getNetwork(networkId).outputDir}/`, "knowledge/"],
         costRisk: "high",
         canonicalRisk: true,
         expensive: true,
@@ -99,12 +101,14 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
     case "improve": {
       const targets = [...new Set(action.targets)];
       const isSequence = targets.length > 1;
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
       const args = [
         "--import",
         tsxLoaderPath(),
         path.join(repoRoot, "sdk", "main.ts"),
         "improve",
         action.moduleId,
+        `--network=${networkId}`,
         `--targets=${targets.join(",")}`,
       ];
       if (action.keepReference !== false) args.push("--keep-reference");
@@ -116,8 +120,8 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
         args,
         cwd: repoRoot,
         writes: action.keepReference === false
-          ? ["output/improve/", "output/reports/", "output/rtl/", "output/rtl/archive/"]
-          : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"],
+          ? [`${getNetwork(networkId).outputDir}/improve/`, `${getNetwork(networkId).outputDir}/reports/`, `${getNetwork(networkId).outputDir}/rtl/`, `${getNetwork(networkId).outputDir}/rtl/archive/`]
+          : [`${getNetwork(networkId).outputDir}/improve/`, `${getNetwork(networkId).outputDir}/reports/`, "knowledge/references/improved/", "knowledge/patterns/improved/"],
         costRisk: "high",
         // Multi-target improve is run as a SEQUENCE: each step's accepted RTL
         // temporarily replaces canonical so the next step has a baseline to
@@ -164,7 +168,7 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
         cwd: repoRoot,
         writes: action.plan
           ? ["(none — plan mode just prints the plan)"]
-          : ["output/improve/", "output/reports/", "knowledge/references/improved/", "knowledge/patterns/improved/"],
+          : [`${getNetwork(networkId).outputDir}/improve/`, `${getNetwork(networkId).outputDir}/reports/`, "knowledge/references/improved/", "knowledge/patterns/improved/"],
         costRisk: action.plan ? "none" : "high",
         // Sweep always runs the multi-step sequence per module, so a --run
         // sweep is canonical-risky regardless of --keep-reference (canonical
@@ -193,14 +197,15 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
           `--network=${networkId}`,
         ],
         cwd: repoRoot,
-        writes: ["output/reports/<module>.vivado.json"],
+        writes: [`${getNetwork(networkId).outputDir}/reports/<module>.vivado.json`],
         costRisk: "none",
         canonicalRisk: false,
         expensive: false,
         stopWarning: "Stopping interrupts Vivado; the existing report on disk is left alone.",
       };
     }
-    case "promote-variant":
+    case "promote-variant": {
+      const networkId = action.networkId ?? DEFAULT_NETWORK_ID;
       return {
         title: `Promote ${action.moduleId} ${action.targetSlug}`,
         commandBin: nodeCommand(),
@@ -210,14 +215,16 @@ function actionToCommand(action: JobAction): Omit<JobPreview, "action" | "comman
           path.join(repoRoot, "scripts", "promote_variant.ts"),
           action.moduleId,
           action.targetSlug,
+          `--network=${networkId}`,
         ],
         cwd: repoRoot,
-        writes: ["output/rtl/", "output/rtl/archive/", "output/reports/", "output/reports/archive/"],
+        writes: [`${getNetwork(networkId).outputDir}/rtl/`, `${getNetwork(networkId).outputDir}/rtl/archive/`, `${getNetwork(networkId).outputDir}/reports/`, `${getNetwork(networkId).outputDir}/reports/archive/`],
         costRisk: "none",
         canonicalRisk: true,
         expensive: false,
         stopWarning: "Stopping cannot undo any archive or canonical files already written by the promotion script.",
       };
+    }
     case "check": {
       const checks: Record<CheckName, { title: string; commandBin: string; args: string[] }> = {
         twins: { title: "Run SDK/MCP twin check", commandBin: npmCommand(), args: ["run", "check:twins"] },

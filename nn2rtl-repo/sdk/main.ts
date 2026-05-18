@@ -3,11 +3,17 @@
 process.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "200000";
 
 import { runImproveCli } from "./improve.js";
+import { runImportNetworkCli } from "./import_network.js";
 import { handlePipelineError, runCli } from "./orchestrate.js";
 
 const argv = process.argv.slice(2);
 const command = argv[0];
-const runner = command === "improve" ? runImproveCli(argv.slice(1)) : runCli(argv);
+const runner =
+  command === "improve"
+    ? runImproveCli(argv.slice(1))
+    : command === "import_network"
+      ? runImportNetworkCli(argv.slice(1))
+      : runCli(argv);
 
 runner.catch(async (error: unknown) => {
   await handlePipelineError(error);

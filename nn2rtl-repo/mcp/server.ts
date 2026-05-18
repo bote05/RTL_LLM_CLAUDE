@@ -113,7 +113,9 @@ export const toolDefinitions = [
   {
     name: "get_failure_corpus",
     description:
-      "Retrieve visible scored failed RTL attempts from output/failure_corpus/visible. " +
+      "Retrieve visible scored failed RTL attempts from registered network outputs. " +
+      "When signature_hash/exact_reference_key/runtime_layer_signature are supplied, " +
+      "uses the post-contract relaxation ladder and honors contraindications. " +
       "Returns summaries plus rtl_path/failure_path; optionally includes Verilog source. Archived failures are intentionally hidden.",
     inputSchema: toJsonSchema(getFailureCorpusInput),
     outputSchema: toJsonSchema(getFailureCorpusOutput),
@@ -203,6 +205,9 @@ async function handleGetRtlPatterns(
     input.kernel_h,
     input.kernel_w,
     input.contract_id,
+    input.signature_hash,
+    input.exact_reference_key,
+    input.runtime_layer_signature,
   );
   return toToolResult(result as unknown as Record<string, unknown>);
 }

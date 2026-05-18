@@ -88,6 +88,7 @@ const contractIdSchema = z.enum([
   "dram-backed-weights",
   "activation-double-buffering",
   "weight-tiling",
+  "depthwise-conv",
 ]);
 
 const contractParamSchema = z.record(
@@ -100,7 +101,7 @@ const contractParamSchema = z.record(
 export const layerIrBaseSchema = z
   .object({
     module_id: z.string(),
-    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool", "global_avg_pool", "gemm"]),
     input_shape: z.array(z.number().int().positive()),
     output_shape: z.array(z.number().int().positive()),
     weights_path: z.string(),
@@ -111,6 +112,12 @@ export const layerIrBaseSchema = z
     lhs_scale_factor: z.number().optional(),
     rhs_scale_factor: z.number().optional(),
     zero_point: z.number().int(),
+    quantization_family: z.string().optional(),
+    // Optional upper-bound clip applied AFTER op (e.g. ReLU6 sets clip_max=6).
+    // For relu, when set, output = clamp(x, 0, clip_max). When absent the
+    // activation is the standard unbounded ReLU. Other op_types currently
+    // ignore the field; carrying it as optional avoids a schema migration.
+    clip_max: z.number().optional(),
     pipeline_latency_cycles: z.number().int().positive(),
     clock_period_ns: z.number().nonnegative(),
     input_width_bits: z.number().int().positive(),
@@ -156,6 +163,15 @@ export const layerIrBaseSchema = z
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
     pool_padding: z.array(z.number().int().nonnegative()).optional(),
+    // GlobalAveragePool spatial dims [H, W] — folded into SCALE_MULT/SHIFT.
+    gap_spatial: z.array(z.number().int().positive()).optional(),
+    // Gemm (FC) layer geometry, mirroring weight_shape [M, K].
+    gemm_in_features: z.number().int().positive().optional(),
+    gemm_out_features: z.number().int().positive().optional(),
+    base_layer_signature: z.record(z.string(), z.unknown()).optional(),
+    runtime_layer_signature: z.record(z.string(), z.unknown()).optional(),
+    signature_hash: z.string().optional(),
+    exact_reference_key: z.string().nullable().optional(),
   })
   .strict();
 

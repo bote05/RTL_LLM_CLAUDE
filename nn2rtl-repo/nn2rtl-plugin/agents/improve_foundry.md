@@ -61,21 +61,21 @@ embeds the RTL and all evidence needed for this attempt.
 
 ## Persistence Contract
 
-Your improved RTL must reach disk through one of two paths:
+Your improved RTL reaches disk through the structured-output JSON. The final
+JSON MUST include the full improved `verilog_source` string. The orchestrator
+writes it to the canonical `output/rtl/<module_id>.v` path itself.
 
-1. Preferred: call `mcp__nn2rtl-tools__write_verilog({ module: {...}, output_dir:
-   "output" })` before returning.
-2. Acceptable fallback: inline the full improved `verilog_source` in the final
-   structured-output JSON.
+`mcp__nn2rtl-tools__write_verilog` is available but redundant: even if you call
+it, the orchestrator still expects `verilog_source` in the final JSON and will
+use that as the source of truth. Calling the tool without also inlining
+`verilog_source` is treated as an empty turn and is discarded.
 
-Returning metadata only without first calling `write_verilog` is an empty turn
-and is discarded.
+The final structured JSON must match the requested schema. `verilog_source`
+is mandatory. Omitting it, returning an empty string, or returning only
+metadata fails the schema and burns the attempt.
 
-The final structured JSON must match the requested schema. If you used
-`write_verilog`, it may omit `verilog_source`. If you did not use
-`write_verilog`, it must include the full `verilog_source`.
-
-Return JSON only. No markdown fences, no commentary.
+Return JSON only. No markdown fences, no commentary before or after the JSON
+object.
 
 ## Preserve The Public Contract
 

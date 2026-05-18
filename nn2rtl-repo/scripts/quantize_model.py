@@ -37,14 +37,33 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional checkpoint path. Relative paths are resolved against the repository root.",
     )
+    parser.add_argument(
+        "--network",
+        default=None,
+        help="Network id from networks.json. Uses its defaultCheckpointPath when checkpoint_path is omitted.",
+    )
     return parser.parse_args()
+
+
+def default_checkpoint_for_network(repo_root: Path, network_id: str | None) -> str | None:
+    if not network_id:
+        return None
+    registry = json.loads((repo_root / "networks.json").read_text(encoding="utf8"))
+    for network in registry.get("networks", []):
+        if network.get("id") == network_id:
+            return network.get("defaultCheckpointPath")
+    known = ", ".join(str(n.get("id")) for n in registry.get("networks", []))
+    raise ValueError(f"Unknown network '{network_id}'. Known: {known}")
 
 
 def main() -> None:
     torch.manual_seed(0)
     args = parse_args()
     repo_root = detect_repo_root(__file__)
-    checkpoint_path = resolve_checkpoint_path(repo_root, args.checkpoint_path)
+    checkpoint_path = resolve_checkpoint_path(
+        repo_root,
+        args.checkpoint_path or default_checkpoint_for_network(repo_root, args.network),
+    )
 
     payload = build_resnet50_quantized_checkpoint(checkpoint_path)
     write_quantized_checkpoint(checkpoint_path, payload)

@@ -24,10 +24,12 @@ import {
   createOrchestratorRuntime,
   extractToolUseAudits,
   findLayer,
+  getActiveNetworkId,
   loadRetrospectorKnowledgeDoc,
   pathExists,
   readJsonFile,
   requireStructuredOutput,
+  setActiveNetwork,
   synthesisPreflightReport,
   synthesisPreflightViolations,
   writeJsonFile,
@@ -35,6 +37,7 @@ import {
   type OrchestratorRuntime,
   type RtlKnowledgeDoc,
 } from "./orchestrate.js";
+import { resolveLayerContractId } from "./contracts.js";
 import {
   layerIrSchema,
   pipelineIrSchema,
@@ -50,6 +53,7 @@ import type {
   VerifResult,
   VerilogModule,
 } from "./types.js";
+import { applicabilityForSignature, signatureBundle } from "./signatures.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,6 +98,8 @@ export type ImprovementCheckerConfig = {
   improveFmaxMinDelta: number;
   improveFmaxFloorMhz: number;
   improveFmaxMinAdditiveMhz: number;
+  increaseThroughputMinFpsDelta: number;
+  increaseThroughputMinDspMultiplier: number;
 };
 
 export const DEFAULT_IMPROVEMENT_CHECKER_CONFIG: ImprovementCheckerConfig = {
@@ -111,6 +117,16 @@ export const DEFAULT_IMPROVEMENT_CHECKER_CONFIG: ImprovementCheckerConfig = {
   // least baseline + this many MHz, capped at the absolute floor.
   improveFmaxMinAdditiveMhz:
     Number(process.env.NN2RTL_IMPROVE_FMAX_MIN_ADDITIVE_MHZ ?? "") || 50,
+  // increase-throughput acceptance is FPS-based, not II-only. A 0.5% II
+  // reduction that costs 10% Fmax is a net wall-clock regression. Require
+  // real fps headroom to count.
+  increaseThroughputMinFpsDelta:
+    Number(process.env.NN2RTL_IMPROVE_THROUGHPUT_MIN_FPS_DELTA ?? "") || 0.10,
+  // Parallelization on a 1-DSP baseline must add MACs. Without the multiplier
+  // gate, Foundry returns single-DSP "tweaks" that satisfy II-on-paper but
+  // do not represent the architectural change the target is asking for.
+  increaseThroughputMinDspMultiplier:
+    Number(process.env.NN2RTL_IMPROVE_THROUGHPUT_MIN_DSP_MULTIPLIER ?? "") || 2,
 };
 
 export type ImprovementTargetResult = {
@@ -239,6 +255,7 @@ export type RunImproveOptions = {
 
 export type ImproveCliArgs = {
   moduleId: string;
+  networkId: string | undefined;
   targets: ImprovementTarget[];
   keepReference: boolean;
 };
@@ -287,6 +304,7 @@ export type ImproveSweepResult = {
 };
 
 export type ImproveSweepCliArgs = {
+  networkId?: string;
   preset: ImproveSweepPreset;
   run: boolean;
   keepReference: boolean;
@@ -302,20 +320,14 @@ function toOutputFormat(schema: z.ZodType): OutputFormat {
 
 // Improve Foundry SHOULD persist `verilog_source` via
 // `mcp__nn2rtl-tools__write_verilog`, but the improve pipeline also accepts an
-// inline final JSON source as a resilient fallback. So the schema accepts BOTH
-// shapes:
-//   - metadata-only: `{module_id, spec_hash, generated_by, attempt}`
-//   - full:          `{module_id, spec_hash, verilog_source, generated_by, attempt}`
-// The orchestrator's hydrate step then either reads the .v from disk
-// (write_verilog path) OR writes the inline source to disk first (inline
-// path). Either way the canonical RTL ends up at the expected location
-// before Verilator + Vivado run, and the improve run survives Foundry's
-// choice of output style.
-const verilogModuleAgentOutputSchema = verilogModuleSchema
-  .omit({ verilog_source: true })
-  .extend({
-    verilog_source: z.string().optional(),
-  });
+// The improve schema requires `verilog_source` to be inlined. When Foundry
+// was allowed to omit it (relying on `write_verilog`), the agent took the
+// permission as a signal to skip inlining AND skipped the tool call,
+// producing metadata-only turns that the orchestrator could not hydrate.
+// Mandatory inline makes the orchestrator's hydrate path always succeed:
+// the source is written to disk from the structured output. `write_verilog`
+// becomes a redundant tool call (still allowed, but no longer load-bearing).
+const verilogModuleAgentOutputSchema = verilogModuleSchema;
 type VerilogModuleAgentOutput = z.infer<typeof verilogModuleAgentOutputSchema>;
 const verilogModuleAgentOutputFormat = toOutputFormat(verilogModuleAgentOutputSchema);
 const retrospectorAdviceOutputFormat = toOutputFormat(retrospectorAdviceSchema);
@@ -325,7 +337,9 @@ function isSdkResultMessage(message: SDKMessage): message is SDKResultMessage {
 }
 
 export function defaultImprovePaths(repoRoot = defaultRepoRoot): ImprovePaths {
-  const outputRoot = path.join(repoRoot, "output");
+  const outputRoot = repoRoot === defaultRepoRoot
+    ? (process.env.NN2RTL_OUTPUT_DIR ? path.resolve(repoRoot, process.env.NN2RTL_OUTPUT_DIR) : path.join(repoRoot, "output"))
+    : path.join(repoRoot, "output");
   return {
     repoRoot,
     outputRoot,
@@ -395,6 +409,7 @@ export function parseImprovementTargets(raw: string): ImprovementTarget[] {
 
 export function parseImproveCliArgs(argv: string[]): ImproveCliArgs {
   const positional: string[] = [];
+  let networkId: string | undefined;
   let targets: ImprovementTarget[] | null = null;
   let keepReference = false;
 
@@ -402,6 +417,17 @@ export function parseImproveCliArgs(argv: string[]): ImproveCliArgs {
     const arg = argv[i];
     if (arg === "--keep-reference") {
       keepReference = true;
+    } else if (arg === "--network") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--network requires a network id.");
+      }
+      networkId = next;
+    } else if (arg.startsWith("--network=")) {
+      networkId = arg.slice("--network=".length);
+      if (!networkId) {
+        throw new Error("--network= requires a non-empty network id.");
+      }
     } else if (arg === "--targets") {
       const next = argv[++i];
       if (next === undefined || next.startsWith("--")) {
@@ -423,10 +449,11 @@ export function parseImproveCliArgs(argv: string[]): ImproveCliArgs {
     );
   }
 
-  return { moduleId: positional[0], targets, keepReference };
+  return { moduleId: positional[0], networkId, targets, keepReference };
 }
 
 export function parseImproveSweepCliArgs(argv: string[]): ImproveSweepCliArgs {
+  let networkId: string | undefined;
   let preset: ImproveSweepPreset = "ppa";
   let run = false;
   let keepReference = true;
@@ -436,6 +463,17 @@ export function parseImproveSweepCliArgs(argv: string[]): ImproveSweepCliArgs {
     const arg = argv[i];
     if (arg === "--run") {
       run = true;
+    } else if (arg === "--network") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--network requires a network id.");
+      }
+      networkId = next;
+    } else if (arg.startsWith("--network=")) {
+      networkId = arg.slice("--network=".length);
+      if (!networkId) {
+        throw new Error("--network= requires a non-empty network id.");
+      }
     } else if (arg === "--dry-run" || arg === "--plan") {
       run = false;
     } else if (arg === "--keep-reference") {
@@ -479,7 +517,7 @@ export function parseImproveSweepCliArgs(argv: string[]): ImproveSweepCliArgs {
     }
   }
 
-  return { preset, run, keepReference, maxModules };
+  return { networkId, preset, run, keepReference, maxModules };
 }
 
 function metricValue(metrics: ImprovementMetrics, target: ImprovementTarget): number | undefined {
@@ -625,14 +663,42 @@ export function evaluateImprovementTargets(
         };
       }
       case "increase-throughput": {
-        const satisfied = next.ii! < baseline.ii!;
+        // FPS = Fmax * 1e6 / II. II-only gates are gameable: Foundry can
+        // trade Fmax for cycles and "win" on paper while regressing the
+        // wall-clock throughput. Score the actual fps.
+        const baselineFps = (baseline.fmax_mhz! * 1e6) / baseline.ii!;
+        const newFps = (next.fmax_mhz! * 1e6) / next.ii!;
+        const requiredFps = baselineFps * (1 + config.increaseThroughputMinFpsDelta);
+        const fpsSatisfied = newFps > requiredFps;
+        // Parallelization mandate. If the baseline already uses a non-trivial
+        // number of DSPs we don't require doubling (replication isn't the
+        // only path to throughput); but on a baseline-DSP=1 module, returning
+        // a 1-DSP variant proves the agent didn't replicate MAC lanes.
+        const dspGateRequired = baseline.dsp >= 1
+          ? Math.max(1, Math.ceil(baseline.dsp * config.increaseThroughputMinDspMultiplier))
+          : 1;
+        const dspSatisfied = next.dsp >= dspGateRequired;
+        const satisfied = fpsSatisfied && dspSatisfied;
+        const reasons: string[] = [];
+        if (!fpsSatisfied) {
+          reasons.push(
+            `new.fps=${newFps.toFixed(4)} is not above baseline.fps=${baselineFps.toFixed(4)} * (1 + ${config.increaseThroughputMinFpsDelta}) = ${requiredFps.toFixed(4)}.`,
+          );
+        }
+        if (!dspSatisfied) {
+          reasons.push(
+            `new.dsp=${next.dsp} is below the required ${dspGateRequired} (= max(1, ceil(baseline.dsp=${baseline.dsp} * ${config.increaseThroughputMinDspMultiplier}))). MAC parallelization must add DSPs on a serialized-MAC baseline.`,
+          );
+        }
         return {
           target,
           satisfied,
-          baseline_value: baseline.ii,
-          new_value: next.ii,
-          required: "new.ii < baseline.ii",
-          reason: satisfied ? "Throughput target satisfied." : `new.ii=${next.ii} is not lower than baseline ${baseline.ii}.`,
+          baseline_value: baselineFps,
+          new_value: newFps,
+          required:
+            `new.fps > baseline.fps * (1 + ${config.increaseThroughputMinFpsDelta}) AND ` +
+            `new.dsp >= ${dspGateRequired}`,
+          reason: satisfied ? "Throughput target satisfied." : reasons.join(" "),
         };
       }
     }
@@ -642,6 +708,47 @@ export function evaluateImprovementTargets(
     overall: results.every((result) => result.satisfied),
     targets: results,
   };
+}
+
+// Decide whether an attempt's Verilator result is acceptable as the input to
+// the synthesis + acceptance-gate stages, given the requested target list.
+//
+// For most targets the rule is simply `status === "pass"` — outputs match the
+// goldens exactly AND first_valid_out lands on the LayerIR's expected cycle.
+//
+// `increase-throughput` is the deliberate exception. The whole point of that
+// target is to lower per-frame cycles in steady state — but the static
+// testbench enforces per-vector `actual_cycles == timing_expected_cycles`,
+// which a successful parallelization breaks by design. We accept the attempt
+// when it is bit-exact (mismatch_count == 0, max_error == 0) AND first-frame
+// cycles still match the pipeline-fill contract (so time-to-first-output is
+// preserved). Subsequent vectors are allowed to finish faster — that is the
+// target's literal mechanism.
+function isAssayerResultAcceptableForTargets(
+  verif: VerifResult,
+  targets: ImprovementTarget[],
+): boolean {
+  if (verif.status === "pass") return true;
+  if (!targets.includes("increase-throughput")) return false;
+  const bitExact =
+    verif.mismatch_count === 0 &&
+    verif.max_error === 0 &&
+    verif.exact_match_count !== undefined &&
+    verif.sample_count !== undefined &&
+    verif.exact_match_count === verif.sample_count;
+  if (!bitExact) return false;
+  const perVector = verif.per_vector ?? [];
+  if (perVector.length === 0) return false;
+  const firstFrameCycles = perVector[0]?.actual_cycles;
+  const expectedFill = verif.timing_expected_cycles;
+  if (
+    typeof firstFrameCycles !== "number" ||
+    typeof expectedFill !== "number" ||
+    firstFrameCycles !== expectedFill
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function metricsFromReports(synthesis: SynthesisReport, verif?: VerifResult): ImprovementMetrics {
@@ -1102,13 +1209,30 @@ const TARGET_GUIDANCE: Record<ImprovementTarget, string> = {
     "  - Removing a register that breaks DSP inference (see `use-dsp`) loses LUT savings instantly.",
   ].join("\n"),
   "increase-throughput": [
-    "GOAL: lower initiation interval (II) — the design accepts a new input every fewer cycles.",
+    "GOAL: increase real wall-clock throughput (FPS = Fmax / II). The acceptance gate evaluates FPS, not II alone — trading Fmax for II is rejected.",
+    "II is measured per frame by the deterministic verifier as `(last_valid_out_cycle - first_valid_in_cycle) / num_frames`. FPS = `fmax_mhz * 1e6 / ii`. Acceptance gate: `new.fps > baseline.fps * (1 + delta)`.",
+    "DSP PARALLELIZATION MANDATE: if baseline DSP count is N, you must return at least `ceil(N * minDspMultiplier)` DSPs (typically 2N). On a baseline-DSP=1 module, returning 1 DSP proves you did not replicate MAC lanes and the gate will reject the attempt. Adding parallel MACs costs DSPs — that is the explicit mechanism for this target.",
+    "PRECEDENCE OVERRIDE: the protected pattern docs and reference modules describe the conservative serialized-MAC datapath used for first-pass correctness. When this target is active, those serialization guidelines DO NOT APPLY. Specifically the conv1x1/3x3/7x7 references' \"flat weights_path, one read per cycle, do not switch to parallel bank reads\" rule is SUSPENDED for this turn. Parallel MAC lanes and banked weight memories are the explicit mechanism for this target and are mandatory if you want to lower II.",
+    "TIMING CONTRACT: the deterministic assayer checks `timing_actual_cycles == timing_expected_cycles`, where both refer to the PIPELINE-FILL latency only (cycles to first valid_out after first valid_in). Per-frame II is a separate measurement. You can lower per-frame II while preserving pipeline-fill latency — that is exactly what this target is asking for. Do NOT change time-to-first-output.",
     "HOW:",
-    "  - Identify the resource that's serialized: shared single-port BRAM, single MAC lane, single accumulator. Replicate it (BRAM banks, MAC lanes) so independent inputs don't fight for the same port.",
+    "  - Identify the resource that's serialized: shared single-port BRAM, single MAC lane, single accumulator. Replicate it (BRAM banks, MAC lanes) so independent inputs don't fight for the same port. Doubling MAC lanes typically halves II.",
+    "  - Bank the weight memory by output-channel groups. If the baseline reads one weight per cycle into one MAC, fanning out to N banks lets N MACs work in parallel and cuts per-output cycles by ~N.",
     "  - Switch single-port BRAM to true dual-port (`RAMB36E2` with two independent read addresses) when read patterns conflict.",
+    "  - Output ordering and bit-exactness MUST be preserved. The same goldens still apply. Parallel lanes are allowed only if their reduction matches the serial datapath's per-output value exactly.",
+    "DSP-PACKING DISCIPLINE (mandatory — parallel lanes that synthesize as LUT multipliers fail the gate):",
+    "  - Each parallel multiply MUST be annotated `(* use_dsp = \"yes\" *)` on the line before the assignment AND factored into a registered intermediate: `(* use_dsp = \"yes\" *) reg signed [W-1:0] mul_q [0:N-1]; always @(posedge clk) for (g = 0; g < N; g = g + 1) mul_q[g] <= a[g] * b[g];`. Vivado pattern-matches a DSP48E2 cell off this exact shape.",
+    "  - Both operands of every parallel multiply MUST be `signed [N-1:0]` of identical width. Mixed signed/unsigned or width-mismatched operands routinely keep multipliers in LUT — that is the most common DSP-inference rejection.",
+    "  - DO NOT put `(* dont_touch *)` on the multiplier output register. The DSP48E2 cell absorbs the output flop; `dont_touch` blocks that absorption and forces the multiply back into LUTs even when other annotations are correct.",
+    "  - Register the multiplier output BEFORE feeding into shifts, saturation, or accumulation. A direct combinational `(a*b) >>> N` chain is rejected by the DSP inferrer.",
+    "  - Put each lane's multiply in its own `always @(posedge clk)` registered statement inside an unconditional `for ... generate` loop or unrolled block. Multiplies hidden inside `for ... if (...)` conditional generate blocks may map inconsistently across Vivado versions; prefer unconditional registered multiplies.",
+    "  - Sanity check: if your baseline used `DSP=2` and you doubled MAC lanes to 8, the synthesized DSP count should be at least 4 (typically 8). A reported `dsp_count == 1` with much higher LUT/FF and `fmax_mhz == 0` is the classic signature of failed DSP inference — the design parallelizes in simulation but goes back to LUT-ripple multipliers in synth and timing collapses.",
     "PITFALLS:",
     "  - II=1 designs need every BRAM read to be deterministic from the inputs. Address-pipelining can make II=1 hard to verify functionally.",
     "  - Doubling MACs doubles DSP usage. Confirm the board has the budget (ZCU102 / XCZU9EG has 2,520 DSP48E2 — plenty for a single layer, less so for a whole pipeline).",
+    "  - Do NOT also touch pipeline-fill latency. Extra fill stages fail `timing_actual_cycles == timing_expected_cycles` and burn the attempt. For conv stems, pipeline-fill is dominated by line-buffer fill (the wait for the first complete receptive field of input rows), NOT by per-output MAC time — so parallelizing the per-output MAC compute does not change time-to-first-output in practice.",
+    "  - Returning RTL with the same II as baseline is treated as a no-op and fails the acceptance gate.",
+    "  - Returning RTL whose II is lower but whose synthesized `fmax_mhz` is 0 (timing failed to close) ALSO fails the gate. Bit-exact simulation is necessary but not sufficient — the design must close timing on xczu9eg with the original clock period. If you cannot pack parallel multiplies into DSPs, the design will not close timing.",
+    "MANDATORY: you MUST emit a complete `verilogModuleSchema` JSON with a modified `verilog_source`. Refusing the task or returning only an explanation message is treated as agent_max_turns_exhausted and burns the attempt. Even an aggressive attempt with high DSP cost is preferred over no attempt.",
   ].join("\n"),
 };
 
@@ -1120,7 +1244,7 @@ const TARGETS_COMMON_GUIDANCE = [
   "  - Do NOT use `Bash`, `Read`, or `Write` tools. There are none registered for this turn. The original RTL is fully embedded below.",
   "  - Do NOT introduce non-synthesizable constructs: `#delay` outside testbench, `force`/`release`, `initial weights[i] = expr` outside `$readmemh`, dynamic `for` loops outside generate, `wait`, `fork/join`.",
   "  - Do NOT widen, narrow, or reorder ports. Internal width changes are fine.",
-  "  - Output: a single JSON object matching `verilogModuleSchema` — `module_id`, `spec_hash`, `verilog_source` (the FULL improved RTL as a JSON-escaped string), `generated_by: \"Foundry\"`, `attempt: <attempt_index>`. No markdown fences, no commentary, nothing else.",
+  "  - Output: a single JSON object matching `verilogModuleSchema` — `module_id`, `spec_hash`, `verilog_source` (the FULL improved RTL as a JSON-escaped string — MANDATORY, the schema rejects metadata-only output), `generated_by: \"Foundry\"`, `attempt: <attempt_index>`. No markdown fences, no commentary before or after the JSON object.",
 ].join("\n");
 
 function summarizeBaselineMetrics(metrics: ImprovementMetrics): string {
@@ -1196,11 +1320,24 @@ function checkerRulesForTargets(
           `  - reduce-latency: pass iff new.latency_cycles < ${baseline.latency_cycles ?? "(missing — baseline metrics need timing_actual_cycles)"}.`,
         );
         break;
-      case "increase-throughput":
+      case "increase-throughput": {
+        const baselineFps = baseline.ii !== undefined && baseline.fmax_mhz !== undefined
+          ? (baseline.fmax_mhz * 1e6) / baseline.ii
+          : undefined;
+        const requiredFps = baselineFps !== undefined
+          ? baselineFps * (1 + config.increaseThroughputMinFpsDelta)
+          : undefined;
+        const dspGateRequired = baseline.dsp >= 1
+          ? Math.max(1, Math.ceil(baseline.dsp * config.increaseThroughputMinDspMultiplier))
+          : 1;
         lines.push(
-          `  - increase-throughput: pass iff new.ii < ${baseline.ii ?? "(missing — baseline metrics need initiation_interval_cycles)"}.`,
+          `  - increase-throughput: pass iff new.fps > ${requiredFps?.toFixed(4) ?? "(missing — baseline needs fmax + ii)"} ` +
+          `(= baseline.fps=${baselineFps?.toFixed(4) ?? "?"} * (1 + ${config.increaseThroughputMinFpsDelta})) ` +
+          `AND new.dsp >= ${dspGateRequired} (= ceil(baseline.dsp=${baseline.dsp} * ${config.increaseThroughputMinDspMultiplier})). ` +
+          "II-only wins are rejected; trading Fmax for cycles loses. Single-DSP returns on a serial-MAC baseline are rejected.",
         );
         break;
+      }
     }
   }
   return ["DETERMINISTIC CHECKER RULES (ALL must pass):", ...lines].join("\n");
@@ -1481,6 +1618,12 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
         plugins: [{ type: "local", path: pluginPath }],
         outputFormat: verilogModuleAgentOutputFormat,
         maxTurns: AGENT_CONFIG.Foundry.maxTurns,
+        // Match the foundry/improve_foundry agent-definition frontmatter:
+        // both pin `effort: high`. The normal pipeline picks this up via
+        // loadPluginAgentDefinition; the improve flow builds options
+        // manually and was previously omitting it, which downgraded the
+        // Opus thinking budget and produced shorter, less coherent turns.
+        effort: "high",
         ...(input.resume_session_id ? { resume: input.resume_session_id } : {}),
       },
     })) {
@@ -1539,17 +1682,24 @@ function makeDefaultFoundryImproveFn(paths: ImprovePaths): (input: FoundryImprov
       // Foundry's structured output is fragile (escapes outside string
       // literals, truncated final messages, BOMs). Recover by synthesizing
       // metadata from `input` (we know module_id, spec_hash, attempt) and
-      // hydrating from the on-disk RTL Foundry already persisted via
-      // `write_verilog`. Without this fallback, a single malformed JSON byte
-      // wastes the entire turn's spend.
+      // pulling `verilog_source` off the on-disk RTL — but only if it was
+      // freshly written by `write_verilog` during this turn. Otherwise we'd
+      // silently score the previous attempt's RTL as this turn's output.
       const verilogPath = path.join(paths.rtlDir, `${input.module_id}.v`);
       const verilogStat = await pathExists(verilogPath);
       if (!verilogStat) {
         throw err;
       }
+      const { stat: statFn } = await import("node:fs/promises");
+      const stat = await statFn(verilogPath);
+      if (stat.mtime.getTime() < agentTurnStartTime.getTime()) {
+        throw err;
+      }
+      const diskSource = await readFile(verilogPath, "utf8");
       metadata = {
         module_id: input.module_id,
         spec_hash: input.original_module.spec_hash,
+        verilog_source: diskSource,
         generated_by: "Foundry",
         attempt: input.attempt_index,
       };
@@ -1767,6 +1917,14 @@ async function commitImprovedReference(input: {
   runtime: ImproveRuntime;
 }): Promise<string> {
   const slug = `${sanitizePathPart(input.moduleId)}__${targetSlug(input.targets)}`;
+  const contractId = resolveLayerContractId(input.layer);
+  const signatures = signatureBundle({
+    baseLayer: input.layer,
+    runtimeLayer: input.layer,
+    baseContractId: contractId,
+    runtimeContractId: contractId,
+    modelQuantization: input.layer.quantization_family,
+  });
   const referenceRel = `knowledge/references/improved/${slug}.v`;
   const patternRel = `knowledge/patterns/improved/${slug}.md`;
   const referenceAbs = path.join(input.paths.repoRoot, referenceRel);
@@ -1780,8 +1938,11 @@ async function commitImprovedReference(input: {
       "---",
       `tier: improved`,
       `op_type: ${input.layer.op_type}`,
-      `contract_id: ${input.layer.contract_id ?? "flat-bus"}`,
+      `contract_id: ${contractId}`,
       `module_id: ${input.moduleId}`,
+      `signature_hash: ${signatures.signature_hash}`,
+      `exact_reference_key: ${signatures.exact_reference_key ?? "none"}`,
+      `derived_from_networks: [${getActiveNetworkId()}]`,
       `targets: [${input.targets.join(", ")}]`,
       `created_at: ${input.runtime.now().toISOString()}`,
       "---",
@@ -1807,9 +1968,18 @@ async function commitImprovedReference(input: {
   lifecycle.docs[id] = {
     id,
     op_type: input.layer.op_type,
-    contract_id: input.layer.contract_id ?? "flat-bus",
+    contract_id: contractId,
     contract_key: input.module.spec_hash,
     spec_hash: input.module.spec_hash,
+    signature_hashes: [signatures.signature_hash],
+    exact_reference_keys: signatures.exact_reference_key ? [signatures.exact_reference_key] : [],
+    derived_from_networks: [getActiveNetworkId()],
+    derived_from_modules: [input.moduleId],
+    applicability: applicabilityForSignature({
+      networkId: getActiveNetworkId(),
+      signatures,
+    }),
+    contraindications: [],
     status: "active",
     pattern_path: patternRel,
     reference_path: referenceRel,
@@ -2023,7 +2193,7 @@ export async function runImprove(
     const verif = await runtime.assayerFn(module, layer);
     const assayerResult = verifResultSchema.parse(verif);
     attempt.assayer_result = assayerResult;
-    if (assayerResult.status !== "pass") {
+    if (!isAssayerResultAcceptableForTargets(assayerResult, targets)) {
       attempt.failed_gate = "verilator";
       attempts.push(attempt);
       await persistAttempt(paths, moduleId, runId, attempt);
@@ -2409,6 +2579,9 @@ export async function runImproveSequence(
 export async function runImproveCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "sweep") {
     const cli = parseImproveSweepCliArgs(argv.slice(1));
+    if (cli.networkId) {
+      setActiveNetwork(cli.networkId);
+    }
     const result = await runImproveSweep({
       preset: cli.preset,
       run: cli.run,
@@ -2425,6 +2598,9 @@ export async function runImproveCli(argv: string[] = process.argv.slice(2)): Pro
     return;
   }
   const cli = parseImproveCliArgs(argv);
+  if (cli.networkId) {
+    setActiveNetwork(cli.networkId);
+  }
   const result = await runImproveSequence(cli.moduleId, {
     targets: cli.targets,
     keepReference: cli.keepReference,

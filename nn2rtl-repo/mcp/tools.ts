@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync as readFileSyncNative } from "node:fs";
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -707,6 +707,35 @@ export function resolveRepoRootFromEnv(env: NodeJS.ProcessEnv = process.env): st
   return override ? normalizePathForCurrentHost(override) : repoRoot;
 }
 
+function outputDirForNetworkEnv(env: NodeJS.ProcessEnv): string | null {
+  const networkId = env.NN2RTL_NETWORK_ID;
+  if (!networkId) return null;
+  try {
+    const registry = JSON.parse(
+      readFileSyncNative(path.join(resolveRepoRootFromEnv(env), "networks.json"), "utf8"),
+    ) as { networks?: Array<{ id?: string; outputDir?: string }> };
+    const network = registry.networks?.find((entry) => entry.id === networkId);
+    return typeof network?.outputDir === "string" && network.outputDir.length > 0
+      ? network.outputDir
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveActiveOutputRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const root = resolveRepoRootFromEnv(env);
+  const raw =
+    env.NN2RTL_OUTPUT_DIR ??
+    outputDirForNetworkEnv(env) ??
+    env.OUTPUT_DIR ??
+    "output";
+  const hostPath = normalizePathForCurrentHost(raw);
+  return path.isAbsolute(hostPath) || isWindowsAbsolutePath(hostPath)
+    ? hostPath
+    : path.resolve(root, hostPath);
+}
+
 function requireAbsoluteSidecarPaths(sidecar: VerificationSidecar): void {
   const pathFields = [
     "golden_inputs_path",
@@ -1249,12 +1278,23 @@ export async function read_weights(
 ): Promise<PipelineIR> {
   const runtime = createToolsRuntime(runtimeOverrides);
   const scriptPath = path.join(repoRoot, "scripts", "generate_golden.py");
-  const outputPath = path.join(resolveRepoRootFromEnv(runtime.env), "output", "golden_vectors.json");
+  const outputRootRaw = runtime.env.NN2RTL_OUTPUT_DIR ?? "output";
+  const hostOutputRoot = normalizePathForCurrentHost(outputRootRaw);
+  const outputRoot = path.isAbsolute(hostOutputRoot) || isWindowsAbsolutePath(hostOutputRoot)
+    ? hostOutputRoot
+    : path.join(resolveRepoRootFromEnv(runtime.env), hostOutputRoot);
+  const outputPath = path.join(outputRoot, "golden_vectors.json");
+  const generateArgs = [scriptPath, checkpoint_path, "--output-dir", outputRoot];
+  if (runtime.env.NN2RTL_NETWORK_ID) {
+    generateArgs.push("--network", runtime.env.NN2RTL_NETWORK_ID);
+  }
 
-  await runtime.commandRunner(PYTHON_COMMAND, [scriptPath, checkpoint_path], {
+  await runtime.commandRunner(PYTHON_COMMAND, generateArgs, {
     cwd: runtime.cwd,
     env: {
       ...runtime.env,
+      NN2RTL_NETWORK_ID: runtime.env.NN2RTL_NETWORK_ID,
+      NN2RTL_OUTPUT_DIR: outputRoot,
       NN2RTL_QUANTIZATION_CONFIG: JSON.stringify(quantization_config),
     },
   });
@@ -1303,7 +1343,7 @@ export type GetRtlPatternsResult = {
 };
 
 export type GetFailureCorpusResult = {
-  visible_tier: "output/failure_corpus/visible";
+  visible_tier: string;
   entries: Array<Record<string, unknown>>;
 };
 
@@ -1318,6 +1358,10 @@ type GeneratedDocEntry = {
   op_type: string;
   contract_id?: string;
   contract_key?: string;
+  signature_hashes?: string[];
+  exact_reference_keys?: string[];
+  applicability?: Record<string, unknown>;
+  contraindications?: Array<string | Record<string, unknown>>;
   status: GeneratedDocTier | "archived";
   pattern_path?: string;
   reference_path?: string;
@@ -1354,6 +1398,10 @@ function resolvePatternPaths(
     paths.push(...tieredPatternPaths("09_dram_backed_weights.md"));
     return paths;
   }
+  if (contract_id === "depthwise-conv") {
+    paths.push(...tieredPatternPaths("12_depthwise_conv.md"));
+    return paths;
+  }
   if (contract_id !== "flat-bus") {
     return paths;
   }
@@ -1371,6 +1419,10 @@ function resolvePatternPaths(
     paths.push(...tieredPatternPaths("06_relu.md"));
   } else if (op_type === "maxpool") {
     paths.push(...tieredPatternPaths("07_maxpool.md"));
+  } else if (op_type === "global_avg_pool") {
+    paths.push(...tieredPatternPaths("10_global_avg_pool.md"));
+  } else if (op_type === "gemm") {
+    paths.push(...tieredPatternPaths("11_gemm.md"));
   }
   return paths;
 }
@@ -1390,33 +1442,117 @@ function lifecycleDocsFor(
   op_type: string,
   kind: "pattern" | "reference",
   contract_id?: string,
+  lookup?: CorpusLookupInput,
 ): Array<{ path: string; contract_id?: string; contract_key?: string }> {
   const docs = Object.values(state.docs ?? {});
   const tierOrder: Record<GeneratedDocTier, number> = { active: 0, probationary: 1 };
-  return docs
-    .filter((doc): doc is GeneratedDocEntry & { status: GeneratedDocTier } =>
-      doc.op_type === op_type &&
-      (doc.status === "active" || doc.status === "probationary") &&
-      (contract_id === undefined || (doc.contract_id ?? "flat-bus") === contract_id),
+  const ranked = docs
+    .map((doc) => ({
+      doc,
+      matchLevel: corpusMatchLevel({
+        op_type: doc.op_type,
+        contract_id: doc.contract_id ?? "flat-bus",
+        signature_hashes: doc.signature_hashes,
+        exact_reference_keys: doc.exact_reference_keys,
+        applicability: doc.applicability,
+        contraindications: doc.contraindications,
+      }, {
+        op_type,
+        contract_id,
+        runtime_layer_signature: lookup?.runtime_layer_signature,
+        signature_hash: lookup?.signature_hash,
+        exact_reference_key: lookup?.exact_reference_key,
+      }),
+    }))
+    .filter(
+      (entry): entry is { doc: GeneratedDocEntry & { status: GeneratedDocTier }; matchLevel: CorpusMatchLevel } =>
+        entry.matchLevel !== null &&
+        (entry.doc.status === "active" || entry.doc.status === "probationary"),
     )
     .sort((a, b) => {
-      const tierDelta = tierOrder[a.status] - tierOrder[b.status];
-      return tierDelta !== 0 ? tierDelta : a.id.localeCompare(b.id);
+      const matchDelta = CORPUS_MATCH_RANK[a.matchLevel] - CORPUS_MATCH_RANK[b.matchLevel];
+      if (matchDelta !== 0) return matchDelta;
+      const tierDelta = tierOrder[a.doc.status] - tierOrder[b.doc.status];
+      return tierDelta !== 0 ? tierDelta : a.doc.id.localeCompare(b.doc.id);
     })
-    .map((doc) => ({
+    .map(({ doc }) => ({
+      doc,
       path: kind === "pattern" ? doc.pattern_path : doc.reference_path,
       contract_id: doc.contract_id,
       contract_key: doc.contract_key,
-    }))
-    .flatMap((entry) =>
-      typeof entry.path === "string" && entry.path.length > 0
-        ? [{
-            path: path.resolve(repoRoot, entry.path),
-            contract_id: entry.contract_id,
-            contract_key: entry.contract_key,
-          }]
-        : [],
-    );
+    }));
+
+  type InjectedEntry = {
+    doc: GeneratedDocEntry;
+    path: string;
+    contract_id?: string;
+    contract_key?: string;
+  };
+  const injected: InjectedEntry[] = [];
+  for (const entry of ranked) {
+    if (typeof entry.path !== "string" || entry.path.length === 0) continue;
+    injected.push({
+      doc: entry.doc,
+      path: path.resolve(repoRoot, entry.path),
+      contract_id: entry.contract_id,
+      contract_key: entry.contract_key,
+    });
+  }
+
+  // Architectural dedup. Two references with the same structural shape
+  // (contract + op + kernel + stride + groups + channel_tile + quant_family)
+  // teach the same template; injecting both wastes Foundry's context budget
+  // for zero added signal. The signature ladder already sorted by match
+  // quality + tier, so keeping the FIRST entry per architectural fingerprint
+  // preserves the strongest representative of each distinct architecture.
+  // Different channel counts / bus widths within the same fingerprint do
+  // NOT count as different architecture — the design pattern is identical,
+  // only the parameters scale.
+  const seenFingerprints = new Set<string>();
+  const seenPaths = new Set<string>();
+  const deduped: InjectedEntry[] = [];
+  for (const entry of injected) {
+    if (seenPaths.has(entry.path)) continue;
+    seenPaths.add(entry.path);
+    const fp = architecturalFingerprint(entry.doc);
+    if (seenFingerprints.has(fp)) continue;
+    seenFingerprints.add(fp);
+    deduped.push(entry);
+  }
+  return deduped.map(({ path: p, contract_id: cid, contract_key: ck }) => ({
+    path: p,
+    contract_id: cid,
+    contract_key: ck,
+  }));
+}
+
+// Build a stable "architecture" key from a lifecycle doc. Two docs with the
+// same key describe the same RTL template shape and should not both be
+// injected — they teach the same lesson. Intentionally excludes channel
+// counts and bus widths (those scale the template, they don't change it).
+function architecturalFingerprint(doc: GeneratedDocEntry): string {
+  const app = (doc.applicability ?? {}) as Record<string, unknown>;
+  const pairLike = (v: unknown): string => {
+    if (Array.isArray(v) && v.length >= 2) return `${v[0]}x${v[1]}`;
+    if (typeof v === "number") return `${v}`;
+    if (typeof v === "string") return v;
+    return "?";
+  };
+  const numLike = (v: unknown): string => {
+    if (typeof v === "number") return `${v}`;
+    if (typeof v === "string") return v;
+    return "?";
+  };
+  return [
+    doc.op_type ?? "?",
+    doc.contract_id ?? "?",
+    pairLike(app.kernel),
+    pairLike(app.stride),
+    pairLike(app.dilation),
+    numLike(app.groups),
+    numLike(app.channel_tile),
+    numLike(app.quantization_family),
+  ].join("|");
 }
 
 function resolveReferencePaths(fileName: string): string[] {
@@ -1450,9 +1586,25 @@ export async function get_rtl_patterns(
   kernel_h?: number,
   kernel_w?: number,
   contract_id?: string,
+  signature_hash?: string,
+  exact_reference_key?: string | null,
+  runtime_layer_signature?: Record<string, unknown>,
 ): Promise<GetRtlPatternsResult> {
   const lifecycleState = await readDocLifecycleState();
-  const lifecyclePatternDocs = lifecycleDocsFor(lifecycleState, op_type, "pattern", contract_id);
+  const lookup: CorpusLookupInput = {
+    op_type,
+    contract_id,
+    signature_hash,
+    exact_reference_key,
+    runtime_layer_signature: runtime_layer_signature ?? {
+      op_type,
+      contract_id: contract_id ?? "flat-bus",
+      ...(kernel_h !== undefined || kernel_w !== undefined
+        ? { kernel: [kernel_h ?? null, kernel_w ?? kernel_h ?? null] }
+        : {}),
+    },
+  };
+  const lifecyclePatternDocs = lifecycleDocsFor(lifecycleState, op_type, "pattern", contract_id, lookup);
   const patternPaths = [
     ...resolvePatternPaths(op_type, kernel_h, kernel_w, contract_id ?? "flat-bus"),
     ...lifecyclePatternDocs.map((doc) => doc.path),
@@ -1473,7 +1625,7 @@ export async function get_rtl_patterns(
 
   let reference_verilog: string | null = null;
   let license_notice: string | null = null;
-  const lifecycleReferenceDocs = lifecycleDocsFor(lifecycleState, op_type, "reference", contract_id);
+  const lifecycleReferenceDocs = lifecycleDocsFor(lifecycleState, op_type, "reference", contract_id, lookup);
   const lifecycleReferencePaths = lifecycleReferenceDocs.map((doc) => doc.path);
 
   // Concrete worked-example wrappers — one per kernel shape we have a
@@ -1582,40 +1734,284 @@ export async function get_rtl_patterns(
   return { pattern_markdown, reference_verilog, license_notice };
 }
 
+type CorpusLookupInput = {
+  module_id?: string;
+  op_type?: string;
+  contract_id?: string;
+  spec_hash?: string;
+  signature_hash?: string;
+  exact_reference_key?: string | null;
+  runtime_layer_signature?: Record<string, unknown>;
+};
+
+type CorpusMatchLevel =
+  | "exact_signature"
+  | "exact_reference_key"
+  | "op_contract_kernel_stride_groups"
+  | "op_contract_kernel"
+  | "op"
+  | "legacy_filter";
+
+const CORPUS_MATCH_RANK: Record<CorpusMatchLevel, number> = {
+  exact_signature: 0,
+  exact_reference_key: 1,
+  op_contract_kernel_stride_groups: 2,
+  op_contract_kernel: 3,
+  op: 4,
+  legacy_filter: 5,
+};
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringValues(value: unknown): string[] {
+  if (typeof value === "string" && value.length > 0) return [value];
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+  }
+  return [];
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const [found] = stringValues(value);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function pairValue(value: unknown): [number | null, number | null] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const a = numberValue(value[0]) ?? null;
+  const b = numberValue(value[1]) ?? a;
+  return a === null && b === null ? undefined : [a, b];
+}
+
+function samePair(
+  a: [number | null, number | null] | undefined,
+  b: [number | null, number | null] | undefined,
+): boolean {
+  return a !== undefined && b !== undefined && a[0] === b[0] && a[1] === b[1];
+}
+
+function kernelFromShape(shape: Record<string, unknown>): [number | null, number | null] | undefined {
+  const weightShape = shape.weight_shape;
+  if (!Array.isArray(weightShape)) return undefined;
+  const kh = numberValue(weightShape[2]);
+  const kw = numberValue(weightShape[3]);
+  return kh === undefined || kw === undefined ? undefined : [kh, kw];
+}
+
+function corpusFields(record: Record<string, unknown>): {
+  op_type?: string;
+  contract_id?: string;
+  kernel?: [number | null, number | null];
+  stride?: [number | null, number | null];
+  padding?: [number | null, number | null];
+  groups?: number;
+} {
+  const applicability = recordValue(record.applicability);
+  const signature = recordValue(record.runtime_layer_signature);
+  const shape = recordValue(record.shape);
+  return {
+    op_type: firstString(applicability.op_type, signature.op_type, record.op_type),
+    contract_id: firstString(applicability.contract_id, signature.contract_id, record.contract_id),
+    kernel: pairValue(applicability.kernel) ?? pairValue(signature.kernel) ?? kernelFromShape(shape),
+    stride: pairValue(applicability.stride) ?? pairValue(signature.stride) ?? pairValue(shape.stride),
+    padding: pairValue(applicability.padding) ?? pairValue(signature.padding) ?? pairValue(shape.padding),
+    groups:
+      numberValue(applicability.groups) ??
+      numberValue(signature.groups) ??
+      numberValue(shape.groups),
+  };
+}
+
+function entrySignatureHashes(entry: Record<string, unknown>): string[] {
+  const applicability = recordValue(entry.applicability);
+  return [
+    ...stringValues(entry.signature_hash),
+    ...stringValues(entry.signature_hashes),
+    ...stringValues(applicability.signature_hash),
+    ...stringValues(applicability.signature_hashes),
+  ];
+}
+
+function entryExactReferenceKeys(entry: Record<string, unknown>): string[] {
+  const applicability = recordValue(entry.applicability);
+  return [
+    ...stringValues(entry.exact_reference_key),
+    ...stringValues(entry.exact_reference_keys),
+    ...stringValues(applicability.exact_reference_key),
+    ...stringValues(applicability.exact_reference_keys),
+  ];
+}
+
+function valueMatchesRule(value: unknown, actual: string | null | undefined): boolean {
+  if (actual === null || actual === undefined) return false;
+  return stringValues(value).includes(actual);
+}
+
+function corpusContraindicationVetoes(
+  entry: Record<string, unknown>,
+  input: CorpusLookupInput,
+): boolean {
+  const rules = Array.isArray(entry.contraindications) ? entry.contraindications : [];
+  const networkId = process.env.NN2RTL_NETWORK_ID ?? null;
+  for (const rule of rules) {
+    if (typeof rule === "string") {
+      if (
+        rule === input.signature_hash ||
+        rule === input.exact_reference_key ||
+        rule === input.op_type ||
+        rule === input.contract_id ||
+        rule === networkId ||
+        rule === `op_type:${input.op_type}` ||
+        rule === `contract_id:${input.contract_id}` ||
+        rule === `network_id:${networkId}` ||
+        rule === `signature_hash:${input.signature_hash}`
+      ) {
+        return true;
+      }
+      continue;
+    }
+    const record = recordValue(rule);
+    if (
+      valueMatchesRule(record.op_type, input.op_type) ||
+      valueMatchesRule(record.contract_id, input.contract_id) ||
+      valueMatchesRule(record.network_id, networkId) ||
+      valueMatchesRule(record.signature_hash, input.signature_hash) ||
+      valueMatchesRule(record.signature_hashes, input.signature_hash) ||
+      valueMatchesRule(record.exact_reference_key, input.exact_reference_key) ||
+      valueMatchesRule(record.exact_reference_keys, input.exact_reference_key)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function corpusMatchLevel(
+  entry: Record<string, unknown>,
+  input: CorpusLookupInput,
+): CorpusMatchLevel | null {
+  if (corpusContraindicationVetoes(entry, input)) return null;
+  if (input.module_id && entry.module_id !== input.module_id) return null;
+  if (input.spec_hash && entry.spec_hash !== input.spec_hash) return null;
+
+  if (input.signature_hash && entrySignatureHashes(entry).includes(input.signature_hash)) {
+    return "exact_signature";
+  }
+  if (
+    input.exact_reference_key &&
+    entryExactReferenceKeys(entry).includes(input.exact_reference_key)
+  ) {
+    return "exact_reference_key";
+  }
+
+  const target = corpusFields({
+    op_type: input.op_type,
+    contract_id: input.contract_id,
+    runtime_layer_signature: input.runtime_layer_signature,
+  });
+  const fields = corpusFields(entry);
+  if (input.op_type && fields.op_type !== input.op_type) return null;
+  if (!target.op_type || fields.op_type !== target.op_type) {
+    return input.op_type || input.contract_id ? "legacy_filter" : null;
+  }
+
+  const contractMatches = fields.contract_id === target.contract_id;
+  const kernelMatches = samePair(fields.kernel, target.kernel);
+  const strideMatches = samePair(fields.stride, target.stride);
+  const groupsMatches = fields.groups !== undefined && fields.groups === target.groups;
+  if (contractMatches && kernelMatches && strideMatches && groupsMatches) {
+    return "op_contract_kernel_stride_groups";
+  }
+  if (contractMatches && kernelMatches) {
+    return "op_contract_kernel";
+  }
+  if (fields.op_type === target.op_type) {
+    if (input.contract_id && fields.contract_id !== input.contract_id) return null;
+    return "op";
+  }
+  return input.op_type || input.contract_id ? "legacy_filter" : null;
+}
+
 export async function get_failure_corpus(input: {
   module_id?: string;
   op_type?: string;
   contract_id?: string;
   spec_hash?: string;
+  signature_hash?: string;
+  exact_reference_key?: string | null;
+  runtime_layer_signature?: Record<string, unknown>;
   max_entries?: number;
   include_verilog?: boolean;
 }): Promise<GetFailureCorpusResult> {
-  const root = path.resolve(repoRoot, "output", "failure_corpus", "visible");
-  const indexPath = path.join(root, "index.jsonl");
-  let raw: string;
+  const outputRootRaw = process.env.NN2RTL_OUTPUT_DIR ?? "output";
+  const hostOutputRoot = normalizePathForCurrentHost(outputRootRaw);
+  const outputRoot = path.isAbsolute(hostOutputRoot) || isWindowsAbsolutePath(hostOutputRoot)
+    ? hostOutputRoot
+    : path.resolve(repoRoot, hostOutputRoot);
+  const visibleRoots: Array<{ network_id: string | null; model_name: string | null; root: string }> = [];
   try {
-    raw = await readFile(indexPath, "utf8");
+    const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8")) as {
+      networks?: Array<{ id?: string; modelName?: string; outputDir?: string }>;
+    };
+    for (const network of registry.networks ?? []) {
+      if (!network.outputDir) continue;
+      visibleRoots.push({
+        network_id: network.id ?? null,
+        model_name: network.modelName ?? null,
+        root: path.resolve(repoRoot, network.outputDir, "failure_corpus", "visible"),
+      });
+    }
   } catch {
-    return { visible_tier: "output/failure_corpus/visible", entries: [] };
+    // Fall back to the current env-selected output root.
   }
+  visibleRoots.push({
+    network_id: process.env.NN2RTL_NETWORK_ID ?? null,
+    model_name: null,
+    root: path.resolve(outputRoot, "failure_corpus", "visible"),
+  });
+  const dedupedRoots = [...new Map(visibleRoots.map((entry) => [path.resolve(entry.root), entry])).values()];
   const entries: Array<Record<string, unknown>> = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) continue;
+  for (const visible of dedupedRoots) {
+    const indexPath = path.join(visible.root, "index.jsonl");
+    let raw: string;
     try {
-      const entry = JSON.parse(line) as Record<string, unknown>;
-      if (input.module_id && entry.module_id !== input.module_id) continue;
-      if (input.op_type && entry.op_type !== input.op_type) continue;
-      if (input.contract_id && entry.contract_id !== input.contract_id) continue;
-      if (input.spec_hash && entry.spec_hash !== input.spec_hash) continue;
-      entries.push(entry);
+      raw = await readFile(indexPath, "utf8");
     } catch {
-      // Ignore malformed historical corpus lines.
+      continue;
+    }
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        entry.network_id ??= visible.network_id;
+        entry.model_name ??= visible.model_name;
+        const matchLevel = corpusMatchLevel(entry, input);
+        if (matchLevel === null) continue;
+        entry.match_level = matchLevel;
+        entries.push(entry);
+      } catch {
+        // Ignore malformed historical corpus lines.
+      }
     }
   }
   entries.sort((a, b) => {
     const sameModuleA = input.module_id && a.module_id === input.module_id ? 0 : 1;
     const sameModuleB = input.module_id && b.module_id === input.module_id ? 0 : 1;
     if (sameModuleA !== sameModuleB) return sameModuleA - sameModuleB;
+    const rankA = CORPUS_MATCH_RANK[String(a.match_level ?? "legacy_filter") as CorpusMatchLevel] ?? 999;
+    const rankB = CORPUS_MATCH_RANK[String(b.match_level ?? "legacy_filter") as CorpusMatchLevel] ?? 999;
+    if (rankA !== rankB) return rankA - rankB;
     return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
   });
   const limited = entries.slice(0, input.max_entries ?? 5);
@@ -1630,7 +2026,7 @@ export async function get_failure_corpus(input: {
       }
     }
   }
-  return { visible_tier: "output/failure_corpus/visible", entries: limited };
+  return { visible_tier: "registered_network_outputs/failure_corpus/visible", entries: limited };
 }
 
 // ---------------------------------------------------------------------------
@@ -1825,7 +2221,7 @@ function fingerprintInt8(values: number[]): string {
 export async function compute_layer_reference(
   input: ComputeLayerReferenceInput,
 ): Promise<ComputeLayerReferenceOutput> {
-  const layerIrPath = path.resolve(repoRoot, "output", "layer_ir.json");
+  const layerIrPath = path.join(resolveActiveOutputRoot(process.env), "layer_ir.json");
   const layer = findLayer(layerIrPath, input.module_id);
   if (layer.op_type !== "conv2d") {
     throw new Error(

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import array
 import json
+import os
 import operator
 import struct
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -33,7 +34,21 @@ SIGNAL_LITERALS = {
 # multiply/sum/saturate pipe. This avoids the old 512-parallel-multiplier
 # residual add that consumed all 240 Artix-7 DSPs and spilled the rest into
 # LUTs at OC=256.
-PIPELINE_LATENCY_CYCLES = {"conv2d": 2, "relu": 1, "add": 1, "maxpool": 1}
+PIPELINE_LATENCY_CYCLES = {
+    "conv2d": 2,
+    "relu": 1,
+    "add": 1,
+    "maxpool": 1,
+    # Per-channel reduction over H*W feature-map cells. The pipeline can issue
+    # one accumulator update per cycle until all spatial cells are consumed,
+    # then divide by H*W and emit. Foundry computes the exact figure from
+    # spatial / mac_parallelism geometry; this default is the floor.
+    "global_avg_pool": 2,
+    # K-way dot product per output feature. Floor of 2 stages matches the
+    # bias/scale tail of conv; the real value scales with `gemm_in_features /
+    # mac_parallelism` and is filled by the latency model.
+    "gemm": 2,
+}
 SUPPORTED_OP_TYPES = frozenset(PIPELINE_LATENCY_CYCLES)
 
 # Number of register stages wrapped around the output-stationary conv
@@ -288,8 +303,39 @@ class Int8FusedStemConv2d(nn.Module):
 
 
 class Int8ReLU(nn.Module):
+    """INT8 ReLU with optional rescale + upper clip.
+
+    For unbounded ReLU (the historical case, used by every ResNet-50 layer),
+    `input_scale == output_scale` and the module is a pure max(0, x) on the
+    INT8 stream. For ReLU6 (MobileNet et al.), the previous Conv's output
+    was calibrated against the float pre-clip range, but the ReLU6's output
+    is calibrated against [0, clip_max]. The two scales differ, so we must
+    requantize from input_scale to output_scale here — otherwise the next
+    layer interprets the INT8 stream with the wrong float scale.
+    """
+
+    def __init__(
+        self,
+        input_scale: float = 1.0,
+        output_scale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.input_scale = float(input_scale)
+        self.output_scale = float(output_scale)
+
     def forward(self, x):
-        return quantize_tensor_to_int8_range(torch.relu(x.to(torch.float32)))
+        x_relu = torch.relu(x.to(torch.float32))
+        if self.output_scale == 0.0:
+            scale = 1.0
+        else:
+            scale = self.input_scale / self.output_scale
+        # When input_scale == output_scale (unbounded ReLU), scale == 1 and
+        # this is identical to the previous pass-through behavior. When
+        # they differ (ReLU6), the multiply requantizes the INT8 stream so
+        # downstream layers see values in the post-clip scale. Saturation
+        # at INT8 127 is then the in-domain ReLU6 ceiling.
+        rescaled = round_half_up_toward_pos_inf(x_relu * scale)
+        return torch.clamp(rescaled, -128, 127)
 
 
 class Int8Add(nn.Module):
@@ -321,9 +367,109 @@ class Int8Add(nn.Module):
         return torch.clamp(rescaled, -128, 127)
 
 
+class Int8GlobalAveragePool(nn.Module):
+    """Per-channel reduction over H*W cells, divided by H*W, requantized.
+
+    INT8 input → float accumulator over the spatial domain → divide by H*W →
+    rescale by the composite (input_scale / output_scale) → clamp to INT8.
+
+    The RTL form mirrors this exactly: an INT32 accumulator per channel
+    consumes one cell per cycle, and when the spatial counter wraps the result
+    is multiplied by SCALE_MULT/SCALE_SHIFT (composite scale folds in the
+    1/(H*W) divisor) and clamped to INT8.
+    """
+
+    def __init__(self, input_scale: float, output_scale: float) -> None:
+        super().__init__()
+        self.input_scale = float(input_scale)
+        self.output_scale = float(output_scale)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() != 4:
+            raise GoldenGenerationError(
+                f"Int8GlobalAveragePool expected 4D input, got shape {tuple(x.shape)}"
+            )
+        n, c, h, w = x.shape
+        if h <= 0 or w <= 0:
+            raise GoldenGenerationError(
+                f"Int8GlobalAveragePool input has non-positive spatial dim H={h} W={w}"
+            )
+        # Accumulate in float to avoid INT16 overflow on large H*W (e.g.
+        # 224*224 = 50176 cells fits in INT16 sum-of-INT8s but H*W=14*14 is
+        # the typical classifier-head case and INT32 stays safe).
+        acc = x.to(torch.float32).sum(dim=(2, 3))
+        # Composite scale: input_scale * (1 / output_scale) / (H*W) is the
+        # equivalent multiplier from accumulator-INT to output-INT8. We split
+        # the divide-by-(H*W) into the composite so the RTL doesn't need a
+        # divider; SCALE_MULT/SHIFT carries it.
+        composite = self.input_scale / float(self.output_scale) / float(h * w)
+        rescaled = round_half_up_toward_pos_inf(acc * composite)
+        clamped = torch.clamp(rescaled, -128, 127)
+        # Restore the [N, C, 1, 1] shape that ONNX GlobalAveragePool emits;
+        # downstream Flatten/Reshape is folded out at frontend extraction time.
+        return clamped.unsqueeze(-1).unsqueeze(-1)
+
+
+class Int8Gemm(nn.Module):
+    """INT8 fully-connected layer: `out = W @ x + b`.
+
+    Weights are stored as INT8 [M, K] (pre-quantized); bias is INT32 in
+    accumulator domain. The composite scale (input_scale * weight_scale /
+    output_scale) is applied after the accumulator + bias, matching the
+    conv requantize tail.
+    """
+
+    def __init__(
+        self,
+        weight_int8: torch.Tensor,
+        bias_int32: Optional[torch.Tensor],
+        scale_factor: float,
+    ) -> None:
+        super().__init__()
+        if weight_int8.dim() != 2:
+            raise GoldenGenerationError(
+                f"Int8Gemm expects 2D weight [M, K], got shape {tuple(weight_int8.shape)}"
+            )
+        self.register_buffer("weight", weight_int8.to(torch.int32))
+        if bias_int32 is not None:
+            self.register_buffer("bias", bias_int32.to(torch.int32))
+        else:
+            self.bias = None
+        self.scale_factor = float(scale_factor)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Accept any input rank. nn.Linear-style: matmul against the last
+        # K dims combined. ONNX models can route either [N, K] (post-Flatten)
+        # or [N, C, 1, 1] (post-GlobalAveragePool, no Flatten) into Gemm; both
+        # collapse to [N, K] here. The K-dim product check guarantees the
+        # weight matrix and input are compatible.
+        if x.dim() > 2:
+            n = x.shape[0]
+            k_observed = int(torch.tensor(x.shape[1:]).prod().item())
+            k_weight = int(self.weight.shape[1])
+            if k_observed != k_weight:
+                raise GoldenGenerationError(
+                    f"Int8Gemm input shape {tuple(x.shape)} has flattened K={k_observed} "
+                    f"but weight expects K={k_weight}."
+                )
+            x = x.reshape(n, k_weight)
+        x_int32 = x.to(torch.int32)
+        # x: [N, K], weight: [M, K] → matmul over K
+        acc = x_int32 @ self.weight.t()
+        if self.bias is not None:
+            acc = acc + self.bias.view(1, -1)
+        # Same requantize semantics as conv: round half toward +inf, clamp to
+        # INT8.
+        rescaled = round_half_up_toward_pos_inf(acc.to(torch.float32) * self.scale_factor)
+        return torch.clamp(rescaled, -128, 127)
+
+
 class ResidualStackTracer(fx.Tracer):
     def is_leaf_module(self, module: nn.Module, qualname: str) -> bool:
-        if isinstance(module, (Int8Conv2d, Int8FusedStemConv2d, Int8ReLU, Int8Add)):
+        if isinstance(module, (
+            Int8Conv2d, Int8FusedStemConv2d, Int8ReLU, Int8Add,
+            Int8GlobalAveragePool, Int8Gemm,
+        )):
             return True
         return super().is_leaf_module(module, qualname)
 
@@ -424,8 +570,16 @@ class CheckpointResidualStack(nn.Module):
         return values[final_id]
 
 
+def resolve_output_dir(repo_root: Path) -> Path:
+    raw = os.environ.get("NN2RTL_OUTPUT_DIR")
+    if raw:
+        candidate = Path(raw)
+        return candidate if candidate.is_absolute() else repo_root / candidate
+    return repo_root / "output"
+
+
 def get_output_paths(repo_root: Path) -> tuple[Path, Path, Path]:
-    output_dir = repo_root / "output"
+    output_dir = resolve_output_dir(repo_root)
     layer_ir_path = output_dir / LAYER_IR_FILE_NAME
     legacy_output_path = output_dir / LEGACY_GOLDEN_FILE_NAME
     weights_dir = output_dir / "weights"
@@ -435,7 +589,7 @@ def get_output_paths(repo_root: Path) -> tuple[Path, Path, Path]:
 
 
 def get_goldens_dir(repo_root: Path) -> Path:
-    goldens_dir = repo_root / "output" / "goldens"
+    goldens_dir = resolve_output_dir(repo_root) / "goldens"
     goldens_dir.mkdir(parents=True, exist_ok=True)
     return goldens_dir
 
@@ -707,7 +861,7 @@ def read_golden_vector_file(file_path: Path, bus_bits: int) -> list[list[int]]:
 
 
 def get_legacy_output_path(repo_root: Path) -> Path:
-    return repo_root / "output" / LEGACY_GOLDEN_FILE_NAME
+    return resolve_output_dir(repo_root) / LEGACY_GOLDEN_FILE_NAME
 
 
 def get_weight_artifact_paths(repo_root: Path, module_id: str) -> tuple[Path, Path]:

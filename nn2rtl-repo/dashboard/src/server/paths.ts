@@ -2,7 +2,7 @@ import { access, mkdir, open, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_NETWORK_ID, getNetwork, type NetworkId } from "../shared/networks.js";
+import { DEFAULT_NETWORK_ID, NETWORKS, getNetwork, type NetworkId } from "../shared/networks.js";
 
 export const dashboardRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const repoRoot = path.resolve(dashboardRoot, "..");
@@ -70,24 +70,35 @@ export function toRepoRelative(filePath: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
+const networkReadRoots = NETWORKS.flatMap((network) => {
+  const root = path.resolve(repoRoot, network.outputDir);
+  return ["rtl", "reports", "improve", "dashboard", "failure_corpus"].map((part) => path.join(root, part));
+});
+
+const networkReadFiles = NETWORKS.flatMap((network) => {
+  const root = path.resolve(repoRoot, network.outputDir);
+  return [
+    "layer_ir.json",
+    "pipeline_state.json",
+    "contract_state.json",
+    "golden_vectors.json",
+    "reports/pipeline_summary.json",
+    "reports/run_log.jsonl",
+    "reports/agent_tool_use.jsonl",
+    "reports/tool_calls.jsonl",
+  ].map((part) => path.join(root, part));
+});
+
 const allowedReadRoots = [
-  "output/rtl",
-  "output/reports",
-  "output/improve",
-  "output/dashboard",
-  "knowledge/patterns",
-  "knowledge/references",
-].map((part) => path.resolve(repoRoot, part));
+  ...networkReadRoots,
+  path.resolve(repoRoot, "knowledge/patterns"),
+  path.resolve(repoRoot, "knowledge/references"),
+];
 
 const allowedReadFiles = [
-  "output/layer_ir.json",
-  "output/pipeline_state.json",
-  "output/reports/pipeline_summary.json",
-  "output/reports/run_log.jsonl",
-  "output/reports/agent_tool_use.jsonl",
-  "output/reports/tool_calls.jsonl",
-  "knowledge/doc_lifecycle.json",
-].map((part) => path.resolve(repoRoot, part));
+  ...networkReadFiles,
+  path.resolve(repoRoot, "knowledge/doc_lifecycle.json"),
+];
 
 export function resolveReadablePath(relativePath: string): string {
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");

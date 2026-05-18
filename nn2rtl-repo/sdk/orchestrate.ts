@@ -19,8 +19,16 @@ import {
   FAILURE_CLASSIFIER_CONFIG,
   PIPELINE_CONFIG,
   RETROSPECTOR_CONFIG,
+  parseBooleanEnv,
   type AgentName,
 } from "./config.js";
+import {
+  defaultNetworkId,
+  getNetwork,
+  isKnownNetworkId,
+  listNetworks,
+  outputDirForNetwork,
+} from "./networks.js";
 import { PipelineStateManager } from "./pipeline.js";
 import {
   layerIrSchema as layerIrZod,
@@ -31,6 +39,16 @@ import {
   verifResultSchema as verifResultZod,
   verilogModuleSchema as verilogModuleZod,
 } from "./schemas.js";
+import {
+  applicabilityForSignature,
+  signatureBundle,
+  signatureCandidateMatchLevel,
+  signatureMatchRank,
+  signaturePaddingMatches,
+  type LayerSignature,
+  type SignatureMatchLevel,
+  type SignatureTarget,
+} from "./signatures.js";
 import {
   contractFitFailure,
   contractSelectionForLayer,
@@ -60,6 +78,10 @@ const sdkRoot = path.resolve(
 );
 const repoRoot = path.resolve(sdkRoot, "..");
 const pluginPath = path.resolve(repoRoot, "nn2rtl-plugin");
+let activeNetworkId = process.env.NN2RTL_NETWORK_ID || defaultNetworkId();
+let activeOutputRoot: string | null = process.env.NN2RTL_OUTPUT_DIR
+  ? path.resolve(repoRoot, process.env.NN2RTL_OUTPUT_DIR)
+  : null;
 
 export const AGENT_SLUGS = {
   Cartographer: "cartographer",
@@ -136,6 +158,7 @@ export type OrchestratorRuntime = {
 };
 
 export type RunPipelineOptions = {
+  networkId?: string;
   resume?: boolean;
   runtime?: Partial<OrchestratorRuntime>;
   maxRetries?: number;
@@ -271,7 +294,7 @@ async function hydrateVerilogModuleFromDisk(
     );
   }
 
-  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const rtlDir = resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir);
   const verilogPath = path.join(rtlDir, `${metadata.module_id}.v`);
   let source: string | undefined;
   // Path 1: agent inlined verilog_source in the structured output. Persist
@@ -321,6 +344,45 @@ export function createOrchestratorRuntime(
 
 export function resolveFromSdk(relativePath: string): string {
   return path.resolve(sdkRoot, relativePath);
+}
+
+function resolveRepoPathMaybeAbsolute(inputPath: string): string {
+  const normalized = normalizePathForCurrentHost(inputPath);
+  return path.isAbsolute(normalized) || isWindowsAbsolutePath(normalized)
+    ? normalized
+    : path.resolve(repoRoot, normalized);
+}
+
+export function setActiveNetwork(networkId: string): void {
+  const network = getNetwork(networkId);
+  activeNetworkId = network.id;
+  activeOutputRoot = outputDirForNetwork(network.id, repoRoot);
+  process.env.NN2RTL_NETWORK_ID = network.id;
+  process.env.NN2RTL_OUTPUT_DIR = activeOutputRoot;
+}
+
+export function getActiveNetworkId(): string {
+  const envId = process.env.NN2RTL_NETWORK_ID;
+  return isKnownNetworkId(envId) ? envId : activeNetworkId;
+}
+
+export function getPipelineOutputRoot(): string {
+  const envRoot = process.env.NN2RTL_OUTPUT_DIR;
+  if (envRoot && envRoot.trim()) {
+    return resolveRepoPathMaybeAbsolute(envRoot);
+  }
+  return activeOutputRoot ?? outputDirForNetwork(getActiveNetworkId(), repoRoot);
+}
+
+export function resolvePipelineConfigPath(configPath: string): string {
+  const legacyOutputRoot = resolveFromSdk(PIPELINE_CONFIG.output_dir);
+  const resolved = resolveFromSdk(configPath);
+  const outputRoot = getPipelineOutputRoot();
+  if (resolved === legacyOutputRoot) return outputRoot;
+  if (resolved.startsWith(legacyOutputRoot + path.sep)) {
+    return path.join(outputRoot, path.relative(legacyOutputRoot, resolved));
+  }
+  return resolved;
 }
 
 function isWindowsAbsolutePath(inputPath: string): boolean {
@@ -506,7 +568,7 @@ function evaluateSynthesis(
 }
 
 function reportPath(fileName: string): string {
-  return path.join(resolveFromSdk(PIPELINE_CONFIG.reports_dir), fileName);
+  return path.join(resolvePipelineConfigPath(PIPELINE_CONFIG.reports_dir), fileName);
 }
 
 /**
@@ -840,7 +902,7 @@ async function materializeContractGoldens(layer: LayerIR): Promise<{
   goldenOutputsPath: string;
 }> {
   const key = sanitizePathPart(`${layer.module_id}_${contractStateKeyForLayer(layer)}`);
-  const dir = path.join(resolveFromSdk(PIPELINE_CONFIG.output_dir), "goldens", "contracts", key);
+  const dir = path.join(resolvePipelineConfigPath(PIPELINE_CONFIG.output_dir), "goldens", "contracts", key);
   const channelTile = layer.channel_tile;
   const isTiledAdd =
     layer.op_type === "add" &&
@@ -1108,16 +1170,16 @@ export async function appendRunLog(
 
 export async function ensureOutputLayout(): Promise<void> {
   await Promise.all([
-    mkdir(resolveFromSdk(PIPELINE_CONFIG.output_dir), { recursive: true }),
-    mkdir(resolveFromSdk(PIPELINE_CONFIG.rtl_dir), { recursive: true }),
-    mkdir(resolveFromSdk(PIPELINE_CONFIG.tb_dir), { recursive: true }),
-    mkdir(resolveFromSdk(PIPELINE_CONFIG.weights_dir), { recursive: true }),
-    mkdir(resolveFromSdk(PIPELINE_CONFIG.reports_dir), { recursive: true }),
+    mkdir(resolvePipelineConfigPath(PIPELINE_CONFIG.output_dir), { recursive: true }),
+    mkdir(resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir), { recursive: true }),
+    mkdir(resolvePipelineConfigPath(PIPELINE_CONFIG.tb_dir), { recursive: true }),
+    mkdir(resolvePipelineConfigPath(PIPELINE_CONFIG.weights_dir), { recursive: true }),
+    mkdir(resolvePipelineConfigPath(PIPELINE_CONFIG.reports_dir), { recursive: true }),
   ]);
 }
 
 function buildSidecarPath(moduleId: string): string {
-  return path.join(resolveFromSdk(PIPELINE_CONFIG.tb_dir), `${moduleId}.sidecar.json`);
+  return path.join(resolvePipelineConfigPath(PIPELINE_CONFIG.tb_dir), `${moduleId}.sidecar.json`);
 }
 
 export async function loadPluginAgentDefinition(slug: AgentSlug): Promise<AgentDefinition> {
@@ -1525,6 +1587,7 @@ type KnowledgeDocRecord = {
   contract_id?: ContractId;
   path: string;
   relative_path: string;
+  match_level?: SignatureMatchLevel;
 };
 type DocLifecycleEntry = {
   id: string;
@@ -1532,6 +1595,12 @@ type DocLifecycleEntry = {
   contract_id?: ContractId;
   contract_key?: string;
   spec_hash: string;
+  signature_hashes?: string[];
+  exact_reference_keys?: string[];
+  derived_from_networks?: string[];
+  derived_from_modules?: string[];
+  applicability?: Record<string, unknown>;
+  contraindications?: Array<string | Record<string, unknown>>;
   status: GeneratedDocStatus;
   pattern_path: string;
   reference_path: string;
@@ -1604,9 +1673,16 @@ export const CONTRACT_PLANS: ContractPlan[] = [
     complexity: 4,
     description: "Weight-tiled execution with external weight reads and partial-sum accumulation.",
   },
+  {
+    id: "depthwise-conv",
+    complexity: 1,
+    description: "Depthwise convolution contract — groups == in_channels == out_channels, per-channel filters, no cross-channel reduction. Powers MobileNet-style separable conv blocks.",
+  },
 ];
 
-const CONTRACT_STATE_PATH = resolveFromSdk(PIPELINE_CONFIG.contract_state_path);
+function contractStatePath(): string {
+  return resolvePipelineConfigPath(PIPELINE_CONFIG.contract_state_path);
+}
 
 function emptyContractResponseState(): ContractResponseState {
   return { version: 1, contracts: {} };
@@ -1614,7 +1690,7 @@ function emptyContractResponseState(): ContractResponseState {
 
 async function loadContractResponseState(): Promise<ContractResponseState> {
   try {
-    const raw = await readFile(CONTRACT_STATE_PATH, "utf8");
+    const raw = await readFile(contractStatePath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<ContractResponseState>;
     return {
       version: 1,
@@ -1628,7 +1704,7 @@ async function loadContractResponseState(): Promise<ContractResponseState> {
 }
 
 async function saveContractResponseState(state: ContractResponseState): Promise<void> {
-  await writeJsonFile(CONTRACT_STATE_PATH, state);
+  await writeJsonFile(contractStatePath(), state);
 }
 
 function currentContractId(layer: LayerIR): ContractId {
@@ -1637,11 +1713,60 @@ function currentContractId(layer: LayerIR): ContractId {
   if (layer.io_mode === "dram_backed_weights") return "dram-backed-weights";
   if (layer.io_mode === "activation_double_buffered") return "activation-double-buffering";
   if (layer.io_mode === "weight_tiled") return "weight-tiling";
+  // Depthwise fallback: a conv2d whose groups equal both input and output
+  // channel counts is depthwise, even if the LayerIR was emitted without an
+  // explicit contract_id (e.g. legacy IR files predating multi-network). Mirror
+  // resolveLayerContractId in sdk/contracts.ts so downstream dispatch is
+  // consistent whether callers go through that helper or read currentContractId
+  // directly.
+  if (
+    layer.op_type === "conv2d" &&
+    typeof layer.groups === "number" &&
+    layer.groups > 1
+  ) {
+    const inCh = layer.input_shape?.[1];
+    const outCh = layer.output_shape?.[1];
+    if (
+      typeof inCh === "number" &&
+      typeof outCh === "number" &&
+      layer.groups === inCh &&
+      layer.groups === outCh
+    ) {
+      return "depthwise-conv";
+    }
+  }
   return "flat-bus";
 }
 
 function contractStateKeyForLayer(layer: LayerIR): string {
   return `${currentContractId(layer)}:${computeExpectedSpecHash(layer)}`;
+}
+
+function signatureMetadataForLayer(
+  baseLayer: LayerIR,
+  runtimeLayer: LayerIR,
+  modelQuantization?: string,
+): LayerSignatureMetadata {
+  return signatureBundle({
+    baseLayer,
+    runtimeLayer,
+    baseContractId: currentContractId(baseLayer),
+    runtimeContractId: currentContractId(runtimeLayer),
+    modelQuantization,
+  });
+}
+
+function withSignatureMetadata(
+  baseLayer: LayerIR,
+  runtimeLayer: LayerIR,
+  modelQuantization?: string,
+): LayerIR {
+  const metadata = signatureMetadataForLayer(baseLayer, runtimeLayer, modelQuantization);
+  return {
+    ...runtimeLayer,
+    quantization_family: metadata.runtime_layer_signature.quantization_family,
+    ...metadata,
+  };
 }
 
 function fullInputBusWidthBits(layer: LayerIR): number {
@@ -2055,6 +2180,8 @@ type FailureCorpusScore = {
 type FailureCorpusIndexEntry = {
   id: string;
   created_at: string;
+  network_id?: string;
+  model_name?: string;
   module_id: string;
   stage: string;
   attempt_index: number;
@@ -2069,13 +2196,25 @@ type FailureCorpusIndexEntry = {
   score: FailureCorpusScore;
   summary: Record<string, unknown>;
   shape: Record<string, unknown>;
+  runtime_layer_signature?: Record<string, unknown>;
+  signature_hash?: string;
+  exact_reference_key?: string | null;
+  applicability?: Record<string, unknown>;
+  contraindications?: Array<string | Record<string, unknown>>;
+};
+
+type LayerSignatureMetadata = {
+  base_layer_signature: LayerSignature;
+  runtime_layer_signature: LayerSignature;
+  signature_hash: string;
+  exact_reference_key: string | null;
 };
 
 const FAILURE_CORPUS_VISIBLE_TIER = "visible";
 const FAILURE_CORPUS_ARCHIVE_TIER = "archive";
 
 function failureCorpusRoot(): string {
-  return path.join(resolveFromSdk(PIPELINE_CONFIG.output_dir), "failure_corpus");
+  return path.join(resolvePipelineConfigPath(PIPELINE_CONFIG.output_dir), "failure_corpus");
 }
 
 function failureCorpusTierRoot(tier: typeof FAILURE_CORPUS_VISIBLE_TIER | typeof FAILURE_CORPUS_ARCHIVE_TIER): string {
@@ -2203,8 +2342,7 @@ async function appendFailureCorpusIndex(entry: FailureCorpusIndexEntry): Promise
   await appendFile(indexPath, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
-async function readVisibleFailureCorpusIndex(): Promise<FailureCorpusIndexEntry[]> {
-  const indexPath = path.join(failureCorpusTierRoot(FAILURE_CORPUS_VISIBLE_TIER), "index.jsonl");
+async function readFailureCorpusIndexFile(indexPath: string): Promise<FailureCorpusIndexEntry[]> {
   let raw: string;
   try {
     raw = await readFile(indexPath, "utf8");
@@ -2226,12 +2364,60 @@ async function readVisibleFailureCorpusIndex(): Promise<FailureCorpusIndexEntry[
   return entries;
 }
 
-function failureCorpusSimilarityRank(layer: LayerIR, entry: FailureCorpusIndexEntry): number {
-  let rank = 0;
+async function readVisibleFailureCorpusIndex(): Promise<FailureCorpusIndexEntry[]> {
+  const indexPath = path.join(failureCorpusTierRoot(FAILURE_CORPUS_VISIBLE_TIER), "index.jsonl");
+  return readFailureCorpusIndexFile(indexPath);
+}
+
+async function readCrossNetworkFailureCorpusIndex(): Promise<FailureCorpusIndexEntry[]> {
+  const activeRoot = getPipelineOutputRoot();
+  const seen = new Set<string>();
+  const all: FailureCorpusIndexEntry[] = [];
+  for (const network of listNetworks()) {
+    const outputRoot = outputDirForNetwork(network.id, repoRoot);
+    const indexPath = path.join(outputRoot, "failure_corpus", FAILURE_CORPUS_VISIBLE_TIER, "index.jsonl");
+    const key = path.resolve(indexPath);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entries = await readFailureCorpusIndexFile(indexPath);
+    for (const entry of entries) {
+      all.push({
+        ...entry,
+        network_id: entry.network_id ?? network.id,
+        model_name: entry.model_name ?? network.modelName,
+      });
+    }
+  }
+  const activeIndex = path.join(activeRoot, "failure_corpus", FAILURE_CORPUS_VISIBLE_TIER, "index.jsonl");
+  if (!seen.has(path.resolve(activeIndex))) {
+    all.push(...await readFailureCorpusIndexFile(activeIndex));
+  }
+  return all;
+}
+
+function failureCorpusSimilarityRank(
+  layer: LayerIR,
+  entry: FailureCorpusIndexEntry,
+  matchLevel: SignatureMatchLevel,
+): number {
+  let rank = signatureMatchRank(matchLevel) * 100_000;
+  const target = signatureTargetForLayer(layer);
+  if (entry.signature_hash === target.signature_hash) rank -= 80;
   if (entry.module_id === layer.module_id) rank -= 100;
   if (entry.spec_hash === computeExpectedSpecHash(layer)) rank -= 50;
   if (entry.op_type === layer.op_type) rank -= 20;
   if (entry.contract_id === currentContractId(layer)) rank -= 10;
+  if (signaturePaddingMatches({
+    op_type: entry.op_type,
+    contract_id: entry.contract_id,
+    signature_hash: entry.signature_hash,
+    exact_reference_key: entry.exact_reference_key,
+    runtime_layer_signature: entry.runtime_layer_signature,
+    applicability: entry.applicability,
+    shape: entry.shape,
+  }, target)) {
+    rank -= 3;
+  }
   const entryKh = Array.isArray(entry.shape.weight_shape) ? entry.shape.weight_shape[2] : undefined;
   const entryKw = Array.isArray(entry.shape.weight_shape) ? entry.shape.weight_shape[3] : undefined;
   if (layer.op_type === "conv2d" && entryKh === layer.weight_shape[2] && entryKw === layer.weight_shape[3]) {
@@ -2243,17 +2429,20 @@ function failureCorpusSimilarityRank(layer: LayerIR, entry: FailureCorpusIndexEn
 }
 
 async function failureMemoryForLayer(layer: LayerIR, limit = 5): Promise<FailureCorpusIndexEntry[]> {
-  const entries = await readVisibleFailureCorpusIndex();
+  const entries = await readCrossNetworkFailureCorpusIndex();
   return entries
+    .map((entry) => ({ entry, matchLevel: failureEntryMatchLevelForLayer(entry, layer) }))
     .filter(
-      (entry) =>
-        entry.module_id === layer.module_id ||
-        (entry.op_type === layer.op_type && entry.contract_id === currentContractId(layer)),
+      (candidate): candidate is { entry: FailureCorpusIndexEntry; matchLevel: SignatureMatchLevel } =>
+        candidate.matchLevel !== null,
     )
     .sort((a, b) => {
-      const rankDelta = failureCorpusSimilarityRank(layer, a) - failureCorpusSimilarityRank(layer, b);
-      return rankDelta !== 0 ? rankDelta : b.created_at.localeCompare(a.created_at);
+      const rankDelta =
+        failureCorpusSimilarityRank(layer, a.entry, a.matchLevel) -
+        failureCorpusSimilarityRank(layer, b.entry, b.matchLevel);
+      return rankDelta !== 0 ? rankDelta : b.entry.created_at.localeCompare(a.entry.created_at);
     })
+    .map((candidate) => candidate.entry)
     .slice(0, limit);
 }
 
@@ -2374,9 +2563,17 @@ async function persistFailureCorpusAttempt(input: {
     await writeFile(rtlAbs, input.module.verilog_source, "utf8");
   }
   const failureAbs = path.join(dir, "failure.json");
+  const signatures = signatureBundle({
+    baseLayer: input.layer,
+    runtimeLayer: input.layer,
+    baseContractId: currentContractId(input.layer),
+    runtimeContractId: currentContractId(input.layer),
+  });
   const entry: FailureCorpusIndexEntry = {
     id,
     created_at: createdAt,
+    network_id: getActiveNetworkId(),
+    model_name: getNetwork(getActiveNetworkId()).modelName,
     module_id: input.layer.module_id,
     stage: input.stage,
     attempt_index: input.attemptIndex,
@@ -2391,6 +2588,14 @@ async function persistFailureCorpusAttempt(input: {
     score: verifScore(input.result),
     summary: verifDiagnosticSummary(input.result),
     shape: layerShapeSummary(input.layer),
+    runtime_layer_signature: signatures.runtime_layer_signature,
+    signature_hash: signatures.signature_hash,
+    exact_reference_key: signatures.exact_reference_key,
+    applicability: applicabilityForSignature({
+      networkId: getActiveNetworkId(),
+      signatures,
+    }),
+    contraindications: [],
   };
   await writeJsonFile(failureAbs, {
     entry,
@@ -2624,11 +2829,132 @@ function docContractId(doc: Pick<DocLifecycleEntry, "contract_id">): ContractId 
   return doc.contract_id ?? "flat-bus";
 }
 
-function docAppliesToLayer(doc: Pick<DocLifecycleEntry, "op_type" | "contract_id">, layer: LayerIR): boolean {
-  return doc.op_type === layer.op_type && docContractId(doc) === currentContractId(layer);
+function signatureTargetForLayer(layer: LayerIR): SignatureTarget {
+  return {
+    ...signatureMetadataForLayer(layer, layer),
+    network_id: getActiveNetworkId(),
+  };
+}
+
+function docSignatureCandidate(doc: DocLifecycleEntry): Parameters<typeof signatureCandidateMatchLevel>[0] {
+  return {
+    op_type: doc.op_type,
+    contract_id: docContractId(doc),
+    signature_hashes: doc.signature_hashes,
+    exact_reference_keys: doc.exact_reference_keys,
+    applicability: doc.applicability,
+  };
+}
+
+const COVERING_DOC_MATCH_LEVELS = new Set<SignatureMatchLevel>([
+  "exact_signature",
+  "exact_reference_key",
+  "op_contract_kernel_stride_groups",
+  "op_contract_kernel",
+  // `op_contract` covers legacy / generic contract-level docs that didn't
+  // record kernel info. Without this, a doc seeded with only
+  // `(op_type, contract_id)` would fail to cover its own contract's traffic
+  // and force a redundant create_new_doc_request on every layer.
+  "op_contract",
+]);
+
+function docMatchLevelForLayer(
+  doc: DocLifecycleEntry,
+  layer: LayerIR,
+  levels?: ReadonlySet<SignatureMatchLevel>,
+): SignatureMatchLevel | null {
+  if (contraindicationVetoesLayer(doc.contraindications, layer)) return null;
+  const level = signatureCandidateMatchLevel(
+    docSignatureCandidate(doc),
+    signatureTargetForLayer(layer),
+  );
+  if (level === null) return null;
+  return levels && !levels.has(level) ? null : level;
+}
+
+function docPaddingRank(doc: DocLifecycleEntry, layer: LayerIR): number {
+  return signaturePaddingMatches(docSignatureCandidate(doc), signatureTargetForLayer(layer)) ? 0 : 1;
+}
+
+function failureEntryMatchLevelForLayer(
+  entry: FailureCorpusIndexEntry,
+  layer: LayerIR,
+): SignatureMatchLevel | null {
+  if (contraindicationVetoesLayer(entry.contraindications, layer)) return null;
+  return signatureCandidateMatchLevel(
+    {
+      op_type: entry.op_type,
+      contract_id: entry.contract_id,
+      signature_hash: entry.signature_hash,
+      exact_reference_key: entry.exact_reference_key,
+      runtime_layer_signature: entry.runtime_layer_signature,
+      applicability: entry.applicability,
+      shape: entry.shape,
+    },
+    signatureTargetForLayer(layer),
+  );
+}
+
+function stringList(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  return [];
+}
+
+function valueMatchesRule(value: unknown, actual: string | null | undefined): boolean {
+  if (actual === null || actual === undefined) return false;
+  return stringList(value).some((candidate) => candidate === actual);
+}
+
+function contraindicationVetoesLayer(
+  contraindications: Array<string | Record<string, unknown>> | undefined,
+  layer: LayerIR,
+): boolean {
+  if (!contraindications || contraindications.length === 0) return false;
+  const signatures = signatureMetadataForLayer(layer, layer);
+  const exactReferenceKey = signatures.exact_reference_key;
+  const networkId = getActiveNetworkId();
+  const contractId = currentContractId(layer);
+  for (const rule of contraindications) {
+    if (typeof rule === "string") {
+      if (
+        rule === signatures.signature_hash ||
+        rule === exactReferenceKey ||
+        rule === layer.op_type ||
+        rule === contractId ||
+        rule === networkId ||
+        rule === `op_type:${layer.op_type}` ||
+        rule === `contract_id:${contractId}` ||
+        rule === `network_id:${networkId}` ||
+        rule === `signature_hash:${signatures.signature_hash}`
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (
+      valueMatchesRule(rule.op_type, layer.op_type) ||
+      valueMatchesRule(rule.contract_id, contractId) ||
+      valueMatchesRule(rule.network_id, networkId) ||
+      valueMatchesRule(rule.signature_hash, signatures.signature_hash) ||
+      valueMatchesRule(rule.signature_hashes, signatures.signature_hash) ||
+      valueMatchesRule(rule.exact_reference_key, exactReferenceKey) ||
+      valueMatchesRule(rule.exact_reference_keys, exactReferenceKey)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function protectedPatternCoveragePath(layer: LayerIR): string | null {
+  // Depthwise convs (groups == in == out) are covered by 12_depthwise_conv.md
+  // regardless of kernel size — that doc owns the per-channel datapath. Check
+  // before the regular kernel-based conv2d dispatch so a 3x3 depthwise doesn't
+  // collide with the standard 3x3 reference.
+  if (layer.op_type === "conv2d" && currentContractId(layer) === "depthwise-conv") {
+    return "knowledge/patterns/protected/12_depthwise_conv.md";
+  }
   if (layer.op_type === "conv2d") {
     const kh = layer.weight_shape[2];
     const kw = layer.weight_shape[3];
@@ -2646,6 +2972,8 @@ function protectedPatternCoveragePath(layer: LayerIR): string | null {
     add: "05_add_quantized.md",
     relu: "06_relu.md",
     maxpool: "07_maxpool.md",
+    global_avg_pool: "10_global_avg_pool.md",
+    gemm: "11_gemm.md",
   };
   const file = byOp[layer.op_type];
   return file ? `knowledge/patterns/protected/${file}` : null;
@@ -2656,6 +2984,16 @@ function protectedPatternCandidatesForLayer(layer: LayerIR): Array<{ id: string;
     { id: "protected_context", op_type: "shared" as const, relPath: "knowledge/patterns/protected/01_context.md" },
     { id: "protected_common_bugs", op_type: "shared" as const, relPath: "knowledge/patterns/protected/08_common_bugs.md" },
   ];
+  if (layer.op_type === "conv2d" && currentContractId(layer) === "depthwise-conv") {
+    return [
+      ...common,
+      {
+        id: "protected_12_depthwise_conv_md",
+        op_type: "conv2d" as const,
+        relPath: "knowledge/patterns/protected/12_depthwise_conv.md",
+      },
+    ];
+  }
   if (layer.op_type === "conv2d") {
     const exact =
       layer.weight_shape[2] === 1 && layer.weight_shape[3] === 1
@@ -2686,6 +3024,8 @@ function protectedPatternCandidatesForLayer(layer: LayerIR): Array<{ id: string;
     add: "05_add_quantized.md",
     relu: "06_relu.md",
     maxpool: "07_maxpool.md",
+    global_avg_pool: "10_global_avg_pool.md",
+    gemm: "11_gemm.md",
   };
   const file = byOp[layer.op_type];
   return file
@@ -2738,6 +3078,219 @@ function protectedReferenceCandidatesForLayer(layer: LayerIR): Array<{ id: strin
     : [];
 }
 
+// Auto-promote a passing module's RTL to a probationary reference when the
+// active contract has protected pattern coverage but NO protected reference
+// Verilog. This closes the "first-time-passing-on-new-contract" gap that the
+// existing self-improve doc-creation flow misses (it only acts when no
+// pattern doc exists; for new contracts like depthwise-conv that ship with
+// a pattern doc but no proven .v, the passing module would otherwise be
+// stranded under output/<network>/rtl/ and never seed future runs).
+//
+// Gated on `NN2RTL_AUTO_PROMOTE_REFERENCE` (default ON). Skip cases logged
+// at debug level so the user can see why a passing module wasn't promoted.
+async function autoPromotePassingReference(
+  layer: LayerIR,
+  module: VerilogModule,
+  verif: VerifResult,
+  synth: SynthesisReport,
+  runtime: OrchestratorRuntime,
+): Promise<void> {
+  const enabled = parseBooleanEnv(process.env, "NN2RTL_AUTO_PROMOTE_REFERENCE", true);
+  if (!enabled) return;
+
+  // Eligibility gate. Reject anything that doesn't represent a clean,
+  // template-worthy outcome. Off-by-one max_error is tolerated (matches the
+  // verifier's `sim_passed` policy) but bigger drift means the body is
+  // numerically off and shouldn't be a template.
+  const reasonToSkip = async (msg: string): Promise<void> => {
+    await appendRunLog(
+      { event: "auto_promote_reference_skipped", module_id: layer.module_id, reason: msg },
+      runtime,
+    );
+  };
+  if (verif.status !== "pass") return reasonToSkip("verif_not_pass");
+  if (verif.timing_pass !== true) return reasonToSkip("timing_pass_false");
+  if (typeof verif.max_error === "number" && verif.max_error > 1) return reasonToSkip(`max_error_${verif.max_error}`);
+  if (typeof verif.mismatch_count === "number" && verif.sample_count && verif.mismatch_count / verif.sample_count > 0.01) {
+    return reasonToSkip(`mismatch_ratio_above_1pct`);
+  }
+  if (synth.timing_met !== true) return reasonToSkip("synth_timing_not_met");
+  if (typeof synth.fmax_mhz !== "number" || synth.fmax_mhz <= 0) return reasonToSkip("synth_fmax_zero");
+  if (typeof module.attempt === "number" && module.attempt > 3) return reasonToSkip(`attempt_${module.attempt}_too_late`);
+
+  // Skip if a protected reference is already injected for this layer's
+  // CONTRACT. protectedReferenceCandidatesForLayer is kernel-aware but
+  // not contract-aware — for any 3×3 conv2d it returns
+  // conv3x3_passing_reference.v whether the layer is standard or depthwise.
+  // For depthwise-conv (and any future contract whose conv geometry overlaps
+  // standard convs), we MUST ignore those candidates because they describe
+  // a different datapath. Restrict the skip-trigger to flat-bus + the
+  // dram-backed variant the candidate set actually targets.
+  const contractIdForRef = currentContractId(layer);
+  if (contractIdForRef === "flat-bus" || contractIdForRef === "dram-backed-weights") {
+    const protectedRefs = protectedReferenceCandidatesForLayer(layer)
+      .filter((c) => existsSync(absFromRepo(c.relPath)));
+    if (protectedRefs.length > 0) return reasonToSkip(`protected_reference_exists:${protectedRefs[0].relPath}`);
+  }
+
+  // Only promote when this layer's CONTRACT has protected pattern doc
+  // coverage. Mirror findCoveringDoc()'s contract filter exactly — that's
+  // the same set of contracts whose protected pattern docs actually apply
+  // (flat-bus + depthwise-conv today). For tiled-streaming and other
+  // contracts without protected coverage, the self-improve `create_new_doc`
+  // flow owns the layer and writes both pattern + reference itself.
+  // Stepping on that path here causes duplicate-write collisions and
+  // clobbers the Foundry-authored doc body.
+  if (contractIdForRef !== "flat-bus" && contractIdForRef !== "depthwise-conv") {
+    return reasonToSkip(`contract_${contractIdForRef}_owned_by_create_new_doc_flow`);
+  }
+  const protectedPatternPath = protectedPatternCoveragePath(layer);
+  if (!protectedPatternPath || !existsSync(absFromRepo(protectedPatternPath))) {
+    return reasonToSkip("no_protected_pattern_doc_create_new_doc_owns_layer");
+  }
+
+  // Skip non-conv ops for now. The reference-injection plumbing is conv-only
+  // on the lifecycle-doc retrieval side; promoting a relu/add/gemm body
+  // here would write a file no consumer reads. That's a separate plumbing
+  // upgrade (extend lifecycle retrieval to non-conv ops).
+  if (layer.op_type !== "conv2d") return reasonToSkip(`op_type_${layer.op_type}_unsupported`);
+
+  // Don't double-promote when the lifecycle already covers this signature.
+  const contractId = currentContractId(layer);
+  const signatures = signatureBundle({
+    baseLayer: layer,
+    runtimeLayer: layer,
+    baseContractId: contractId,
+    runtimeContractId: contractId,
+    modelQuantization: layer.quantization_family,
+  });
+  const lifecycleState = await loadDocLifecycleState();
+  const contractKey = contractStateKeyForLayer(layer);
+  for (const doc of Object.values(lifecycleState.docs)) {
+    if (doc.contract_key === contractKey) return reasonToSkip(`lifecycle_doc_exists:${doc.id}`);
+    if (doc.signature_hashes?.includes(signatures.signature_hash)) return reasonToSkip(`lifecycle_signature_match:${doc.id}`);
+    if (signatures.exact_reference_key && doc.exact_reference_keys?.includes(signatures.exact_reference_key)) {
+      return reasonToSkip(`lifecycle_exact_key_match:${doc.id}`);
+    }
+  }
+
+  // Build the slug and persist. Naming mirrors the format the in-line
+  // self-improve flow already uses: `auto_<contract>_<module>_<spec>_<stamp>`.
+  const now = runtime.now ? runtime.now() : new Date();
+  const stamp = docTimestamp(now);
+  const slugBody = sanitizePathPart(`${contractId}_${layer.module_id}_${module.spec_hash}`);
+  const id = `auto_${slugBody}_${stamp}`;
+  const refRel = `knowledge/references/probationary/${id}.v`;
+  const patternRel = `knowledge/patterns/probationary/${id}.md`;
+  await mkdir(path.dirname(absFromRepo(refRel)), { recursive: true });
+  await mkdir(path.dirname(absFromRepo(patternRel)), { recursive: true });
+
+  // Derive a short pattern doc from the RTL's leading comment block. Foundry
+  // already writes a descriptive header (architecture choices, latency math,
+  // scale derivation) so we don't need a second LLM call to summarize.
+  const rtlBody = module.verilog_source;
+  const headerLines: string[] = [];
+  for (const line of rtlBody.split(/\r?\n/)) {
+    if (line.trim().startsWith("//") || line.trim() === "") {
+      headerLines.push(line);
+      continue;
+    }
+    break;
+  }
+  const headerBlock = headerLines.join("\n").trim() || "// (RTL body had no leading comment block.)";
+  const networkId = (process.env.NN2RTL_NETWORK_ID ?? "").trim() || "unknown";
+  const applicability = applicabilityForSignature({ networkId, signatures });
+
+  const frontmatter = [
+    "---",
+    `id: ${id}`,
+    "tier: probationary",
+    `op_type: ${layer.op_type}`,
+    `contract_id: ${contractId}`,
+    `contract_key: ${contractKey}`,
+    `module_id: ${layer.module_id}`,
+    `spec_hash: ${module.spec_hash}`,
+    `signature_hash: ${signatures.signature_hash}`,
+    `exact_reference_key: ${signatures.exact_reference_key ?? "null"}`,
+    `generated_by: ${module.generated_by}`,
+    `created_at: ${now.toISOString()}`,
+    "creation_reason: auto_promote_first_passing_reference",
+    "---",
+  ].join("\n");
+  const patternMd = [
+    frontmatter,
+    "",
+    `# Auto-promoted reference for \`${contractId}\` (${layer.op_type})`,
+    "",
+    `**Module:** \`${layer.module_id}\` from network \`${networkId}\``,
+    `**Verif:** \`status=pass\`, \`mismatch=${verif.mismatch_count ?? 0}/${verif.sample_count ?? "?"}\`, \`max_error=${verif.max_error ?? 0}\``,
+    `**Synth (xczu9eg):** LUT=${synth.lut_count}, FF=${synth.ff_count}, DSP=${synth.dsp_count}, BRAM18=${synth.bram18_equiv}, fmax=${synth.fmax_mhz?.toFixed?.(2) ?? synth.fmax_mhz}MHz, timing_met=${synth.timing_met}`,
+    "",
+    "## Why this reference exists",
+    "",
+    "The active contract's protected pattern doc describes the math, but no",
+    "protected reference module was checked in. This module is the first",
+    "passing RTL on this contract; future modules with matching signatures",
+    "(see frontmatter applicability + signature_hash) can crib from it.",
+    "",
+    "## RTL header (authored by Foundry/Surgeon)",
+    "",
+    "```verilog",
+    headerBlock,
+    "```",
+    "",
+    "## Companion artifacts",
+    "",
+    "- Canonical RTL on disk: `output/<network-id>/rtl/" + layer.module_id + ".v`",
+    "- Failure corpus (if any retries happened): `output/<network-id>/failure_corpus/visible/" + layer.module_id + "/`",
+    "",
+    "Promoted via `autoPromotePassingReference()`. Disable with `NN2RTL_AUTO_PROMOTE_REFERENCE=0`.",
+  ].join("\n");
+
+  await writeFile(absFromRepo(refRel), rtlBody, "utf8");
+  await writeFile(absFromRepo(patternRel), `${patternMd}\n`, "utf8");
+
+  const entry: DocLifecycleEntry = {
+    id,
+    op_type: layer.op_type,
+    contract_id: contractId,
+    contract_key: contractKey,
+    spec_hash: module.spec_hash,
+    status: "probationary",
+    pattern_path: patternRel,
+    reference_path: refRel,
+    created_by_module: layer.module_id,
+    created_by_agent: module.generated_by,
+    created_at: now.toISOString(),
+    creation_reason: "auto_promote_first_passing_reference",
+    used_by_modules: [],
+    successful_modules: [layer.module_id],
+    failed_modules: [],
+    signature_hashes: [signatures.signature_hash],
+    exact_reference_keys: signatures.exact_reference_key ? [signatures.exact_reference_key] : [],
+    derived_from_networks: networkId !== "unknown" ? [networkId] : [],
+    derived_from_modules: [layer.module_id],
+    applicability,
+    contraindications: [],
+  };
+  lifecycleState.docs[id] = entry;
+  await saveDocLifecycleState(lifecycleState);
+
+  await appendRunLog(
+    {
+      event: "auto_promote_reference",
+      module_id: layer.module_id,
+      doc_id: id,
+      contract_id: contractId,
+      reference_path: refRel,
+      pattern_path: patternRel,
+      signature_hash: signatures.signature_hash,
+      exact_reference_key: signatures.exact_reference_key,
+    },
+    runtime,
+  );
+}
+
 async function readSnippet(relPath: string, maxChars = 12000): Promise<string | null> {
   const text = await readText(absFromRepo(relPath)).catch(() => null);
   if (text === null) return null;
@@ -2777,21 +3330,23 @@ async function closestDocsForNewDoc(
   }
 
   const generated = Object.values(state.docs)
+    .map((doc) => ({ doc, matchLevel: docMatchLevelForLayer(doc, layer) }))
     .filter(
-      (doc) =>
-        doc.op_type === layer.op_type &&
-        (doc.status === "active" || doc.status === "probationary"),
+      (entry): entry is { doc: DocLifecycleEntry; matchLevel: SignatureMatchLevel } =>
+        entry.matchLevel !== null &&
+        (entry.doc.status === "active" || entry.doc.status === "probationary"),
     )
     .sort((a, b) => {
-      const aExact = docContractId(a) === currentContractId(layer) ? 0 : 1;
-      const bExact = docContractId(b) === currentContractId(layer) ? 0 : 1;
-      if (aExact !== bExact) return aExact - bExact;
-      const aTier = a.status === "active" ? 0 : 1;
-      const bTier = b.status === "active" ? 0 : 1;
-      return aTier !== bTier ? aTier - bTier : a.id.localeCompare(b.id);
+      const matchDelta = signatureMatchRank(a.matchLevel) - signatureMatchRank(b.matchLevel);
+      if (matchDelta !== 0) return matchDelta;
+      const paddingDelta = docPaddingRank(a.doc, layer) - docPaddingRank(b.doc, layer);
+      if (paddingDelta !== 0) return paddingDelta;
+      const aTier = a.doc.status === "active" ? 0 : 1;
+      const bTier = b.doc.status === "active" ? 0 : 1;
+      return aTier !== bTier ? aTier - bTier : a.doc.id.localeCompare(b.doc.id);
     })
     .slice(0, 4);
-  for (const doc of generated) {
+  for (const { doc } of generated) {
     const patternText = await readSnippet(doc.pattern_path);
     if (patternText !== null) {
       snippets.push({
@@ -2841,56 +3396,46 @@ type CoveringDoc = {
  *     have a stable doc.
  */
 function findCoveringDoc(state: DocLifecycleState, layer: LayerIR): CoveringDoc | null {
-  // Tier 1: protected. Flat-bus is the only contract with file-based
-  // protected coverage today (`02_conv1x1.md`, `03_conv3x3_pad1.md`,
-  // `04_conv7x7_pad3.md`, `05_add_quantized.md`, `06_relu.md`, `07_maxpool.md`).
-  // Other contracts inherit no protected coverage by design.
-  if (currentContractId(layer) === "flat-bus") {
+  // Tier 1: protected. Flat-bus owns kernel-specific conv docs +
+  // 05_add_quantized.md / 06_relu.md / 07_maxpool.md /
+  // 10_global_avg_pool.md / 11_gemm.md; depthwise-conv owns
+  // 12_depthwise_conv.md. Other contracts inherit no protected coverage
+  // (dram-backed-weights and friends are tier-1-on-09 anyway, handled via
+  // the contract-walker, not findCoveringDoc).
+  const contractId = currentContractId(layer);
+  if (contractId === "flat-bus" || contractId === "depthwise-conv") {
     const coveragePath = protectedPatternCoveragePath(layer);
     if (coveragePath !== null && existsSync(absFromRepo(coveragePath))) {
       return { tier: "protected", path: coveragePath };
     }
   }
 
-  // Tier 2 + 3: active / probationary. Match by op_type + contract_id, with
-  // an extra kernel-signature gate for flat-bus convs so a probationary 1x1
-  // doc cannot claim to cover a 5x5 layer. Non-flat-bus contracts are
-  // themselves the discriminator so a single doc per (op, contract) is the
-  // granularity the lifecycle has historically tracked there.
-  const layerKernelSignature =
-    layer.op_type === "conv2d" && layer.weight_shape.length >= 4
-      ? `${layer.weight_shape[2]}x${layer.weight_shape[3]}`
-      : null;
-  const requireFlatBusKernelMatch =
-    currentContractId(layer) === "flat-bus" && layerKernelSignature !== null;
-
+  // Tier 2 + 3: generated docs must match through the same post-contract
+  // signature/applicability ladder used for retrieval. A weakest `op` match
+  // can be useful context, but it is too broad to suppress new-doc creation.
   const tierRank: Record<"active" | "probationary", number> = { active: 0, probationary: 1 };
   const candidates = Object.values(state.docs)
-    .filter((doc) => {
-      if (doc.status !== "active" && doc.status !== "probationary") return false;
-      if (!docAppliesToLayer(doc, layer)) return false;
-      if (!requireFlatBusKernelMatch) return true;
-      // Flat-bus + conv2d: require the doc's spec_hash to mention the same
-      // kernel signature. Spec hashes follow `conv2d_<ic>x<oc>x<kh>x<kw>_...`
-      // so we look for both the canonical infix and the maxpool-style
-      // `_k<kh>x<kw>_` form. Seeded docs with synthetic hashes (test
-      // fixtures) fail this check, which is the desired behaviour — they
-      // should not silently claim coverage for kernels they were never
-      // tagged with.
-      if (layerKernelSignature === null) return true;
-      return (
-        doc.spec_hash.includes(`x${layerKernelSignature}_`) ||
-        doc.spec_hash.includes(`_k${layerKernelSignature}_`)
-      );
-    })
+    .map((doc) => ({
+      doc,
+      matchLevel: docMatchLevelForLayer(doc, layer, COVERING_DOC_MATCH_LEVELS),
+    }))
+    .filter(
+      (entry): entry is { doc: DocLifecycleEntry; matchLevel: SignatureMatchLevel } =>
+        entry.matchLevel !== null &&
+        (entry.doc.status === "active" || entry.doc.status === "probationary"),
+    )
     .sort((a, b) => {
-      const ta = tierRank[a.status as "active" | "probationary"];
-      const tb = tierRank[b.status as "active" | "probationary"];
-      return ta !== tb ? ta - tb : a.id.localeCompare(b.id);
+      const matchDelta = signatureMatchRank(a.matchLevel) - signatureMatchRank(b.matchLevel);
+      if (matchDelta !== 0) return matchDelta;
+      const paddingDelta = docPaddingRank(a.doc, layer) - docPaddingRank(b.doc, layer);
+      if (paddingDelta !== 0) return paddingDelta;
+      const ta = tierRank[a.doc.status as "active" | "probationary"];
+      const tb = tierRank[b.doc.status as "active" | "probationary"];
+      return ta !== tb ? ta - tb : a.doc.id.localeCompare(b.doc.id);
     });
 
   if (candidates.length === 0) return null;
-  const match = candidates[0];
+  const match = candidates[0].doc;
   return {
     tier: match.status === "active" ? "active" : "probationary",
     path: match.pattern_path,
@@ -2945,14 +3490,23 @@ function lifecycleDocsForLayer(
 ): KnowledgeDocRecord[] {
   const tierRank: Record<"active" | "probationary", number> = { active: 0, probationary: 1 };
   return Object.values(state.docs)
-    .filter((doc) => docAppliesToLayer(doc, layer) && tiers.includes(doc.status as "active" | "probationary"))
+    .map((doc) => ({ doc, matchLevel: docMatchLevelForLayer(doc, layer) }))
+    .filter(
+      (entry): entry is { doc: DocLifecycleEntry; matchLevel: SignatureMatchLevel } =>
+        entry.matchLevel !== null &&
+        tiers.includes(entry.doc.status as "active" | "probationary")
+    )
     .sort((a, b) => {
+      const matchDelta = signatureMatchRank(a.matchLevel) - signatureMatchRank(b.matchLevel);
+      if (matchDelta !== 0) return matchDelta;
+      const paddingDelta = docPaddingRank(a.doc, layer) - docPaddingRank(b.doc, layer);
+      if (paddingDelta !== 0) return paddingDelta;
       const tierDelta =
-        tierRank[a.status as "active" | "probationary"] -
-        tierRank[b.status as "active" | "probationary"];
-      return tierDelta !== 0 ? tierDelta : a.id.localeCompare(b.id);
+        tierRank[a.doc.status as "active" | "probationary"] -
+        tierRank[b.doc.status as "active" | "probationary"];
+      return tierDelta !== 0 ? tierDelta : a.doc.id.localeCompare(b.doc.id);
     })
-    .flatMap((doc): KnowledgeDocRecord[] => [
+    .flatMap(({ doc, matchLevel }): KnowledgeDocRecord[] => [
       {
         id: doc.id,
         tier: doc.status === "active" ? "active" : "probationary",
@@ -2961,6 +3515,7 @@ function lifecycleDocsForLayer(
         contract_id: doc.contract_id,
         path: absFromRepo(doc.pattern_path),
         relative_path: doc.pattern_path,
+        match_level: matchLevel,
       },
       {
         id: doc.id,
@@ -2970,6 +3525,7 @@ function lifecycleDocsForLayer(
         contract_id: doc.contract_id,
         path: absFromRepo(doc.reference_path),
         relative_path: doc.reference_path,
+        match_level: matchLevel,
       },
     ]);
 }
@@ -2990,7 +3546,7 @@ async function recordDocUsageForAgent(
   const state = await loadDocLifecycleState();
   let changed = false;
   for (const doc of Object.values(state.docs)) {
-    if (!docAppliesToLayer(doc, layer)) continue;
+    if (docMatchLevelForLayer(doc, layer) === null) continue;
     if (doc.status !== "probationary" && doc.status !== "active") continue;
     if (!doc.used_by_modules.includes(moduleId)) {
       doc.used_by_modules.push(moduleId);
@@ -3005,8 +3561,14 @@ async function recordDocUsageForAgent(
       event: "doc_lifecycle_usage_recorded",
       module_id: moduleId,
       docs: Object.values(state.docs)
-        .filter((doc) => docAppliesToLayer(doc, layer) && doc.used_by_modules.includes(moduleId))
-        .map((doc) => ({ id: doc.id, status: doc.status, contract_id: docContractId(doc) })),
+        .map((doc) => ({ doc, matchLevel: docMatchLevelForLayer(doc, layer) }))
+        .filter((entry) => entry.matchLevel !== null && entry.doc.used_by_modules.includes(moduleId))
+        .map((entry) => ({
+          id: entry.doc.id,
+          status: entry.doc.status,
+          contract_id: docContractId(entry.doc),
+          match_level: entry.matchLevel,
+        })),
     },
     runtime,
   );
@@ -3066,7 +3628,7 @@ async function archiveProbationaryDocsForFailure(
   const state = await loadDocLifecycleState();
   const docs = Object.values(state.docs).filter(
     (doc) =>
-      docAppliesToLayer(doc, layer) &&
+      docMatchLevelForLayer(doc, layer) !== null &&
       doc.status === "probationary" &&
       doc.used_by_modules.includes(moduleId),
   );
@@ -3091,7 +3653,7 @@ async function archiveActiveDocsConfirmedByRetrospector(
   const state = await loadDocLifecycleState();
   const requested = new Set(advice.faulty_doc_paths ?? []);
   const docs = Object.values(state.docs).filter((doc) => {
-    if (!docAppliesToLayer(doc, layer) || doc.status !== "active") return false;
+    if (docMatchLevelForLayer(doc, layer) === null || doc.status !== "active") return false;
     if (!doc.used_by_modules.includes(moduleId)) return false;
     if (requested.size === 0) return true;
     return (
@@ -3156,7 +3718,7 @@ async function recordSuccessfulUseOfProbationaryDocs(
   const state = await loadDocLifecycleState();
   let changed = false;
   for (const doc of Object.values(state.docs)) {
-    if (!docAppliesToLayer(doc, layer)) continue;
+    if (docMatchLevelForLayer(doc, layer) === null) continue;
     if (doc.status !== "probationary") continue;
     if (!doc.used_by_modules.includes(moduleId)) continue;
     if (!doc.successful_modules.includes(moduleId)) {
@@ -3197,6 +3759,12 @@ async function writeProbationaryDocDraft(
   }
 
   const state = await loadDocLifecycleState();
+  const signatures = signatureBundle({
+    baseLayer: layer,
+    runtimeLayer: layer,
+    baseContractId: currentContractId(layer),
+    runtimeContractId: currentContractId(layer),
+  });
   const sourceDocIds = createNewDocRequest?.closest_existing_docs.map((doc) => doc.id) ?? [];
   const base = [
     "auto",
@@ -3219,6 +3787,10 @@ async function writeProbationaryDocDraft(
     `op_type: ${layer.op_type}`,
     `contract_id: ${currentContractId(layer)}`,
     `contract_key: ${contractStateKeyForLayer(layer)}`,
+    `signature_hash: ${signatures.signature_hash}`,
+    `exact_reference_key: ${signatures.exact_reference_key ?? "none"}`,
+    `derived_from_networks: [${getActiveNetworkId()}]`,
+    `derived_from_modules: [${module.module_id}]`,
     `module_id: ${module.module_id}`,
     `spec_hash: ${module.spec_hash}`,
     `generated_by: ${module.generated_by}`,
@@ -3241,6 +3813,15 @@ async function writeProbationaryDocDraft(
     contract_id: currentContractId(layer),
     contract_key: contractStateKeyForLayer(layer),
     spec_hash: module.spec_hash,
+    signature_hashes: [signatures.signature_hash],
+    exact_reference_keys: signatures.exact_reference_key ? [signatures.exact_reference_key] : [],
+    derived_from_networks: [getActiveNetworkId()],
+    derived_from_modules: [module.module_id],
+    applicability: applicabilityForSignature({
+      networkId: getActiveNetworkId(),
+      signatures,
+    }),
+    contraindications: [],
     status: "probationary",
     pattern_path: relFromRepo(patternAbs),
     reference_path: relFromRepo(referenceAbs),
@@ -3880,7 +4461,37 @@ function stripJsonFences(text: string): string {
   const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = fenceMatch ? fenceMatch[1].trim() : trimmed;
   const firstBrace = candidate.indexOf("{");
-  return firstBrace > 0 ? candidate.slice(firstBrace) : candidate;
+  const sliced = firstBrace > 0 ? candidate.slice(firstBrace) : candidate;
+  return sliceFirstBalancedJsonObject(sliced);
+}
+
+// Trim trailing commentary after a valid top-level JSON object so strict
+// JSON.parse can still consume the structured output. Walk once, respecting
+// string-literal escapes; cut at the closing brace of the outermost object.
+function sliceFirstBalancedJsonObject(text: string): string {
+  if (!text.startsWith("{")) return text;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(0, i + 1);
+    }
+  }
+  return text;
 }
 
 /**
@@ -4137,7 +4748,7 @@ export function findLayer(pipelineIr: PipelineIR, moduleId: string): LayerIR {
 }
 
 export async function loadPersistedVerilogModule(moduleId: string): Promise<VerilogModule> {
-  const metaPath = path.join(resolveFromSdk(PIPELINE_CONFIG.rtl_dir), `${moduleId}.meta.json`);
+  const metaPath = path.join(resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir), `${moduleId}.meta.json`);
   return readJsonFile<VerilogModule>(metaPath, verilogModuleZod);
 }
 
@@ -5616,7 +6227,7 @@ export async function ensureLayerIr(
     modelUsage: Record<string, ModelUsageEntry>;
   };
 }> {
-  const layerIrPath = resolveFromSdk(PIPELINE_CONFIG.layer_ir_path);
+  const layerIrPath = resolvePipelineConfigPath(PIPELINE_CONFIG.layer_ir_path);
   const layerIrFingerprintPath = `${layerIrPath}.checkpoint`;
   const checkpointAbs = resolveInputPathForCurrentHost(checkpointPath);
 
@@ -5716,6 +6327,10 @@ function expectedLatencyCyclesForContract(layer: LayerIR, sidecarFields: Record<
       const tileLoadLatency = Number(params.weight_tile_load_cycles) || 0;
       return layer.pipeline_latency_cycles * tileCount + tileLoadLatency * tileCount;
     }
+    case "depthwise-conv":
+      // Same public-interface latency contract as flat-bus: pipeline_latency_cycles
+      // is the LayerIR-pinned time-to-first-output.
+      return layer.pipeline_latency_cycles;
     case "flat-bus":
       return layer.pipeline_latency_cycles;
   }
@@ -5728,11 +6343,23 @@ export async function loadRetrospectorKnowledgeDoc(layer: LayerIR): Promise<RtlK
       kernel_h?: number,
       kernel_w?: number,
       contract_id?: ContractId,
+      signature_hash?: string,
+      exact_reference_key?: string | null,
+      runtime_layer_signature?: Record<string, unknown>,
     ) => Promise<RtlKnowledgeDoc>;
   };
   const kernelH = layer.op_type === "conv2d" ? layer.weight_shape[2] : undefined;
   const kernelW = layer.op_type === "conv2d" ? layer.weight_shape[3] : undefined;
-  return mcpTools.get_rtl_patterns(layer.op_type, kernelH, kernelW, currentContractId(layer));
+  const signatures = signatureMetadataForLayer(layer, layer);
+  return mcpTools.get_rtl_patterns(
+    layer.op_type,
+    kernelH,
+    kernelW,
+    currentContractId(layer),
+    signatures.signature_hash,
+    signatures.exact_reference_key,
+    signatures.runtime_layer_signature,
+  );
 }
 
 async function invokeVivado(module: VerilogModule, layer: LayerIR): Promise<SynthesisReport> {
@@ -5897,6 +6524,22 @@ async function processSynthesisOutcome(
       },
       runtime,
     );
+    // Best-effort knowledge promotion: passes on contracts with pattern-doc
+    // coverage but no protected reference seed a probationary reference for
+    // future runs to crib from. Wrapped in try/catch so a promotion failure
+    // never blocks a real pass from being recorded.
+    try {
+      await autoPromotePassingReference(layer, module, verifiedResult, report, runtime);
+    } catch (err) {
+      await appendRunLog(
+        {
+          event: "auto_promote_reference_error",
+          module_id: moduleId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        runtime,
+      );
+    }
     await manager.saveState(statePath);
     return;
   }
@@ -6085,7 +6728,7 @@ async function tryRecoverVerilogModuleFromDisk(
   // message even though they already wrote the .v via the write_verilog MCP
   // tool.  If the file is on disk we can reconstruct a VerilogModule and keep
   // the pipeline moving instead of failing the whole run.
-  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const rtlDir = resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir);
   const verilogPath = path.join(rtlDir, `${layerIr.module_id}.v`);
   try {
     const source = await readFile(verilogPath, "utf8");
@@ -6113,7 +6756,7 @@ async function clearGeneratedRtlArtifacts(
   reason: string,
   runtime: OrchestratorRuntime,
 ): Promise<void> {
-  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const rtlDir = resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir);
   const verilogPath = path.join(rtlDir, `${moduleId}.v`);
   const metaPath = path.join(rtlDir, `${moduleId}.meta.json`);
   const removed: string[] = [];
@@ -6154,7 +6797,7 @@ async function persistVerilogModule(module: VerilogModule): Promise<void> {
   // Sonnet/Opus under outputFormat: json_schema sometimes skip tool calls
   // to save turns. Orchestrator owns disk state, so ensure the .v and
   // .meta.json files exist regardless of whether the agent persisted them.
-  const rtlDir = resolveFromSdk(PIPELINE_CONFIG.rtl_dir);
+  const rtlDir = resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir);
   const verilogPath = path.join(rtlDir, `${module.module_id}.v`);
   const metaPath = path.join(rtlDir, `${module.module_id}.meta.json`);
   await mkdir(rtlDir, { recursive: true });
@@ -6261,7 +6904,7 @@ async function invokeFoundry(
       expected_latency_cycles: expectedLatencyCyclesForContract(layerIr, contractSidecarFields(layerIr)),
       covered_by_existing_doc: createNewDocRequest === null,
     },
-    write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+    write_verilog_output_dir: resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir),
     ...(selfImproveDocRequest ? { self_improve_doc_request: selfImproveDocRequest } : {}),
     ...(createNewDocRequest ? { create_new_doc_request: createNewDocRequest } : {}),
   };
@@ -6613,7 +7256,7 @@ export async function runAssayerDeterministic(
   // under output/tb/ next to any future manually authored test sidecars.
   const sidecarPath = buildSidecarPath(module.module_id);
   const resultsPath = path.join(
-    resolveFromSdk(PIPELINE_CONFIG.reports_dir),
+    resolvePipelineConfigPath(PIPELINE_CONFIG.reports_dir),
     `${module.module_id}.results.json`,
   );
   const contractFields = contractSidecarFields(layer);
@@ -7202,7 +7845,7 @@ async function invokeSurgeon(
     ...(options.retrospectorAdvice ? { retrospector_advice: options.retrospectorAdvice } : {}),
     ...(options.isFinalAttempt ? { is_final_attempt: true } : {}),
     retry_seed: retrySeed,
-    write_verilog_output_dir: resolveFromSdk(PIPELINE_CONFIG.rtl_dir),
+    write_verilog_output_dir: resolvePipelineConfigPath(PIPELINE_CONFIG.rtl_dir),
     ...(surgeonAsksForDraftDoc
       ? {
           self_improve_doc_request: {
@@ -7474,11 +8117,12 @@ async function attemptNextContractOrEscalate(input: {
 
   if (next) {
     const before = input.manager.getState().modules[input.moduleId];
+    const nextLayer = withSignatureMetadata(input.baseLayer, next.layer, input.pipelineIr.quantization);
     setActiveLayerForModule(
       input.pipelineIr,
       input.activeLayers,
       input.moduleId,
-      next.layer,
+      nextLayer,
     );
     input.manager.resetModuleForContractRetry(input.moduleId);
     input.newDocFailureContexts.set(input.moduleId, {
@@ -7502,8 +8146,8 @@ async function attemptNextContractOrEscalate(input: {
         previous_contract_id: currentPlan.id,
         next_contract_id: next.plan.id,
         previous_contract_key: contractStateKeyForLayer(input.currentLayer),
-        next_contract_key: contractStateKeyForLayer(next.layer),
-        next_layer_ir: next.layer,
+        next_contract_key: contractStateKeyForLayer(nextLayer),
+        next_layer_ir: nextLayer,
         available_contracts: CONTRACT_PLANS,
       },
       input.runtime,
@@ -8744,6 +9388,9 @@ export async function runPipeline(
   checkpointPath: string,
   options: RunPipelineOptions = {},
 ): Promise<void> {
+  if (options.networkId) {
+    setActiveNetwork(options.networkId);
+  }
   const resume = options.resume ?? false;
   // Module-level agent-history Maps are not disk-persisted; clear them at
   // every entry so back-to-back runPipeline calls in the same process (tests,
@@ -8763,6 +9410,8 @@ export async function runPipeline(
   await appendRunLog(
     {
       event: "pipeline_start",
+      network_id: getActiveNetworkId(),
+      output_root: getPipelineOutputRoot(),
       checkpoint_path: checkpointPath,
       resume,
     },
@@ -8796,7 +9445,7 @@ export async function runPipeline(
   const baseLayersByModule = new Map(
     pipelineIr.layers.map((layer) => [layer.module_id, jsonClone(layer)] as const),
   );
-  const statePath = resolveFromSdk(PIPELINE_CONFIG.pipeline_state_path);
+  const statePath = resolvePipelineConfigPath(PIPELINE_CONFIG.pipeline_state_path);
   const maxRetries = options.maxRetries ?? PIPELINE_CONFIG.max_retries;
   const selfImproveEnabled = options.selfImprove ?? PIPELINE_CONFIG.self_improve;
   const manager = new PipelineStateManager(moduleIds, maxRetries);
@@ -8847,7 +9496,12 @@ export async function runPipeline(
       throw new Error(`LayerIR for module '${moduleId}' was not found while selecting contracts.`);
     }
     if (!selfImproveEnabled) {
-      setActiveLayerForModule(pipelineIr, activeLayers, moduleId, baseLayer);
+      setActiveLayerForModule(
+        pipelineIr,
+        activeLayers,
+        moduleId,
+        withSignatureMetadata(baseLayer, baseLayer, pipelineIr.quantization),
+      );
       continue;
     }
 
@@ -8880,19 +9534,25 @@ export async function runPipeline(
           event: "contract_skipped_manual_correction_needed",
           module_id: moduleId,
           available_contracts: CONTRACT_PLANS,
-          contract_state_path: CONTRACT_STATE_PATH,
+          contract_state_path: contractStatePath(),
           result: manualResult,
         },
         runtime,
       );
-      setActiveLayerForModule(pipelineIr, activeLayers, moduleId, baseLayer);
+      setActiveLayerForModule(
+        pipelineIr,
+        activeLayers,
+        moduleId,
+        withSignatureMetadata(baseLayer, baseLayer, pipelineIr.quantization),
+      );
       continue;
     }
 
-    setActiveLayerForModule(pipelineIr, activeLayers, moduleId, selected.layer);
+    const selectedLayer = withSignatureMetadata(baseLayer, selected.layer, pipelineIr.quantization);
+    setActiveLayerForModule(pipelineIr, activeLayers, moduleId, selectedLayer);
     if (selected.plan.id !== "flat-bus") {
       const flaggedContracts = Object.values(contractState.contracts).filter(
-        (flag) => flag.op_type === selected.layer.op_type && flag.status === "manual_correction_needed",
+        (flag) => flag.op_type === selectedLayer.op_type && flag.status === "manual_correction_needed",
       );
       newDocFailureContexts.set(moduleId, {
         reason: "selected_after_skipping_flagged_contracts",
@@ -8903,9 +9563,9 @@ export async function runPipeline(
           event: "contract_selected_after_skipping_flagged",
           module_id: moduleId,
           selected_contract_id: selected.plan.id,
-          selected_contract_key: contractStateKeyForLayer(selected.layer),
-          selected_layer_ir: selected.layer,
-          contract_state_path: CONTRACT_STATE_PATH,
+          selected_contract_key: contractStateKeyForLayer(selectedLayer),
+          selected_layer_ir: selectedLayer,
+          contract_state_path: contractStatePath(),
         },
         runtime,
       );
@@ -9734,11 +10394,13 @@ export async function runPipeline(
 
 export function parseCliArgs(argv: string[]): {
   checkpointPath: string;
+  networkId: string;
   resume: boolean;
   maxRetries: number | undefined;
   only: string | undefined;
   except: string[];
 } {
+  let networkId = defaultNetworkId();
   let resume = false;
   let maxRetries: number | undefined;
   let only: string | undefined;
@@ -9749,6 +10411,17 @@ export function parseCliArgs(argv: string[]): {
     const arg = argv[i];
     if (arg === "--resume") {
       resume = true;
+    } else if (arg === "--network") {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--network requires a network id.");
+      }
+      networkId = next;
+    } else if (arg.startsWith("--network=")) {
+      networkId = arg.slice("--network=".length);
+      if (!networkId) {
+        throw new Error("--network= requires a non-empty network id.");
+      }
     } else if (arg === "--max-retries") {
       const next = argv[++i];
       if (next === undefined) {
@@ -9807,6 +10480,7 @@ export function parseCliArgs(argv: string[]): {
 
   return {
     checkpointPath: positional[0],
+    networkId,
     resume,
     maxRetries,
     only,
@@ -9816,6 +10490,7 @@ export function parseCliArgs(argv: string[]): {
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const cli = parseCliArgs(argv);
+  setActiveNetwork(cli.networkId);
   // Validate the checkpoint path at the CLI boundary so a typo fails fast and
   // with a useful message instead of being routed through the Python frontend
   // (which produces a noisier error after doing real work).
@@ -9825,6 +10500,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     );
   }
   await runPipeline(cli.checkpointPath, {
+    networkId: cli.networkId,
     resume: cli.resume,
     maxRetries: cli.maxRetries,
     only: cli.only,

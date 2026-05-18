@@ -28,9 +28,16 @@ import type { ImprovementTarget } from "../sdk/improve.ts";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 
-const NETWORK_OUTPUT_DIRS: Record<string, string> = {
-  "resnet-50": "output",
-};
+type NetworkRegistry = { defaultNetworkId?: string; networks?: Array<{ id?: string; outputDir?: string }> };
+
+async function networkOutputDir(networkId: string): Promise<string> {
+  const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8")) as NetworkRegistry;
+  const network = (registry.networks ?? []).find((entry) => entry.id === networkId);
+  if (!network?.outputDir) {
+    throw new Error(`Unknown network '${networkId}'. Known: ${(registry.networks ?? []).map((n) => n.id).join(", ")}`);
+  }
+  return network.outputDir;
+}
 
 type Args = {
   preset: string;
@@ -42,10 +49,11 @@ type Args = {
   keepReference: boolean;
 };
 
-function parseArgs(argv: string[]): Args {
+async function parseArgs(argv: string[]): Promise<Args> {
+  const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8")) as NetworkRegistry;
   let preset = "ppa";
   let targets: ImprovementTarget[] = [];
-  let networkId = "resnet-50";
+  let networkId = registry.defaultNetworkId ?? "resnet-50";
   let plan = false;
   let run = false;
   let maxModules: number | undefined;
@@ -90,11 +98,10 @@ async function readPipelineState(outputDir: string): Promise<PipelineState> {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const outputDirRel = NETWORK_OUTPUT_DIRS[args.networkId];
-  if (!outputDirRel) {
-    throw new Error(`Unknown network '${args.networkId}'. Known: ${Object.keys(NETWORK_OUTPUT_DIRS).join(", ")}`);
-  }
+  const args = await parseArgs(process.argv.slice(2));
+  const outputDirRel = await networkOutputDir(args.networkId);
+  process.env.NN2RTL_NETWORK_ID = args.networkId;
+  process.env.NN2RTL_OUTPUT_DIR = path.resolve(repoRoot, outputDirRel);
   const outputDir = path.resolve(repoRoot, outputDirRel);
 
   const state = await readPipelineState(outputDir);

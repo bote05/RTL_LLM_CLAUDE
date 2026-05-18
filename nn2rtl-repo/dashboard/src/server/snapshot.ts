@@ -61,8 +61,16 @@ function stageFor(input: {
   vivadoSuccess?: boolean;
   vivadoTimingMet?: boolean;
   hasSuccessfulImprovement: boolean;
+  pipelineStatus?: string;
 }): ModuleStage {
   if (input.hasSuccessfulImprovement) return "improved";
+  // pipeline_state is authoritative for terminal failures. A later attempt can
+  // overwrite the RTL with a broken stub (gated by structural preflight before
+  // ever reaching Verilator) without rewriting the prior results.json — in
+  // that case verifStatus still reads "pass" from the stale file, but the
+  // module is genuinely fail_abort. Never paint verilator-pass or vivado-pass
+  // for a fail_abort.
+  if (input.pipelineStatus === "fail_abort") return "failed";
   if (input.vivadoSuccess && input.vivadoTimingMet) return "vivado-pass";
   if (input.verifStatus === "pass") return "verilator-pass";
   if (input.verifStatus === "fail" || input.verifStatus === "syntax_error" || input.vivadoSuccess === false) {
@@ -324,6 +332,7 @@ export async function buildSnapshot(
         vivadoSuccess,
         vivadoTimingMet,
         hasSuccessfulImprovement: moduleImprovements.some((report) => report.success),
+        pipelineStatus: asString(asRecord(pipelineState.modules)[moduleId]),
       }),
       hasRtl,
       hasMeta: await pathExists(metaFile),
@@ -373,8 +382,16 @@ export async function buildSnapshot(
     docsActive: tierCount("active"),
     docsProbationary: tierCount("probationary"),
     docsImproved: tierCount("improved"),
+    // Prefer the LIVE pipeline_state.total_cost_usd over the frozen
+    // pipeline_summary.total_cost_usd. The summary is only written when
+    // pipeline_complete fires (all modules terminal); resume batches that
+    // exit early — e.g. on the Anthropic 5-hour usage window — never
+    // update the summary, so it gets stuck at whatever the FIRST completed
+    // run wrote (often a small probe). The state file is updated after
+    // every state transition and is the source of truth during a long
+    // multi-batch run.
     knownCostUsd:
-      (asNumber(pipelineSummary.total_cost_usd) ?? asNumber(pipelineState.total_cost_usd) ?? 0) +
+      (asNumber(pipelineState.total_cost_usd) ?? asNumber(pipelineSummary.total_cost_usd) ?? 0) +
       improveCostUsd,
   };
   const stateCounts: Record<string, number> = {};

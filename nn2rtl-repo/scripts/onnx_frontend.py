@@ -78,6 +78,8 @@ from scripts.golden_impl import (
     conv_mac_parallelism,
     Int8Add,
     Int8Conv2d,
+    Int8Gemm,
+    Int8GlobalAveragePool,
     Int8ReLU,
     build_deterministic_input_stream,
     channel_bus_bits_from_shape,
@@ -141,15 +143,17 @@ class Int8MaxPool2d(nn.Module):
 @dataclass
 class OnnxLayerSpec:
     module_id: str
-    op_type: str                      # "conv2d" | "relu" | "add" | "maxpool"
+    op_type: str                      # "conv2d" | "relu" | "add" | "maxpool" | "global_avg_pool" | "gemm"
     input_tensor_names: list[str]     # ONNX tensor name(s) consumed
     output_tensor_name: str           # ONNX tensor name produced
-    input_shape: list[int]            # [N, C, H, W]
-    output_shape: list[int]           # [N, C, H, W]
+    input_shape: list[int]            # [N, C, H, W] for conv-like; [N, C, 1, 1] or [N, K] for classifier head
+    output_shape: list[int]           # [N, C, H, W] for conv-like; [N, M] for gemm
 
-    # Conv2d -----------------------------------------------------------------
-    weight: Optional[np.ndarray] = None   # float32 [OC, IC/G, KH, KW]
-    bias: Optional[np.ndarray] = None     # float32 [OC]
+    # Conv2d / Gemm shared weight storage --------------------------------------
+    # For Gemm the weight is 2D [K, M] (transB-canonicalized: each row = one
+    # output channel's weights). Bias has shape [M].
+    weight: Optional[np.ndarray] = None   # float32 [OC, IC/G, KH, KW] for conv, [M, K] for gemm
+    bias: Optional[np.ndarray] = None     # float32 [OC] or [M]
     stride: list[int] = field(default_factory=lambda: [1, 1])
     padding: list[int] = field(default_factory=lambda: [0, 0])
     dilation: list[int] = field(default_factory=lambda: [1, 1])
@@ -161,9 +165,26 @@ class OnnxLayerSpec:
     pool_padding: list[int] = field(default_factory=lambda: [0, 0])
     pool_ceil_mode: bool = False
 
+    # GlobalAveragePool -------------------------------------------------------
+    # Captured input spatial dims (H, W) so the quantizer/golden code can
+    # divide by H*W. Stored explicitly instead of recomputing from input_shape
+    # in case shape inference left -1s.
+    gap_spatial: list[int] = field(default_factory=lambda: [1, 1])
+
+    # Gemm --------------------------------------------------------------------
+    # Canonicalized so weight is [M, K] (M output features, K input features),
+    # matching PyTorch nn.Linear.weight. alpha/beta default to 1.0.
+    gemm_in_features: int = 0
+    gemm_out_features: int = 0
+
     # Add (residual) wiring --------------------------------------------------
     add_lhs_tensor: str = ""
     add_rhs_tensor: str = ""
+
+    # ReLU6 / clipped-activation upper bound. None means unbounded ReLU; a
+    # finite value means the activation is clamped to [0, clip_max] in float
+    # domain (e.g. MobileNetV2 sets 6.0 for every ReLU6 in the network).
+    clip_max: Optional[float] = None
 
     # Calibration-derived (filled in by fill_calibration_stats) -------------
     input_scale: float = 1.0
@@ -294,6 +315,7 @@ def _extract_relu(
     node: onnx.NodeProto,
     shapes: dict[str, list[int]],
     mid: str,
+    clip_max: Optional[float] = None,
 ) -> OnnxLayerSpec:
     inp = node.input[0]
     return OnnxLayerSpec(
@@ -303,6 +325,7 @@ def _extract_relu(
         output_tensor_name=node.output[0],
         input_shape=shapes.get(inp, [-1, -1, -1, -1]),
         output_shape=shapes.get(node.output[0], [-1, -1, -1, -1]),
+        clip_max=clip_max,
     )
 
 
@@ -350,30 +373,197 @@ def _extract_add(
     )
 
 
+def _extract_global_avg_pool(
+    node: onnx.NodeProto,
+    shapes: dict[str, list[int]],
+    mid: str,
+) -> OnnxLayerSpec:
+    inp = node.input[0]
+    in_shape = shapes.get(inp, [-1, -1, -1, -1])
+    h = int(in_shape[2]) if len(in_shape) >= 4 and in_shape[2] > 0 else 1
+    w = int(in_shape[3]) if len(in_shape) >= 4 and in_shape[3] > 0 else 1
+    out_shape = shapes.get(node.output[0], [-1, -1, 1, 1])
+    return OnnxLayerSpec(
+        module_id=mid,
+        op_type="global_avg_pool",
+        input_tensor_names=[inp],
+        output_tensor_name=node.output[0],
+        input_shape=in_shape,
+        output_shape=out_shape,
+        gap_spatial=[h, w],
+    )
+
+
+def _extract_gemm(
+    node: onnx.NodeProto,
+    shapes: dict[str, list[int]],
+    inits: dict[str, np.ndarray],
+    mid: str,
+) -> OnnxLayerSpec:
+    """Canonicalize a Gemm node into a `weight = [M, K]` (PyTorch nn.Linear
+    layout) plus optional `bias = [M]`. ONNX Gemm carries `transA` / `transB`
+    attributes which control the layout of A (input) and B (weight). For most
+    PyTorch-exported networks the input is already row-major (A non-transposed)
+    and weight is `[M, K]` already (transB=1). We canonicalize to that layout
+    so the downstream quantizer / RTL can assume a fixed shape.
+    """
+    in_tensor = node.input[0]
+    w_name = node.input[1]
+    if w_name not in inits:
+        raise GoldenGenerationError(
+            f"Gemm node '{node.name or mid}' weight input '{w_name}' is not a "
+            f"graph initializer; dynamic-weight Gemm is unsupported."
+        )
+    weight = np.array(inits[w_name], dtype=np.float32)
+    trans_b = bool(_get_attr(node, "transB", 0))
+    trans_a = bool(_get_attr(node, "transA", 0))
+    if trans_a:
+        raise GoldenGenerationError(
+            f"Gemm node '{node.name or mid}' has transA=1; only row-major inputs "
+            f"are supported by this frontend."
+        )
+    # ONNX with transB=1: B is already [M, K]. Otherwise B is [K, M] and must
+    # be transposed to match the [M, K] canonical form.
+    if not trans_b:
+        weight = weight.T.copy()
+    out_features, in_features = int(weight.shape[0]), int(weight.shape[1])
+
+    bias = None
+    if len(node.input) >= 3 and node.input[2] and node.input[2] in inits:
+        bias = np.array(inits[node.input[2]], dtype=np.float32).reshape(-1)
+        if bias.shape[0] != out_features:
+            raise GoldenGenerationError(
+                f"Gemm node '{node.name or mid}' bias shape {bias.shape} does not "
+                f"match output features {out_features}."
+            )
+
+    # Gemm sees its activations after any upstream Flatten/Reshape — the
+    # input to the dot product is a flat [N, K] vector. The ONNX shape inference
+    # of the *pre-Flatten* tensor (e.g. [N, C, H, W]) is misleading here
+    # because the alias rewriter folds Flatten out and Gemm consumes the
+    # underlying [N, K] view. We canonicalize input_shape to [N, K] so the
+    # downstream `input_width_bits` calculation produces K*8 (one beat of K
+    # bytes), matching the Gemm doc's "one beat of K bytes" contract.
+    raw_input_shape = shapes.get(in_tensor, [-1, in_features])
+    batch_dim_raw = (
+        raw_input_shape[0]
+        if isinstance(raw_input_shape, (list, tuple)) and len(raw_input_shape) > 0
+        else -1
+    )
+    try:
+        batch_dim = int(batch_dim_raw)
+    except (TypeError, ValueError):
+        batch_dim = -1
+    canonical_input_shape = [batch_dim if batch_dim > 0 else -1, in_features]
+
+    return OnnxLayerSpec(
+        module_id=mid,
+        op_type="gemm",
+        input_tensor_names=[in_tensor],
+        output_tensor_name=node.output[0],
+        input_shape=canonical_input_shape,
+        output_shape=shapes.get(node.output[0], [-1, out_features]),
+        weight=weight,
+        bias=bias,
+        gemm_in_features=in_features,
+        gemm_out_features=out_features,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Full graph spec extraction
 # ---------------------------------------------------------------------------
 
 def extract_layer_specs(model: onnx.ModelProto) -> list[OnnxLayerSpec]:
-    """Walk the simplified ONNX graph and return one OnnxLayerSpec per supported op."""
+    """Walk the simplified ONNX graph and return one OnnxLayerSpec per supported op.
+
+    Reshape/Flatten/Squeeze/Unsqueeze are treated as tensor-rename passthroughs:
+    they do not produce specs, but downstream specs that consume their outputs
+    are silently rewritten to point at the underlying upstream tensor. This
+    lets a Conv -> GlobalAveragePool -> Flatten -> Gemm chain work even though
+    Flatten itself is not a compute op.
+    """
     shapes = _tensor_shapes(model)
     inits = _initializers(model)
     op_counts: dict[str, int] = {}
     specs: list[OnnxLayerSpec] = []
+    # Map from tensor produced by a passthrough op to the underlying source
+    # tensor (transitively resolved).
+    tensor_alias: dict[str, str] = {}
+
+    def resolve_alias(name: str) -> str:
+        seen: set[str] = set()
+        while name in tensor_alias and name not in seen:
+            seen.add(name)
+            name = tensor_alias[name]
+        return name
 
     for node in model.graph.node:
         op = node.op_type
+        clip_max_v: Optional[float] = None
 
-        # Treat Clip(min=0) as ReLU (used by MobileNet etc.)
+        # Tensor-rename passthroughs. None of these change the underlying byte
+        # stream; they only rearrange dims. The downstream Gemm consumes the
+        # same channel-major bus the upstream GAP produced.
+        if op in ("Reshape", "Flatten", "Squeeze", "Unsqueeze", "Identity"):
+            if node.input and node.output:
+                src = resolve_alias(node.input[0])
+                tensor_alias[node.output[0]] = src
+            continue
+
+        # The Concat-of-one node sometimes inserted by torch.onnx.export's
+        # dynamo path immediately before Reshape is a no-op when it has a
+        # single input; treat it as a passthrough so it doesn't break the
+        # extracted spec chain. Multi-input Concat is unsupported and falls
+        # through to the generic skip below.
+        if op == "Concat" and len(node.input) == 1 and node.output:
+            tensor_alias[node.output[0]] = resolve_alias(node.input[0])
+            continue
+
+        # Treat ReduceMean(axes=[2, 3], keepdims=True) as GlobalAveragePool.
+        # PyTorch's newer ONNX export path lowers AdaptiveAvgPool2d(1) and
+        # F.adaptive_avg_pool2d to ReduceMean over the spatial dims; older
+        # exports used GlobalAveragePool directly. The numerical behavior is
+        # identical, so route both into the same spec.
+        if op == "ReduceMean":
+            keepdims = bool(_get_attr(node, "keepdims", 1))
+            axes_attr = _get_attr(node, "axes", None)
+            axes_input = (
+                inits[node.input[1]].flatten().tolist()
+                if len(node.input) >= 2 and node.input[1] in inits
+                else None
+            )
+            axes_list = (
+                list(axes_input)
+                if axes_input is not None
+                else list(axes_attr) if axes_attr is not None else []
+            )
+            normalized_axes = sorted(int(a) % 4 for a in axes_list)
+            if keepdims and normalized_axes == [2, 3]:
+                op = "GlobalAveragePool"
+            else:
+                continue
+
+        # Treat Clip(min=0) as ReLU. If a finite max is present (e.g. ReLU6
+        # uses Clip(min=0, max=6)), carry it forward as clip_max so the
+        # quantizer can fold it into the output scale and the verifier can
+        # apply the same clip in golden computation.
         if op == "Clip":
-            min_v = None
+            min_v: Optional[float] = None
+            max_v: Optional[float] = None
             # min/max are inputs in opset 11+, attributes in opset 6
             if len(node.input) >= 2 and node.input[1] in inits:
                 min_v = float(inits[node.input[1]].flat[0])
             else:
                 min_v = _get_attr(node, "min", None)
+            if len(node.input) >= 3 and node.input[2] in inits:
+                max_v = float(inits[node.input[2]].flat[0])
+            else:
+                max_v = _get_attr(node, "max", None)
             if min_v is not None and float(min_v) == 0.0:
                 op = "Relu"
+                if max_v is not None and np.isfinite(float(max_v)):
+                    clip_max_v = float(max_v)
             else:
                 continue
 
@@ -393,6 +583,10 @@ def extract_layer_specs(model: onnx.ModelProto) -> list[OnnxLayerSpec]:
             if node.input[0] in inits or node.input[1] in inits:
                 continue
             op_key = "add"
+        elif op == "GlobalAveragePool":
+            op_key = "global_avg_pool"
+        elif op == "Gemm":
+            op_key = "gemm"
         else:
             continue
 
@@ -408,17 +602,33 @@ def extract_layer_specs(model: onnx.ModelProto) -> list[OnnxLayerSpec]:
             mid = f"{base}_{counter}"
 
         if op == "Conv":
-            specs.append(_extract_conv(node, shapes, inits, mid))
+            spec = _extract_conv(node, shapes, inits, mid)
         elif op == "Relu":
-            specs.append(_extract_relu(node, shapes, mid))
+            spec = _extract_relu(node, shapes, mid, clip_max=clip_max_v)
         elif op == "MaxPool":
-            specs.append(_extract_maxpool(node, shapes, mid))
+            spec = _extract_maxpool(node, shapes, mid)
         elif op == "Add":
-            specs.append(_extract_add(node, shapes, mid))
+            spec = _extract_add(node, shapes, mid)
+        elif op == "GlobalAveragePool":
+            spec = _extract_global_avg_pool(node, shapes, mid)
+        elif op == "Gemm":
+            spec = _extract_gemm(node, shapes, inits, mid)
+        else:
+            continue
+        # Walk through tensor passthroughs so each spec consumes the actual
+        # producer's output tensor name, not a downstream Reshape/Flatten
+        # rename. validate_graph_completeness compares against producers; the
+        # rewrite keeps it accurate even when the user inserted shape ops.
+        spec.input_tensor_names = [resolve_alias(t) for t in spec.input_tensor_names]
+        if hasattr(spec, "add_lhs_tensor") and spec.add_lhs_tensor:
+            spec.add_lhs_tensor = resolve_alias(spec.add_lhs_tensor)
+        if hasattr(spec, "add_rhs_tensor") and spec.add_rhs_tensor:
+            spec.add_rhs_tensor = resolve_alias(spec.add_rhs_tensor)
+        specs.append(spec)
 
     if not specs:
         raise GoldenGenerationError(
-            "No supported ops (Conv, Relu, MaxPool, Add) found in ONNX model after simplification."
+            "No supported ops (Conv, Relu, MaxPool, Add, GlobalAveragePool, Gemm) found in ONNX model after simplification."
         )
     return specs
 
@@ -563,7 +773,18 @@ def backfill_spec_shapes(
 
     for spec in specs:
         if spec.input_tensor_names:
-            spec.input_shape = _resolve(spec.input_shape, spec.input_tensor_names[0])
+            if spec.op_type == "gemm":
+                # Gemm may consume an aliased pre-Flatten tensor such as
+                # [N, C, H, W], but the public Gemm contract is a flat [N, K]
+                # vector. Preserve that canonical shape while still resolving
+                # a dynamic batch dimension from the concrete producer tensor.
+                producer_shape = concrete_shapes.get(spec.input_tensor_names[0])
+                batch = spec.input_shape[0] if spec.input_shape else -1
+                if producer_shape:
+                    batch = producer_shape[0]
+                spec.input_shape = [int(batch) if int(batch) > 0 else 1, int(spec.gemm_in_features)]
+            else:
+                spec.input_shape = _resolve(spec.input_shape, spec.input_tensor_names[0])
         spec.output_shape = _resolve(spec.output_shape, spec.output_tensor_name)
         # For add: also resolve lhs/rhs (used for input_width_bits)
         if spec.op_type == "add" and any(d <= 0 for d in spec.input_shape):
@@ -629,10 +850,22 @@ def fill_calibration_stats(
         # Input scale
         in_name = spec.input_tensor_names[0] if spec.input_tensor_names else ""
         spec.input_scale = _safe_scale(stats_with_input.get(in_name, network_input_max_abs))
-        # Output scale
-        spec.output_scale = _safe_scale(stats.get(spec.output_tensor_name, 128.0))
+        # Output scale. For relu layers carrying a ReLU6-style clip ceiling,
+        # use max(observed, clip_max) as the calibration upper bound so the
+        # scale is anchored on the activation's theoretical range, not on
+        # whatever the synthetic calibration data happened to excite. Without
+        # this, calibration that never saturates the clip produces a scale
+        # tighter than 6/128, and real inputs near the clip saturate to INT8
+        # 127 prematurely.
+        observed = stats.get(spec.output_tensor_name, 128.0)
+        if spec.op_type == "relu" and spec.clip_max is not None:
+            observed = max(float(observed), float(spec.clip_max))
+        spec.output_scale = _safe_scale(observed)
 
         if spec.op_type == "conv2d" and spec.weight is not None:
+            spec.weight_scale = _safe_scale(float(np.abs(spec.weight).max()))
+
+        if spec.op_type == "gemm" and spec.weight is not None:
             spec.weight_scale = _safe_scale(float(np.abs(spec.weight).max()))
 
         if spec.op_type == "add":
@@ -650,6 +883,25 @@ def fill_calibration_stats(
 
 def _quantize_weights_int8(weight: np.ndarray, scale: float) -> np.ndarray:
     return np.clip(np.round(weight / scale), -128, 127).astype(np.int8)
+
+
+def _layer_ir_scale_factor(spec: OnnxLayerSpec) -> float:
+    """Per-op LayerIR `scale_factor` field. See call site for the per-op
+    semantics; this helper centralizes the dispatch so the frontend stays
+    consistent with the pattern docs and the Int8 modules."""
+    if spec.op_type in ("conv2d", "gemm"):
+        return _composite_conv_scale(spec)
+    if spec.op_type == "global_avg_pool":
+        h, w = spec.gap_spatial[0], spec.gap_spatial[1]
+        hw = max(1, int(h) * int(w))
+        if spec.output_scale == 0.0:
+            return float(spec.input_scale) / hw
+        return float(spec.input_scale) / float(spec.output_scale) / hw
+    if spec.op_type == "relu" and spec.clip_max is not None:
+        if spec.output_scale == 0.0:
+            return float(spec.input_scale)
+        return float(spec.input_scale) / float(spec.output_scale)
+    return float(spec.output_scale)
 
 
 def _composite_conv_scale(spec: OnnxLayerSpec) -> float:
@@ -735,7 +987,10 @@ def _build_int8_module(spec: OnnxLayerSpec, rtl_compat_conv: bool = True) -> nn.
             rtl_compat=rtl_compat_conv,
         )
     if spec.op_type == "relu":
-        return Int8ReLU()
+        return Int8ReLU(
+            input_scale=spec.input_scale,
+            output_scale=spec.output_scale,
+        )
     if spec.op_type == "maxpool":
         return Int8MaxPool2d(
             kernel_size=spec.pool_kernel,
@@ -748,6 +1003,29 @@ def _build_int8_module(spec: OnnxLayerSpec, rtl_compat_conv: bool = True) -> nn.
             lhs_scale_factor=spec.lhs_scale,
             rhs_scale_factor=spec.rhs_scale,
             output_scale_factor=spec.output_scale,
+        )
+    if spec.op_type == "global_avg_pool":
+        # GAP carries no weights; the composite scale is built inside the
+        # module from input_scale / output_scale / (H*W).
+        return Int8GlobalAveragePool(
+            input_scale=spec.input_scale,
+            output_scale=spec.output_scale,
+        )
+    if spec.op_type == "gemm":
+        assert spec.weight is not None
+        w_int8 = _quantize_weights_int8(spec.weight, spec.weight_scale)
+        w_tensor = torch.tensor(w_int8.astype(np.int64), dtype=torch.int32)
+        if spec.bias is not None:
+            b_int32 = _quantize_bias_int32(spec.bias, spec.input_scale, spec.weight_scale)
+            b_tensor = torch.tensor(b_int32, dtype=torch.int32)
+        else:
+            b_tensor = None
+        acc_scale = spec.input_scale * spec.weight_scale
+        composite_scale = acc_scale if spec.output_scale == 0.0 else acc_scale / spec.output_scale
+        return Int8Gemm(
+            weight_int8=w_tensor,
+            bias_int32=b_tensor,
+            scale_factor=float(composite_scale),
         )
     raise GoldenGenerationError(f"Unsupported op_type '{spec.op_type}' in _build_int8_module.")
 
@@ -855,10 +1133,38 @@ def _write_conv_hex_artifacts(
 
 
 def _write_empty_weight_file(repo_root: Path, module_id: str) -> None:
-    """Write an empty placeholder hex file for ops without weights (relu, maxpool, add)."""
+    """Write an empty placeholder hex file for ops without weights (relu, maxpool, add, global_avg_pool)."""
     weights_path, _ = get_weight_artifact_paths(repo_root, module_id)
     weights_path.parent.mkdir(parents=True, exist_ok=True)
     weights_path.write_text("", encoding="utf8")
+
+
+def _write_gemm_hex_artifacts(
+    spec: OnnxLayerSpec,
+    repo_root: Path,
+) -> tuple[list[int], list[int]]:
+    """Write weight ([M, K] row-major) and bias ([M]) hex files for a Gemm spec.
+
+    Layout: weights are emitted row-major (output feature is the outer index),
+    matching how the RTL is expected to iterate — one output feature at a time,
+    K weights sequential per output.
+    """
+    assert spec.weight is not None
+    w_int8 = _quantize_weights_int8(spec.weight, spec.weight_scale)
+    weight_values = [int(v) for v in w_int8.reshape(-1).tolist()]
+    if spec.bias is not None:
+        b_int32 = _quantize_bias_int32(spec.bias, spec.input_scale, spec.weight_scale)
+        bias_values = [int(v) for v in b_int32.reshape(-1).tolist()]
+    else:
+        bias_values = []
+    weights_path, bias_path = get_weight_artifact_paths(repo_root, spec.module_id)
+    write_signed_int8_hex(weight_values, weights_path)
+    if bias_values:
+        write_signed_int32_hex(bias_values, bias_path)
+    else:
+        bias_path.parent.mkdir(parents=True, exist_ok=True)
+        bias_path.write_text("", encoding="utf8")
+    return weight_values, bias_values
 
 
 # ---------------------------------------------------------------------------
@@ -887,6 +1193,10 @@ def _build_goldin_for_spec(
         raise GoldenGenerationError(
             f"Input tensor '{in_name}' not found in simulation outputs for layer '{spec.module_id}'."
         )
+    if spec.op_type == "gemm":
+        tensors = [_gemm_input_as_4d(t, spec) for t in tensors]
+    else:
+        tensors = [_as_4d_tensor(t) for t in tensors]
     return pack_tensor_vectors_to_bus_words(tensors, in_bits, context=f"{spec.module_id}.goldin")
 
 
@@ -901,18 +1211,72 @@ def _build_goldout_for_spec(
         raise GoldenGenerationError(
             f"Output tensor '{out_name}' not found in simulation outputs for layer '{spec.module_id}'."
         )
+    tensors = [_as_4d_tensor(t) for t in tensors]
     return pack_tensor_vectors_to_bus_words(tensors, out_bits, context=f"{spec.module_id}.goldout")
+
+
+def _as_4d_tensor(t: torch.Tensor) -> torch.Tensor:
+    """Pack helpers expect [1, C, H, W]. For 2D activations ([N, K] — e.g. the
+    output of a Gemm or the post-Flatten input) we surface [1, K, 1, 1] so
+    each channel becomes a single beat on the bus. For 4D inputs the tensor
+    passes through unchanged."""
+    if t.dim() == 4:
+        return t
+    if t.dim() == 2:
+        n, k = t.shape
+        return t.view(n, k, 1, 1)
+    if t.dim() == 3:
+        # [N, C, L] — fold L into width
+        n, c, l = t.shape
+        return t.view(n, c, 1, l)
+    raise GoldenGenerationError(
+        f"Cannot pack tensor of rank {t.dim()} (shape {tuple(t.shape)}) for goldin/goldout."
+    )
+
+
+def _gemm_input_as_4d(t: torch.Tensor, spec: OnnxLayerSpec) -> torch.Tensor:
+    """Pack a Gemm input as one flat [N, K, 1, 1] bus beat.
+
+    The tensor may still be the aliased upstream producer output, e.g.
+    Conv->[N,C,H,W] before a folded Flatten. Gemm's contract consumes the
+    flattened K vector, not spatial samples of C channels.
+    """
+    if t.dim() < 2:
+        raise GoldenGenerationError(
+            f"Gemm layer '{spec.module_id}' input must have batch plus feature dims, got shape {tuple(t.shape)}."
+        )
+    batch = int(t.shape[0])
+    k_observed = int(torch.tensor(t.shape[1:]).prod().item())
+    k_expected = int(spec.gemm_in_features)
+    if k_observed != k_expected:
+        raise GoldenGenerationError(
+            f"Gemm layer '{spec.module_id}' input shape {tuple(t.shape)} flattens to K={k_observed}, "
+            f"but gemm_in_features={k_expected}."
+        )
+    return t.reshape(batch, k_expected, 1, 1)
+
+
+def _shape_as_nchw(shape: Sequence[int]) -> list[int]:
+    """Coerce a possibly-2D shape ([N, K]) into [N, K, 1, 1] so the channel-bus
+    helpers — which assume [N, C, H, W] — can still compute the right width.
+
+    Gemm inputs/outputs are 2D in ONNX; we surface them as single-beat
+    channel-bus rows downstream."""
+    s = list(shape)
+    if len(s) == 2:
+        return [s[0], s[1], 1, 1]
+    return s
 
 
 def _spec_input_width_bits(spec: OnnxLayerSpec) -> int:
     if spec.op_type == "add":
         # Packed wide bus: [lhs_channels*8 + rhs_channels*8]
-        return channel_bus_bits_from_shape(spec.input_shape, context=f"{spec.module_id}.input_shape") * 2
-    return channel_bus_bits_from_shape(spec.input_shape, context=f"{spec.module_id}.input_shape")
+        return channel_bus_bits_from_shape(_shape_as_nchw(spec.input_shape), context=f"{spec.module_id}.input_shape") * 2
+    return channel_bus_bits_from_shape(_shape_as_nchw(spec.input_shape), context=f"{spec.module_id}.input_shape")
 
 
 def _spec_output_width_bits(spec: OnnxLayerSpec) -> int:
-    return channel_bus_bits_from_shape(spec.output_shape, context=f"{spec.module_id}.output_shape")
+    return channel_bus_bits_from_shape(_shape_as_nchw(spec.output_shape), context=f"{spec.module_id}.output_shape")
 
 
 # ---------------------------------------------------------------------------
@@ -940,6 +1304,19 @@ def _pipeline_latency(spec: OnnxLayerSpec) -> int:
         return compute_maxpool_latency_cycles(spec)
     if spec.op_type == "add":
         return compute_add_latency_cycles(spec.output_shape)
+    if spec.op_type == "global_avg_pool":
+        # Per-channel reduction over H*W cells, one cell per cycle, plus a
+        # 3-stage requantize tail (BIAS pass-through + SCALE + CLAMP/OUTPUT).
+        h, w = spec.gap_spatial[0], spec.gap_spatial[1]
+        return max(1, int(h) * int(w)) + 3
+    if spec.op_type == "gemm":
+        # K-deep dot product per output, serialized across mac_parallelism
+        # lanes; M outputs emitted one per cycle in the requantize tail.
+        k = max(1, int(spec.gemm_in_features))
+        m = max(1, int(spec.gemm_out_features))
+        mp = max(1, _conv_mac_parallelism(spec))
+        mac_cycles_per_output = -(-k // mp)  # ceil(k / mp)
+        return mac_cycles_per_output + m + 3
     # relu: 1 cycle
     return 1
 
@@ -1113,6 +1490,10 @@ def build_pipeline_ir_from_onnx(
             weight_values, bias_values = _write_conv_hex_artifacts(spec, repo_root)
             weight_shape = list(spec.weight.shape)
             num_weights = int(spec.weight.size)
+        elif spec.op_type == "gemm":
+            weight_values, bias_values = _write_gemm_hex_artifacts(spec, repo_root)
+            weight_shape = list(spec.weight.shape)  # [M, K]
+            num_weights = int(spec.weight.size)
         else:
             _write_empty_weight_file(repo_root, spec.module_id)
             # bias file: empty placeholder
@@ -1139,19 +1520,21 @@ def build_pipeline_ir_from_onnx(
             "input_shape": spec.input_shape,
             "output_shape": spec.output_shape,
             "weights_path": weights_path.resolve().as_posix(),
-            "bias_path": bias_path_obj.resolve().as_posix() if spec.op_type == "conv2d" else None,
+            "bias_path": bias_path_obj.resolve().as_posix() if spec.op_type in ("conv2d", "gemm") and spec.bias is not None else None,
             "weight_shape": weight_shape,
             "num_weights": num_weights,
-            # For conv2d the RTL multiplies (acc + bias_int32) by this factor
-            # to requantise back to INT8; it is the composite (input_scale *
-            # weight_scale / output_scale) not weight_scale alone.  For
-            # activation ops (relu / maxpool / add) the LayerIR scale_factor
-            # is the output activation scale used by the quantised-add formula.
-            "scale_factor": (
-                _composite_conv_scale(spec)
-                if spec.op_type == "conv2d"
-                else float(spec.output_scale)
-            ),
+            # Per-op scale semantics:
+            # * conv2d / gemm: composite (input_scale * weight_scale / output_scale)
+            #   that the RTL multiplies (acc + bias_int32) by to requantize to INT8.
+            # * global_avg_pool: composite (input_scale / output_scale / (H*W))
+            #   that folds the spatial divisor into SCALE_MULT / SCALE_SHIFT.
+            # * relu with clip_max (ReLU6): composite (input_scale / output_scale)
+            #   to rescale the upstream Conv's INT8 stream into the post-clip scale.
+            #   For plain relu (no clip_max) we keep emitting output_scale to
+            #   preserve the historical LayerIR shape used by ResNet-50.
+            # * add / maxpool / plain relu: output activation scale, used by the
+            #   quantized-add formula and as a metadata anchor for other ops.
+            "scale_factor": _layer_ir_scale_factor(spec),
             "zero_point": 0,
             "pipeline_latency_cycles": latency,
             "clock_period_ns": 20,
@@ -1165,6 +1548,9 @@ def build_pipeline_ir_from_onnx(
         if spec.op_type == "add":
             layer_payload["lhs_scale_factor"] = float(spec.lhs_scale)
             layer_payload["rhs_scale_factor"] = float(spec.rhs_scale)
+
+        if spec.op_type == "relu" and spec.clip_max is not None:
+            layer_payload["clip_max"] = float(spec.clip_max)
 
         if spec.op_type == "conv2d":
             layer_payload["stride"] = list(spec.stride)
@@ -1188,6 +1574,18 @@ def build_pipeline_ir_from_onnx(
             layer_payload["kernel_size"] = spec.pool_kernel
             layer_payload["pool_stride"] = spec.pool_stride
             layer_payload["pool_padding"] = spec.pool_padding
+
+        if spec.op_type == "global_avg_pool":
+            # H * W is the divisor that the requantize tail folds into
+            # SCALE_MULT / SCALE_SHIFT. Foundry reads gap_spatial to size the
+            # accumulator and the spatial counter.
+            layer_payload["gap_spatial"] = [int(spec.gap_spatial[0]), int(spec.gap_spatial[1])]
+
+        if spec.op_type == "gemm":
+            # M, K let Foundry size the weight memory and the K-deep MAC loop
+            # without re-parsing weight_shape.
+            layer_payload["gemm_in_features"] = int(spec.gemm_in_features)
+            layer_payload["gemm_out_features"] = int(spec.gemm_out_features)
 
         layer_payloads.append(layer_payload)
 

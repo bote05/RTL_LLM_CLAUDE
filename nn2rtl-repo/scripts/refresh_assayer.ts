@@ -9,10 +9,20 @@ import type { LayerIR, VerilogModule } from "../sdk/types.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const outputRoot = path.join(repoRoot, "output");
+const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8")) as {
+  defaultNetworkId: string;
+  networks: Array<{ id: string; outputDir: string }>;
+};
+const networkArg = process.argv.find((arg) => arg.startsWith("--network="))?.split("=", 2)[1];
+const networkId = networkArg ?? process.env.NN2RTL_NETWORK_ID ?? registry.defaultNetworkId;
+const network = registry.networks.find((entry) => entry.id === networkId);
+if (!network) throw new Error(`Unknown network '${networkId}'.`);
+const outputRoot = path.resolve(repoRoot, process.env.NN2RTL_OUTPUT_DIR ?? network.outputDir);
+process.env.NN2RTL_NETWORK_ID = networkId;
+process.env.NN2RTL_OUTPUT_DIR = outputRoot;
 
 async function main(): Promise<void> {
-  const moduleId = process.argv[2];
+  const moduleId = process.argv.slice(2).find((arg) => !arg.startsWith("--"));
   if (!moduleId) {
     console.error("usage: tsx scripts/refresh_assayer.ts <module_id>");
     process.exit(1);

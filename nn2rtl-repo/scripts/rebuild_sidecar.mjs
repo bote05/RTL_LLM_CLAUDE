@@ -4,21 +4,30 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const moduleId = process.argv[2];
+const moduleId = process.argv.slice(2).find((arg) => !arg.startsWith("--"));
 if (!moduleId) {
   console.error("usage: node scripts/rebuild_sidecar.mjs <module_id>");
   process.exit(1);
 }
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\//, ""), "..");
-const layerIrPath = path.join(repoRoot, "output", "layer_ir.json");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8"));
+const networkId = process.argv.find((arg) => arg.startsWith("--network="))?.split("=", 2)[1]
+  ?? process.env.NN2RTL_NETWORK_ID
+  ?? registry.defaultNetworkId;
+const network = registry.networks.find((entry) => entry.id === networkId);
+if (!network) { console.error(`unknown network '${networkId}'`); process.exit(1); }
+const outputRootRaw = process.env.NN2RTL_OUTPUT_DIR ?? network.outputDir;
+const outputRoot = path.isAbsolute(outputRootRaw) ? outputRootRaw : path.join(repoRoot, outputRootRaw);
+const layerIrPath = path.join(outputRoot, "layer_ir.json");
 const ir = JSON.parse(await readFile(layerIrPath, "utf8"));
 const layer = ir.layers.find((L) => L.module_id === moduleId);
 if (!layer) { console.error(`module '${moduleId}' not in LayerIR`); process.exit(2); }
 
-const sidecarPath = path.join(repoRoot, "output", "tb", `${moduleId}.sidecar.json`);
-const resultsPath = path.join(repoRoot, "output", "reports", `${moduleId}.results.json`);
+const sidecarPath = path.join(outputRoot, "tb", `${moduleId}.sidecar.json`);
+const resultsPath = path.join(outputRoot, "reports", `${moduleId}.results.json`);
 const tbPath      = path.join(repoRoot, "tb", "static_verilator_tb.cpp");
 
 const sidecar = {

@@ -20,7 +20,7 @@
       "output_width_bits must equal full output channel pack"
     ]
   },
-  "supported_ops": ["conv2d", "relu", "add", "maxpool"],
+  "supported_ops": ["conv2d", "relu", "add", "maxpool", "global_avg_pool", "gemm"],
   "dependencies": [],
   "docs": [
     "knowledge/patterns/01_context.md",

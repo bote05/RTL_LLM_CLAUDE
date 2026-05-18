@@ -227,3 +227,77 @@ simplest form of some of these before simulation even runs.
   compute counter rather than re-deriving completion from input
   coordinates. This rule is independent of contract (applies to
   flat-bus, tiled-streaming, dram-backed-weights, weight-tiling).
+
+## Array memory write in an async-reset always block (UNIVERSAL — every contract)
+
+- **Symptom**: Verilator sim passes (often bit-exact or `max_error == 1`,
+  `timing_pass == true`), then synthesis preflight hard-fails with
+  `activation_memory_in_async_reset_block` and the attempt is aborted
+  before Vivado runs. Repeats on the next attempt because the agent
+  treats the rule as depthwise-specific.
+- **Diagnosis**: the gate is structural pattern-matching, not semantic.
+  It fires on ANY `reg <name> [..] [..:..]` array whose indexed `<= `
+  write lives inside an `always @(posedge clk or negedge rst_n)` block.
+  It does NOT care:
+    - what you call the array — `act_buf`, `line_buf`, `line_buf_b3`,
+      `out_buf`, `window`, `weight_cache`, `retime_buf`, `staging_buf`
+      all count
+    - how small the array is — a 4-row 448-entry rolling line buffer is
+      flagged the same as a full 1.2 MB activation buffer
+    - which contract you're on — depthwise, flat-bus, tiled-streaming,
+      dram-backed-weights, weight-tiling all hit it
+    - whether the reset clause actually touches the array — even
+      `if (!rst_n) /* no array write */ else if (we) mem[a] <= d;` is
+      rejected, because the sensitivity list itself blocks BRAM/LUTRAM
+      inference for the array
+- **Fix**: split the always block. The memory write goes in a sync-only
+  block with NO reset clause; the surrounding control regs (write_en,
+  addresses, valid flags) keep their async reset in a SEPARATE block.
+
+  ```verilog
+  // WRONG — line buffer write inside async-reset block.
+  // Trips activation_memory_in_async_reset_block even though `line_buf`
+  // is a tiny rolling 4-row buffer, not an "activation memory".
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      in_row <= 0; in_col <= 0; input_done <= 0;
+    end else if (valid_in && ready_in) begin
+      line_buf[write_addr] <= data_in;             // ← array write
+      in_col <= in_col + 1;
+      if (in_col == IW-1) in_row <= in_row + 1;
+    end
+  end
+
+  // CORRECT — split into sync-only memory write + async-reset control.
+  // Both blocks share the same write_addr / valid_in / ready_in wires;
+  // the memory contents are "don't care" after reset because the
+  // control regs deterministically skip stale entries.
+  always @(posedge clk) begin
+    if (valid_in && ready_in) line_buf[write_addr] <= data_in;
+  end
+
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      in_row <= 0; in_col <= 0; input_done <= 0;
+    end else if (valid_in && ready_in) begin
+      in_col <= in_col + 1;
+      if (in_col == IW-1) in_row <= in_row + 1;
+    end
+  end
+  ```
+
+- **Self-check before emit**: grep the module for `reg .* \[.*:.*\]` to
+  list every array. For each one, grep for `<array>[` writes. If the
+  enclosing `always @(` line has `negedge rst_n` in its sensitivity
+  list, the preflight will reject it. Move that one write into a
+  sibling `always @(posedge clk)` block. Do this for line buffers,
+  output stage buffers, window arrays, weight caches, retime FIFOs —
+  every reg array with an indexed write, not just the obvious "main
+  activation buffer".
+- **Why the rule is structural**: Vivado infers BRAM/LUTRAM at the
+  array-declaration level by walking the always blocks that write to
+  it. An async-reset block tags the storage with an asynchronous edge
+  in the inferred memory primitive's control set, which BRAM/LUTRAM
+  primitives do not have — so Vivado either falls back to flip-flop
+  packing (LUT explosion) or rejects the design. The preflight makes
+  the failure deterministic before Vivado gets there.

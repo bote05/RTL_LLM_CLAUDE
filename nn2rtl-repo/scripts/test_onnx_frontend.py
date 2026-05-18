@@ -115,8 +115,12 @@ def test_validate_graph_outputs_covered_raises_on_unsupported_tail():
         )
 
 
-def test_end_to_end_rejects_conv_flatten_gemm(tmp_path):
-    """Regression: a Conv -> Flatten -> Gemm model must NOT silently truncate to Conv."""
+def test_end_to_end_classifier_head_accepted(tmp_path):
+    """A Conv -> Flatten -> Gemm model is now a fully-supported classifier
+    head: Flatten is treated as a tensor-rename passthrough, Gemm becomes its
+    own spec. The previous version of this test asserted REJECTION; the
+    multi-network plan adds explicit GAP/Gemm/Flatten support so the head
+    flows through end-to-end instead of being silently truncated."""
     class M(nn.Module):
         def __init__(self):
             super().__init__()
@@ -128,11 +132,18 @@ def test_end_to_end_rejects_conv_flatten_gemm(tmp_path):
             return self.fc(x)
 
     onnx_path = _export(M().eval(), tmp_path / "classifier.onnx", shape=(1, 3, 8, 8))
-    with pytest.raises(GoldenGenerationError, match="AFTER the last extracted"):
-        build_pipeline_ir_from_onnx(
-            onnx_path=onnx_path, repo_root=tmp_path,
-            num_calibration_samples=2,
-        )
+    payload = build_pipeline_ir_from_onnx(
+        onnx_path=onnx_path, repo_root=tmp_path,
+        num_calibration_samples=2,
+    )
+    op_types = [l["op_type"] for l in payload["layers"]]
+    assert "conv2d" in op_types
+    assert "gemm" in op_types, f"Expected gemm in layer chain; got {op_types}"
+    # Flatten must be folded out, not surfaced as its own layer
+    assert "flatten" not in op_types
+    gemm = next(l for l in payload["layers"] if l["op_type"] == "gemm")
+    assert gemm["gemm_in_features"] == 4 * 8 * 8
+    assert gemm["gemm_out_features"] == 10
 
 
 def test_validate_graph_completeness_raises_on_gap():
@@ -229,6 +240,36 @@ def test_clip_as_relu(tmp_path):
     # Either the Clip survived (→ relu spec) or simplify folded it; at minimum
     # the chain has to be valid
     validate_graph_completeness(specs, {gi.name for gi in _real_graph_inputs(model)})
+
+
+def test_relu6_clip_threaded_into_layer_ir(tmp_path):
+    """MobileNet-style ReLU6 (Clip(min=0, max=6)) must surface as a relu spec
+    with `clip_max == 6.0`, and the final LayerIR JSON must carry the field.
+    Anchors the multi-network ReLU6 contract — previous frontend dropped the
+    max attribute silently and produced unbounded ReLU."""
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.c = nn.Conv2d(3, 4, 1, bias=True)
+        def forward(self, x):
+            return torch.clamp(self.c(x), min=0.0, max=6.0)
+    onnx_path = _export(M().eval(), tmp_path / "relu6.onnx")
+    model = simplify_onnx(load_onnx(onnx_path))
+    specs = extract_layer_specs(model)
+    relu_specs = [s for s in specs if s.op_type == "relu"]
+    assert relu_specs, "Expected at least one relu spec from Clip(0, 6)"
+    assert relu_specs[0].clip_max == 6.0, (
+        f"Expected clip_max=6.0 on the ReLU6 spec; got {relu_specs[0].clip_max}"
+    )
+
+    payload = build_pipeline_ir_from_onnx(
+        onnx_path=onnx_path, repo_root=tmp_path, num_calibration_samples=2,
+    )
+    relu_layers = [l for l in payload["layers"] if l["op_type"] == "relu"]
+    assert relu_layers, "Expected at least one relu layer in the emitted LayerIR"
+    assert relu_layers[0].get("clip_max") == 6.0, (
+        f"Expected layer_ir clip_max=6.0; got {relu_layers[0].get('clip_max')}"
+    )
 
 
 # ---------------------------------------------------------------------------

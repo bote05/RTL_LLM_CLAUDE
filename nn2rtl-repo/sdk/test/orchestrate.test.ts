@@ -624,6 +624,7 @@ describe("orchestrate helpers", () => {
       maxRetries: undefined,
       only: undefined,
       except: [],
+      networkId: "resnet-50",
     });
     expect(() => parseCliArgs([])).toThrow("Usage:");
   });

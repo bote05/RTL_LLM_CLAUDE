@@ -80,6 +80,7 @@ const contractIdSchema = z.enum([
   "dram-backed-weights",
   "activation-double-buffering",
   "weight-tiling",
+  "depthwise-conv",
 ]);
 
 const contractParamSchema = z.record(
@@ -92,7 +93,7 @@ const contractParamSchema = z.record(
 export const layerIrBaseSchema = z
   .object({
     module_id: z.string(),
-    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool", "global_avg_pool", "gemm"]),
     input_shape: z.array(z.number().int().positive()),
     output_shape: z.array(z.number().int().positive()),
     weights_path: z.string(),
@@ -103,6 +104,9 @@ export const layerIrBaseSchema = z
     lhs_scale_factor: z.number().optional(),
     rhs_scale_factor: z.number().optional(),
     zero_point: z.number().int(),
+    quantization_family: z.string().optional(),
+    // ReLU6 / clipped-activation support — mirrors sdk/schemas.ts.
+    clip_max: z.number().optional(),
     pipeline_latency_cycles: z.number().int().positive(),
     clock_period_ns: z.number().nonnegative(),
     input_width_bits: z.number().int().positive(),
@@ -138,6 +142,15 @@ export const layerIrBaseSchema = z
     kernel_size: z.array(z.number().int().positive()).optional(),
     pool_stride: z.array(z.number().int().positive()).optional(),
     pool_padding: z.array(z.number().int().nonnegative()).optional(),
+    // GlobalAveragePool spatial dims [H, W] — folded into SCALE_MULT/SHIFT.
+    gap_spatial: z.array(z.number().int().positive()).optional(),
+    // Gemm (FC) layer geometry, mirroring weight_shape [M, K].
+    gemm_in_features: z.number().int().positive().optional(),
+    gemm_out_features: z.number().int().positive().optional(),
+    base_layer_signature: z.record(z.string(), z.unknown()).optional(),
+    runtime_layer_signature: z.record(z.string(), z.unknown()).optional(),
+    signature_hash: z.string().optional(),
+    exact_reference_key: z.string().nullable().optional(),
   })
   .strict();
 
@@ -416,10 +429,13 @@ export const writeVerilogOutput = z
 
 export const getRtlPatternsInput = z
   .object({
-    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]),
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool", "global_avg_pool", "gemm"]),
     kernel_h: z.number().int().positive().optional(),
     kernel_w: z.number().int().positive().optional(),
     contract_id: contractIdSchema.optional(),
+    signature_hash: z.string().optional(),
+    exact_reference_key: z.string().nullable().optional(),
+    runtime_layer_signature: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
@@ -434,9 +450,12 @@ export const getRtlPatternsOutput = z
 export const getFailureCorpusInput = z
   .object({
     module_id: z.string().optional(),
-    op_type: z.enum(["conv2d", "relu", "add", "maxpool"]).optional(),
+    op_type: z.enum(["conv2d", "relu", "add", "maxpool", "global_avg_pool", "gemm"]).optional(),
     contract_id: contractIdSchema.optional(),
     spec_hash: z.string().optional(),
+    signature_hash: z.string().optional(),
+    exact_reference_key: z.string().nullable().optional(),
+    runtime_layer_signature: z.record(z.string(), z.unknown()).optional(),
     max_entries: z.number().int().positive().max(20).default(5),
     include_verilog: z.boolean().default(false),
   })
@@ -465,7 +484,7 @@ const failureCorpusEntrySchema = z
 
 export const getFailureCorpusOutput = z
   .object({
-    visible_tier: z.literal("output/failure_corpus/visible"),
+    visible_tier: z.string(),
     entries: z.array(failureCorpusEntrySchema),
   })
   .strict();

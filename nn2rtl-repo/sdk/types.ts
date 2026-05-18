@@ -1,10 +1,11 @@
-export type LayerOpType = "conv2d" | "relu" | "add" | "maxpool";
+export type LayerOpType = "conv2d" | "relu" | "add" | "maxpool" | "global_avg_pool" | "gemm";
 export type ContractId =
   | "flat-bus"
   | "tiled-streaming"
   | "dram-backed-weights"
   | "activation-double-buffering"
-  | "weight-tiling";
+  | "weight-tiling"
+  | "depthwise-conv";
 export type IoMode =
   | "packed_full"
   | "channel_tiled"
@@ -25,6 +26,11 @@ export interface LayerIR {
   lhs_scale_factor?: number;
   rhs_scale_factor?: number;
   zero_point: number;
+  quantization_family?: string;
+  // Optional upper-bound clip applied after the op (e.g. ReLU6 sets clip_max=6
+  // in float domain; the quantization step folds this into the scale factor).
+  // When absent, relu is unbounded.
+  clip_max?: number;
   pipeline_latency_cycles: number;
   clock_period_ns: number;
   input_width_bits: number;
@@ -58,10 +64,27 @@ export interface LayerIR {
   contract_params?: Record<string, string | number | boolean | null>;
   io_mode?: IoMode;
   channel_tile?: number;
+  // Multi-network retrieval metadata. `base_layer_signature` is diagnostic
+  // context from the importer; `runtime_layer_signature` and `signature_hash`
+  // are computed after contract planning and are the knowledge lookup keys.
+  base_layer_signature?: Record<string, unknown>;
+  runtime_layer_signature?: Record<string, unknown>;
+  signature_hash?: string;
+  exact_reference_key?: string | null;
   // MaxPool2d geometry — only present when op_type == "maxpool"
   kernel_size?: number[];
   pool_stride?: number[];
   pool_padding?: number[];
+  // GlobalAveragePool spatial dims [H, W]. The requantize tail folds the
+  // 1/(H*W) divisor into the SCALE_MULT / SCALE_SHIFT field, so the RTL
+  // doesn't need a runtime divider — but Foundry reads gap_spatial to size
+  // the per-channel accumulator and the spatial counter.
+  gap_spatial?: number[];
+  // Gemm (fully-connected) geometry. weight_shape carries [M, K]; these are
+  // the same dims surfaced cleanly so Foundry doesn't have to re-parse a
+  // shape tuple to size its weight memory + MAC loop.
+  gemm_in_features?: number;
+  gemm_out_features?: number;
 }
 
 export interface PipelineIR {

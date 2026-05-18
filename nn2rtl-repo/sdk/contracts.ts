@@ -14,6 +14,7 @@ export const CONTRACT_IDS = [
   "dram-backed-weights",
   "activation-double-buffering",
   "weight-tiling",
+  "depthwise-conv",
 ] as const;
 
 export type ContractId = typeof CONTRACT_IDS[number];
@@ -102,6 +103,22 @@ export function resolveLayerContractId(layer: LayerIR): ContractId {
   if (isContractId(layer.contract_id)) {
     return layer.contract_id;
   }
+  // Depthwise auto-detect. The frontend may emit LayerIR without an explicit
+  // contract_id for depthwise convs (groups == in_channels == out_channels)
+  // and we still want them to use the depthwise contract. import_network
+  // tags these explicitly, but this fallback covers manual / legacy IR.
+  if (layer.op_type === "conv2d" && typeof layer.groups === "number" && layer.groups > 1) {
+    const inputChannels = layer.input_shape?.[1];
+    const outputChannels = layer.output_shape?.[1];
+    if (
+      typeof inputChannels === "number" &&
+      typeof outputChannels === "number" &&
+      layer.groups === inputChannels &&
+      layer.groups === outputChannels
+    ) {
+      return "depthwise-conv";
+    }
+  }
   switch (layer.io_mode) {
     case "channel_tiled":
       return "tiled-streaming";
@@ -144,6 +161,31 @@ export function contractFitFailure(layer: LayerIR): string | null {
       `Contract '${metadata.name}' does not support op_type='${layer.op_type}'. ` +
       `Supported ops: ${metadata.supported_ops.join(", ")}.`
     );
+  }
+
+  // depthwise-conv-specific geometry gate: this contract is ONLY for layers
+  // where groups equals both input and output channel counts (per-channel
+  // filters, no cross-channel reduction). A standard conv must NOT fall
+  // back to depthwise-conv as a generic "wider bus" alternative. The
+  // walker iterates CONTRACT_PLANS in complexity order, so without this
+  // gate a flat-bus-overflowing standard conv could mis-route to
+  // depthwise-conv just because its 8192-bit bus accepts it.
+  if (metadata.name === "depthwise-conv") {
+    const groups = typeof layer.groups === "number" ? layer.groups : 1;
+    const inputChannels = layer.input_shape?.[1];
+    const outputChannels = layer.output_shape?.[1];
+    const isDepthwise =
+      groups > 1 &&
+      typeof inputChannels === "number" &&
+      typeof outputChannels === "number" &&
+      groups === inputChannels &&
+      groups === outputChannels;
+    if (!isDepthwise) {
+      return (
+        `Contract 'depthwise-conv' requires groups == input_channels == output_channels; ` +
+        `got groups=${groups}, in_channels=${inputChannels ?? "?"}, out_channels=${outputChannels ?? "?"}.`
+      );
+    }
   }
 
   const inputWidth = effectiveInputStreamWidthBits(layer);

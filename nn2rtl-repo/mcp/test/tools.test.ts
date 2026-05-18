@@ -10,9 +10,11 @@ import {
   KNOWLEDGE_READ_TIERS,
   VERILATOR_COMMAND,
   get_rtl_patterns,
+  get_failure_corpus,
   parseVivadoReport,
   readSidecarIfPresent,
   read_weights,
+  resolveActiveOutputRoot,
   resolveOutputRoot,
   resolveRepoRootFromEnv,
   resolveVerilatorBuildJobs,
@@ -98,9 +100,9 @@ describe("mcp tools", () => {
   });
 
   it("get_rtl_patterns returns null reference_verilog for op_types without a proven reference", async () => {
-    const relu = await get_rtl_patterns("relu");
+    const relu = await get_rtl_patterns("relu", undefined, undefined, "flat-bus");
     expect(relu.reference_verilog).toBeNull();
-    const pool = await get_rtl_patterns("maxpool");
+    const pool = await get_rtl_patterns("maxpool", undefined, undefined, "flat-bus");
     expect(pool.reference_verilog).toBeNull();
   });
 
@@ -136,6 +138,83 @@ describe("mcp tools", () => {
       "/tmp/override",
     );
     expect(resolveRepoRootFromEnv({})).toBe(repoRoot);
+  });
+
+  it("resolves active output roots from network or explicit env", () => {
+    expect(resolveActiveOutputRoot({
+      NN2RTL_REPO_ROOT: repoRoot,
+      NN2RTL_NETWORK_ID: "resnet-50",
+    })).toBe(path.join(repoRoot, "output"));
+    expect(resolveActiveOutputRoot({
+      NN2RTL_REPO_ROOT: repoRoot,
+      NN2RTL_OUTPUT_DIR: "output/toy-net",
+    })).toBe(path.join(repoRoot, "output", "toy-net"));
+  });
+
+  it("filters failure corpus by signatures and contraindications", async () => {
+    const tempOutput = await makeTempDir("nn2rtl-corpus-");
+    const visible = path.join(tempOutput, "failure_corpus", "visible");
+    await mkdir(visible, { recursive: true });
+    const entries = [
+      {
+        id: "exact",
+        created_at: "2026-05-01T00:00:00Z",
+        module_id: "m0",
+        stage: "verify",
+        attempt_index: 1,
+        op_type: "conv2d",
+        contract_id: "flat-bus",
+        spec_hash: "spec",
+        generated_by: null,
+        module_attempt: null,
+        rtl_path: null,
+        failure_path: "failure.json",
+        score: {},
+        summary: {},
+        shape: {},
+        signature_hash: "sig-a",
+      },
+      {
+        id: "vetoed",
+        created_at: "2026-05-02T00:00:00Z",
+        module_id: "m1",
+        stage: "verify",
+        attempt_index: 1,
+        op_type: "conv2d",
+        contract_id: "flat-bus",
+        spec_hash: "spec",
+        generated_by: null,
+        module_attempt: null,
+        rtl_path: null,
+        failure_path: "failure.json",
+        score: {},
+        summary: {},
+        shape: {},
+        signature_hash: "sig-a",
+        contraindications: [{ signature_hash: "sig-a" }],
+      },
+    ];
+    await writeFile(path.join(visible, "index.jsonl"), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
+    const oldOutput = process.env.NN2RTL_OUTPUT_DIR;
+    const oldNetwork = process.env.NN2RTL_NETWORK_ID;
+    try {
+      process.env.NN2RTL_OUTPUT_DIR = tempOutput;
+      process.env.NN2RTL_NETWORK_ID = "toy-net";
+      const result = await get_failure_corpus({
+        op_type: "conv2d",
+        contract_id: "flat-bus",
+        signature_hash: "sig-a",
+        max_entries: 10,
+      });
+      expect(result.entries[0].id).toBe("exact");
+      expect(result.entries[0].match_level).toBe("exact_signature");
+      expect(result.entries.map((entry) => entry.id)).not.toContain("vetoed");
+    } finally {
+      if (oldOutput === undefined) delete process.env.NN2RTL_OUTPUT_DIR;
+      else process.env.NN2RTL_OUTPUT_DIR = oldOutput;
+      if (oldNetwork === undefined) delete process.env.NN2RTL_NETWORK_ID;
+      else process.env.NN2RTL_NETWORK_ID = oldNetwork;
+    }
   });
 
   it("resolves Verilator thread and build-job overrides", () => {

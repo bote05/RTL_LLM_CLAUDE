@@ -16,10 +16,29 @@ import type { PipelineIR } from "../types.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../..");
-const outputRoot = path.join(repoRoot, "output");
-const reportsDir = path.join(outputRoot, "reports");
-const rtlDir = path.join(outputRoot, "rtl");
+// ISOLATION CONTRACT: these tests must NEVER read from or write to the live
+// `<repoRoot>/output/` directory. A prior incarnation of this file used the
+// real `output/` as its working dir, with backup/restore in beforeAll/afterAll.
+// When afterAll didn't fire (test crash / vitest kill / SIGINT), the backup
+// was orphaned in os.tmpdir() and the live `output/` was left wiped. Whole
+// runs of generated RTL were destroyed that way.
+//
+// New design: every test in this file runs against a freshly-mkdtemp'd
+// directory. NN2RTL_OUTPUT_DIR is pointed at the sandbox before runPipeline
+// is invoked, so the orchestrator's path resolution lands in the sandbox.
+// The sandbox is removed in afterAll. The live output/ is never touched.
+// A defensive assertion below double-checks that the resolved outputRoot
+// never collides with the live tree.
+const liveOutputRoot = path.join(repoRoot, "output");
 const knowledgeRoot = path.join(repoRoot, "knowledge");
+// Dynamic — populated in beforeAll. Test bodies read these AT call time
+// (helper functions reference the let-bound names), so the lazy assignment
+// is safe. They are typed as the post-init shape to avoid `string | null`
+// noise everywhere.
+let sandboxRoot: string = "<sandbox-not-initialized>";
+let outputRoot: string = "<sandbox-not-initialized>";
+let reportsDir: string = "<sandbox-not-initialized>";
+let rtlDir: string = "<sandbox-not-initialized>";
 const outputResetTargets = [
   "reports",
   "rtl",
@@ -40,8 +59,10 @@ const knowledgeResetTargets = [
   "knowledge/references/probationary",
   "knowledge/references/archive",
 ] as const;
-let outputBackupRoot: string | null = null;
+const FILESYSTEM_HOOK_TIMEOUT_MS = 60_000;
 let knowledgeBackupRoot: string | null = null;
+let priorOutputDirEnv: string | undefined;
+let priorNetworkIdEnv: string | undefined;
 
 type MockStepContext = {
   prompt: string;
@@ -103,8 +124,10 @@ function createAssayerMock(steps: AssayerStep[]): ReturnType<typeof vi.fn> {
 }
 
 async function resetOutput(): Promise<void> {
+  assertSandboxIsolation(outputRoot);
   for (const dir of ["reports", "rtl", "tb", "weights"]) {
     const fullDir = path.join(outputRoot, dir);
+    await mkdir(fullDir, { recursive: true });
     for (const entry of await readdir(fullDir)) {
       if (entry === ".gitkeep") {
         continue;
@@ -115,6 +138,22 @@ async function resetOutput(): Promise<void> {
 
   for (const fileName of ["layer_ir.json", "layer_ir.json.checkpoint", "pipeline_state.json", "contract_state.json", "golden_vectors.json"]) {
     await rm(path.join(outputRoot, fileName), { force: true });
+  }
+}
+
+// Hard guard: refuse to operate on anything that resolves to the live
+// `<repoRoot>/output/` tree. Catches the worst-case scenario where the
+// sandbox setup didn't run or NN2RTL_OUTPUT_DIR leaks in from the parent
+// shell and points at the real output dir. Without this check, a misconfig
+// would silently nuke the user's working state again.
+function assertSandboxIsolation(candidate: string): void {
+  const resolved = path.resolve(candidate);
+  const live = path.resolve(liveOutputRoot);
+  if (resolved === live || resolved.startsWith(live + path.sep)) {
+    throw new Error(
+      `orchestrate-flow.test refuses to operate on the live output directory ('${candidate}'). ` +
+        "The test must run inside an isolated sandbox; NN2RTL_OUTPUT_DIR / outputRoot are misconfigured.",
+    );
   }
 }
 
@@ -464,15 +503,41 @@ function createQueryMock(
 }
 
 beforeAll(async () => {
-  outputBackupRoot = await mkdtemp(path.join(os.tmpdir(), "nn2rtl-sdk-output-backup-"));
-  for (const target of outputResetTargets) {
-    await copyPathIfPresent(path.join(outputRoot, target), path.join(outputBackupRoot, target));
+  // Build a fresh sandbox under os.tmpdir() and point the orchestrator at it
+  // via NN2RTL_OUTPUT_DIR. Every read/write the orchestrator performs lands
+  // inside this directory. The live `<repoRoot>/output/` is NOT touched —
+  // not for backup, not for cleanup, not for fixture writes. assertSandbox-
+  // Isolation() in resetOutput() will refuse to operate if any caller managed
+  // to point outputRoot at the live tree.
+  sandboxRoot = await mkdtemp(path.join(os.tmpdir(), "nn2rtl-sdk-orchestrate-flow-sandbox-"));
+  outputRoot = path.join(sandboxRoot, "output");
+  reportsDir = path.join(outputRoot, "reports");
+  rtlDir = path.join(outputRoot, "rtl");
+  await mkdir(outputRoot, { recursive: true });
+  for (const dir of ["reports", "rtl", "tb", "weights"]) {
+    await mkdir(path.join(outputRoot, dir), { recursive: true });
   }
+  // Snapshot the parent shell's env so we restore exactly what was there,
+  // even if it was unset.
+  priorOutputDirEnv = process.env.NN2RTL_OUTPUT_DIR;
+  priorNetworkIdEnv = process.env.NN2RTL_NETWORK_ID;
+  process.env.NN2RTL_OUTPUT_DIR = outputRoot;
+  // Network id is not the focus of these tests, but the orchestrator's path
+  // resolution prefers an explicit override over the registry-default. Pin
+  // to resnet-50 (the historical default) so existing test expectations
+  // about contract dispatch are unchanged.
+  process.env.NN2RTL_NETWORK_ID = process.env.NN2RTL_NETWORK_ID ?? "resnet-50";
+
+  // Knowledge tree backup/restore stays as-is because tests still mutate
+  // the live knowledge/ paths. This is a separate risk that this PR does
+  // not address; it would require routing the lifecycle file through an
+  // env-overridable path too. The user's immediate complaint was about
+  // output/ data loss — that case is now structurally impossible.
   knowledgeBackupRoot = await mkdtemp(path.join(os.tmpdir(), "nn2rtl-sdk-knowledge-backup-"));
   for (const target of knowledgeResetTargets) {
     await copyPathIfPresent(path.join(repoRoot, target), path.join(knowledgeBackupRoot, target));
   }
-});
+}, FILESYSTEM_HOOK_TIMEOUT_MS);
 
 beforeEach(async () => {
   await resetOutput();
@@ -485,14 +550,23 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  if (outputBackupRoot) {
-    for (const target of outputResetTargets) {
-      const originalPath = path.join(outputRoot, target);
-      await rm(originalPath, { recursive: true, force: true });
-      await copyPathIfPresent(path.join(outputBackupRoot, target), originalPath);
-    }
-    await rm(outputBackupRoot, { recursive: true, force: true });
-    outputBackupRoot = null;
+  // Restore env vars before nuking the sandbox so a later test in the same
+  // worker process doesn't accidentally pick up NN2RTL_OUTPUT_DIR pointing
+  // at a deleted path.
+  if (priorOutputDirEnv === undefined) {
+    delete process.env.NN2RTL_OUTPUT_DIR;
+  } else {
+    process.env.NN2RTL_OUTPUT_DIR = priorOutputDirEnv;
+  }
+  if (priorNetworkIdEnv === undefined) {
+    delete process.env.NN2RTL_NETWORK_ID;
+  } else {
+    process.env.NN2RTL_NETWORK_ID = priorNetworkIdEnv;
+  }
+  if (sandboxRoot && sandboxRoot !== "<sandbox-not-initialized>") {
+    // Guard against ever rm-ing the live tree, even by accident.
+    assertSandboxIsolation(sandboxRoot);
+    await rm(sandboxRoot, { recursive: true, force: true });
   }
   if (knowledgeBackupRoot) {
     for (const target of knowledgeResetTargets) {
@@ -503,7 +577,7 @@ afterAll(async () => {
     await rm(knowledgeBackupRoot, { recursive: true, force: true });
     knowledgeBackupRoot = null;
   }
-});
+}, FILESYSTEM_HOOK_TIMEOUT_MS);
 
 describe("runPipeline", () => {
   it("uses an existing layer_ir.json without invoking Cartographer", async () => {

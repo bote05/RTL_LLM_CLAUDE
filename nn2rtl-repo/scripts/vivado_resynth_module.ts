@@ -20,15 +20,20 @@ import { run_vivado } from "../mcp/tools.ts";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 
-// Mirrors `dashboard/src/shared/networks.ts` — keep these in sync if you
-// add a network there. This script intentionally does not import the
-// dashboard module to keep its dependency surface tiny (no React etc.).
-const NETWORK_OUTPUT_DIRS: Record<string, string> = {
-  "resnet-50": "output",
-};
+type NetworkRegistry = { defaultNetworkId?: string; networks?: Array<{ id?: string; outputDir?: string }> };
 
-function parseArgs(argv: string[]): { moduleId: string; networkId: string } {
-  let networkId = "resnet-50";
+async function networkOutputDir(networkId: string): Promise<string> {
+  const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8")) as NetworkRegistry;
+  const network = (registry.networks ?? []).find((entry) => entry.id === networkId);
+  if (!network?.outputDir) {
+    throw new Error(`Unknown network '${networkId}'. Known: ${(registry.networks ?? []).map((n) => n.id).join(", ")}`);
+  }
+  return network.outputDir;
+}
+
+async function parseArgs(argv: string[]): Promise<{ moduleId: string; networkId: string }> {
+  const registry = JSON.parse(await readFile(path.join(repoRoot, "networks.json"), "utf8")) as NetworkRegistry;
+  let networkId = registry.defaultNetworkId ?? "resnet-50";
   const positional: string[] = [];
   for (const arg of argv) {
     if (arg.startsWith("--network=")) {
@@ -46,11 +51,10 @@ function parseArgs(argv: string[]): { moduleId: string; networkId: string } {
 }
 
 async function main(): Promise<void> {
-  const { moduleId, networkId } = parseArgs(process.argv.slice(2));
-  const outputDirRel = NETWORK_OUTPUT_DIRS[networkId];
-  if (!outputDirRel) {
-    throw new Error(`Unknown network '${networkId}'. Known: ${Object.keys(NETWORK_OUTPUT_DIRS).join(", ")}`);
-  }
+  const { moduleId, networkId } = await parseArgs(process.argv.slice(2));
+  const outputDirRel = await networkOutputDir(networkId);
+  process.env.NN2RTL_NETWORK_ID = networkId;
+  process.env.NN2RTL_OUTPUT_DIR = path.resolve(repoRoot, outputDirRel);
   const outputDir = path.resolve(repoRoot, outputDirRel);
   const rtlPath = path.join(outputDir, "rtl", `${moduleId}.v`);
   const reportPath = path.join(outputDir, "reports", `${moduleId}.vivado.json`);
@@ -64,13 +68,32 @@ async function main(): Promise<void> {
   const moduleMatch = source.match(/^\s*module\s+([A-Za-z_][A-Za-z0-9_]*)/m);
   if (!moduleMatch) throw new Error("Could not extract module name from RTL.");
 
+  // Read the LayerIR-pinned clock period for this module. Without it
+  // `run_vivado` defaults clock_period_ns to 0, which makes the fmax
+  // calculation collapse to 0 even when timing closes cleanly.
+  const layerIrPath = path.join(outputDir, "layer_ir.json");
+  let clockPeriodNs = 0;
+  try {
+    const ir = JSON.parse(await readFile(layerIrPath, "utf8")) as {
+      layers?: Array<{ module_id?: string; clock_period_ns?: number }>;
+    };
+    const layer = ir.layers?.find((l) => l.module_id === moduleId);
+    if (typeof layer?.clock_period_ns === "number" && layer.clock_period_ns > 0) {
+      clockPeriodNs = layer.clock_period_ns;
+    }
+  } catch {
+    // ignore — falls through to 0 and the report will be missing fmax,
+    // matching the pre-fix behaviour rather than failing the run.
+  }
+
   console.log(`[resynth] module=${moduleId} network=${networkId}`);
   console.log(`[resynth] rtl=${rtlPath}`);
   console.log(`[resynth] report=${reportPath}`);
+  console.log(`[resynth] clock_period_ns=${clockPeriodNs}`);
   const t0 = Date.now();
-  const report = await run_vivado(source, moduleMatch[1]);
+  const report = await run_vivado(source, moduleMatch[1], clockPeriodNs);
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`[resynth] done in ${elapsed}s — success=${report.success} timing_met=${report.timing_met ?? "n/a"}`);
+  console.log(`[resynth] done in ${elapsed}s — success=${report.success} timing_met=${report.timing_met ?? "n/a"} fmax=${report.fmax_mhz?.toFixed(2) ?? "n/a"}`);
 
   await mkdir(path.dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");

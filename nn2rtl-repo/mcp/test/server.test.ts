@@ -79,7 +79,7 @@ describe("mcp server", () => {
     expect(impls.run_vivado).toHaveBeenCalledWith("module m; endmodule", "m", 20, "xczu9eg-ffvb1156-2-e", 8);
     expect(impls.read_weights).toHaveBeenCalledOnce();
     expect(impls.write_verilog).toHaveBeenCalledOnce();
-    expect(impls.get_rtl_patterns).toHaveBeenCalledWith("conv2d", 1, 1, undefined);
+    expect(impls.get_rtl_patterns).toHaveBeenCalledWith("conv2d", 1, 1, undefined, undefined, undefined, undefined);
     expect(impls.get_failure_corpus).toHaveBeenCalledWith({
       module_id: "m",
       max_entries: 2,

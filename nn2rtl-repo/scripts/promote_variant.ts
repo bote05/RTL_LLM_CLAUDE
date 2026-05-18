@@ -15,6 +15,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { commitReplacement, createImproveRuntime, defaultImprovePaths, improvementMetricsSchema } from "../sdk/improve.js";
+import { setActiveNetwork } from "../sdk/orchestrate.js";
 import {
   synthesisReportSchema,
   verifResultSchema,
@@ -25,10 +26,24 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 
 async function main(): Promise<void> {
-  const [moduleId, targetSlug] = process.argv.slice(2);
+  let networkId: string | undefined;
+  const positional: string[] = [];
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith("--network=")) {
+      networkId = arg.slice("--network=".length);
+    } else if (arg === "--network") {
+      throw new Error("--network requires --network=<id> form for this script.");
+    } else {
+      positional.push(arg);
+    }
+  }
+  const [moduleId, targetSlug] = positional;
   if (!moduleId || !targetSlug) {
-    console.error("usage: tsx scripts/promote_variant.ts <module_id> <target_slug>");
+    console.error("usage: tsx scripts/promote_variant.ts <module_id> <target_slug> [--network=resnet-50]");
     process.exit(1);
+  }
+  if (networkId) {
+    setActiveNetwork(networkId);
   }
 
   const paths = defaultImprovePaths(repoRoot);

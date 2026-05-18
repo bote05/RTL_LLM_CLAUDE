@@ -10,10 +10,20 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = "c:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo";
-const reports = path.join(root, "output", "reports");
-const ir = JSON.parse(readFileSync(path.join(root, "output", "layer_ir.json"), "utf8"));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const registry = JSON.parse(readFileSync(path.join(root, "networks.json"), "utf8"));
+const argNetwork = process.argv.find((arg) => arg.startsWith("--network="))?.split("=", 2)[1];
+const networkId = argNetwork ?? process.env.NN2RTL_NETWORK_ID ?? registry.defaultNetworkId;
+const network = registry.networks.find((entry) => entry.id === networkId);
+if (!network) {
+  throw new Error(`Unknown network '${networkId}'. Known: ${registry.networks.map((entry) => entry.id).join(", ")}`);
+}
+const outputRootRaw = process.env.NN2RTL_OUTPUT_DIR ?? network.outputDir;
+const outputRoot = path.isAbsolute(outputRootRaw) ? outputRootRaw : path.join(root, outputRootRaw);
+const reports = path.join(outputRoot, "reports");
+const ir = JSON.parse(readFileSync(path.join(outputRoot, "layer_ir.json"), "utf8"));
 
 const rows = [];
 const skipped = [];
@@ -55,6 +65,8 @@ const frameSeconds = 1 / networkFps;
 const e2eSeconds = fillSecondsSum + frameSeconds;
 
 const summary = {
+  network_id: networkId,
+  output_root: outputRoot,
   layers_total: ir.layers.length,
   layers_measured: rows.length,
   layers_skipped: skipped.length,

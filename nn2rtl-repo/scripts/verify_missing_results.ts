@@ -5,7 +5,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { runAssayerDeterministic } from "../sdk/orchestrate.ts";
 import { layerIrSchema, pipelineIrSchema, verilogModuleSchema } from "../sdk/schemas.ts";
@@ -14,9 +14,27 @@ import type { LayerIR, VerilogModule } from "../sdk/types.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
+// tsx transpiles to CJS by default, which rejects top-level `await`. Use
+// synchronous read for the small registry file so the script stays portable
+// across the bundler quirks.
+const registry = JSON.parse(readFileSync(path.join(repoRoot, "networks.json"), "utf8")) as {
+  defaultNetworkId: string;
+  networks: Array<{ id: string; outputDir: string }>;
+};
+const rawArgs = process.argv.slice(2);
+const networkArg = rawArgs.find((arg) => arg.startsWith("--network="))?.split("=", 2)[1];
+const networkId = networkArg ?? process.env.NN2RTL_NETWORK_ID ?? registry.defaultNetworkId;
+const network = registry.networks.find((entry) => entry.id === networkId);
+if (!network) {
+  throw new Error(`Unknown network '${networkId}'. Known: ${registry.networks.map((entry) => entry.id).join(", ")}`);
+}
+const outputRoot = path.resolve(repoRoot, process.env.NN2RTL_OUTPUT_DIR ?? network.outputDir);
+process.env.NN2RTL_NETWORK_ID = networkId;
+process.env.NN2RTL_OUTPUT_DIR = outputRoot;
+const targetArgs = rawArgs.filter((arg) => !arg.startsWith("--network="));
 
 async function loadLayer(moduleId: string): Promise<LayerIR | null> {
-  const irPath = path.join(repoRoot, "output", "layer_ir.json");
+  const irPath = path.join(outputRoot, "layer_ir.json");
   const raw = JSON.parse(await readFile(irPath, "utf8"));
   const pipe = pipelineIrSchema.parse(raw);
   const layer = pipe.layers.find((l) => l.module_id === moduleId);
@@ -24,8 +42,8 @@ async function loadLayer(moduleId: string): Promise<LayerIR | null> {
 }
 
 async function loadModule(moduleId: string): Promise<VerilogModule | null> {
-  const metaPath = path.join(repoRoot, "output", "rtl", `${moduleId}.meta.json`);
-  const vPath = path.join(repoRoot, "output", "rtl", `${moduleId}.v`);
+  const metaPath = path.join(outputRoot, "rtl", `${moduleId}.meta.json`);
+  const vPath = path.join(outputRoot, "rtl", `${moduleId}.v`);
   if (existsSync(metaPath)) {
     const m = JSON.parse(await readFile(metaPath, "utf8"));
     return verilogModuleSchema.parse(m);
@@ -42,7 +60,7 @@ async function loadModule(moduleId: string): Promise<VerilogModule | null> {
 }
 
 async function main(): Promise<void> {
-  const targets = process.argv.slice(2);
+  const targets = targetArgs;
   if (targets.length === 0) {
     console.error("usage: tsx scripts/verify_missing_results.ts <module_id> [<module_id> ...]");
     process.exit(1);
@@ -65,7 +83,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       const result = await runAssayerDeterministic(mod, layer);
       const dt = ((Date.now() - t0) / 1000).toFixed(1);
-      const outPath = path.join(repoRoot, "output", "reports", `${mid}.results.json`);
+      const outPath = path.join(outputRoot, "reports", `${mid}.results.json`);
       await writeFile(outPath, JSON.stringify(result, null, 2), "utf8");
       const pv = (result as Record<string, unknown>).per_vector;
       const nVec = Array.isArray(pv) ? pv.length : 0;

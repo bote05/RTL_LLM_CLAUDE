@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -53,6 +54,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--network",
+        default=None,
+        help="Network id from networks.json. Sets the output root and default checkpoint.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Artifact root to write instead of output/. Relative paths are resolved against the repository root.",
+    )
+    parser.add_argument(
         "--name",
         default=None,
         help="Logical model name recorded in layer_ir.json (ONNX path only; "
@@ -80,8 +91,36 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _network_config(repo_root: Path, network_id: str | None) -> dict | None:
+    if not network_id:
+        return None
+    registry = json.loads((repo_root / "networks.json").read_text(encoding="utf8"))
+    for network in registry.get("networks", []):
+        if network.get("id") == network_id:
+            return network
+    known = ", ".join(str(n.get("id")) for n in registry.get("networks", []))
+    raise ValueError(f"Unknown network '{network_id}'. Known: {known}")
+
+
+def _resolve_output_dir(repo_root: Path, args: argparse.Namespace) -> Path:
+    network = _network_config(repo_root, args.network)
+    raw = args.output_dir or (network.get("outputDir") if network else None) or "output"
+    candidate = Path(raw)
+    return candidate if candidate.is_absolute() else repo_root / candidate
+
+
+def _default_model_path(args: argparse.Namespace, network: dict | None) -> str | None:
+    if args.model_path is not None:
+        return args.model_path
+    if network and network.get("defaultCheckpointPath"):
+        return str(network["defaultCheckpointPath"])
+    return None
+
+
 def _write_layer_ir_json(repo_root: Path, payload: dict) -> Path:
-    output_dir = repo_root / "output"
+    output_dir = Path(os.environ.get("NN2RTL_OUTPUT_DIR", repo_root / "output"))
+    if not output_dir.is_absolute():
+        output_dir = repo_root / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     layer_ir_path = output_dir / LAYER_IR_FILE_NAME
     legacy_path = output_dir / LEGACY_GOLDEN_FILE_NAME
@@ -95,8 +134,11 @@ def main() -> None:
     torch.manual_seed(0)
     args = parse_args()
     repo_root = detect_repo_root(__file__)
+    network = _network_config(repo_root, args.network)
+    output_dir = _resolve_output_dir(repo_root, args)
+    os.environ["NN2RTL_OUTPUT_DIR"] = output_dir.as_posix()
 
-    model_path_str: str | None = args.model_path
+    model_path_str: str | None = _default_model_path(args, network)
     if model_path_str is None:
         # Default: legacy .pth checkpoint
         checkpoint_path = resolve_checkpoint_path(repo_root, None)

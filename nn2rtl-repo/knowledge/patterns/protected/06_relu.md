@@ -54,3 +54,39 @@ preflight rule does not apply.
 - `saturation_missing` — somebody added redundant min/max clamps and
   introduced a bug. The output of ReLU on INT8 is by construction in
   `[0, 127]`; no extra saturation is needed.
+
+## ReLU6 / clipped activations
+
+Some networks (MobileNetV2 et al.) use ReLU6: `out = clamp(x, 0, 6)` in
+float domain. When the ONNX frontend imports such a model, the LayerIR
+records `clip_max == 6.0` on the relu layer. Calibration anchors
+`output_scale = max(observed, clip_max) / 128`. Critically, the upstream
+Conv's output_scale is typically LARGER than this (because the Conv's
+pre-clip range exceeds 6). So when the Conv emits INT8 stream X, the
+float interpretation is `X · conv_output_scale`, and ReLU6's job is to:
+
+1. Apply the relu non-linearity (negatives → 0).
+2. Requantize the stream from the Conv's output_scale to the ReLU6's
+   tighter output_scale. The composite is `input_scale / output_scale`,
+   identical to the conv requantize tail style.
+3. Clamp to INT8 [-128, 127]. With output_scale = 6/128, this clamp is
+   exactly the float clip-at-6 (and clip-at-(-6), which relu has already
+   ruled out).
+
+The RTL form mirrors the relu body PLUS a SCALE_MULT / SCALE_SHIFT stage
+when `clip_max` is present on the LayerIR:
+
+```verilog
+// Standard ReLU body
+relu_out[i*8 +: 8] = ($signed(data_in[i*8 +: 8]) > 0)
+                       ? data_in[i*8 +: 8]
+                       : 8'sd0;
+// ReLU6 requantize (only when LayerIR.clip_max is finite)
+scaled_int32 = ($signed(relu_out) * SCALE_MULT) >>> SCALE_SHIFT;   // round half toward +inf
+data_out[i*8 +: 8] = clamp(scaled_int32, -128, 127);
+```
+
+`SCALE_MULT` / `SCALE_SHIFT` are derived from `scale_factor` in the
+LayerIR the same way conv does. When `clip_max` is absent (plain ReLU),
+the scale_factor equals 1.0 and the requantize stage is a passthrough —
+the body is exactly the historical `(in > 0) ? in : 0` form.

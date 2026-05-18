@@ -117,6 +117,9 @@ Additionally, based on the LayerIR's `op_type` and (for conv2d)
 - `op_type == "add"` → `05_add_quantized.md`.
 - `op_type == "relu"` → `06_relu.md`.
 - `op_type == "maxpool"` → `07_maxpool.md`.
+- `op_type == "conv2d"` with `groups == in_channels == out_channels` (depthwise) → `12_depthwise_conv.md`. No reference Verilog is provided for this contract — produce the design from the pattern doc alone.
+- `op_type == "global_avg_pool"` → `10_global_avg_pool.md`. No reference Verilog.
+- `op_type == "gemm"` → `11_gemm.md`. No reference Verilog.
 
 Use `Bash` for exact reads (`sed -n '1,240p' <path>`). Do not open
 op-specific files that don't match the current LayerIR (don't read
@@ -139,6 +142,15 @@ increases cross-op pattern contamination.
   + coord_scheduler).
 - `knowledge/patterns/protected/08_common_bugs.md` — known failure modes, symptoms,
   and fixes. **Read for every module.**
+- `knowledge/patterns/protected/10_global_avg_pool.md` — per-channel H·W reduction
+  with the divisor folded into SCALE_MULT/SCALE_SHIFT (no runtime divider).
+  No reference Verilog yet — design from this doc alone.
+- `knowledge/patterns/protected/11_gemm.md` — fully-connected K-deep dot product
+  with a conv-style requantize tail. No reference Verilog yet.
+- `knowledge/patterns/protected/12_depthwise_conv.md` — depthwise 3×3/5×5 conv
+  with per-channel filters and NO cross-channel reduction. Re-uses the spatial
+  library modules (coord_scheduler, line_buf_window) but replaces conv_datapath's
+  adder tree with per-channel taps. No reference Verilog yet.
 - `knowledge/references/protected/conv1x1_passing_reference.v` — proven-passing 1×1
   reference (`layer1_0_conv1` in concrete form). Adapt parameters
   (IC/OC/IH/IW, `$readmemh` paths, SCALE_MULT/SCALE_SHIFT) to the current

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "defaultNetworkId": "resnet-50",
+  "networks": [
+    {
+      "id": "resnet-50",
+      "label": "ResNet-50",
+      "modelName": "resnet50",
+      "outputDir": "output",
+      "defaultCheckpointPath": "checkpoints/resnet50_int8.pth",
+      "frontend": "checkpoint",
+      "available": true,
+      "description": "ImageNet classifier, INT8 PTQ, legacy flat output layout"
+    },
+    {
+      "id": "mobilenet-v2",
+      "label": "MobileNetV2",
+      "modelName": "mobilenet-v2",
+      "outputDir": "output/mobilenet-v2",
+      "defaultCheckpointPath": "checkpoints/mobilenet_v2.onnx",
+      "frontend": "onnx",
+      "available": true,
+      "description": "MobileNetV2 imported network"
+    }
+  ]
+}

@@ -23,6 +23,22 @@ import { run_vivado } from "../mcp/tools.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
+const rawArgs = process.argv.slice(2);
+const registry = JSON.parse(
+  require("node:fs").readFileSync(path.join(repoRoot, "networks.json"), "utf8"),
+) as {
+  defaultNetworkId: string;
+  networks: Array<{ id: string; outputDir: string }>;
+};
+const networkId =
+  rawArgs.find((arg) => arg.startsWith("--network="))?.split("=", 2)[1] ??
+  process.env.NN2RTL_NETWORK_ID ??
+  registry.defaultNetworkId;
+const network = registry.networks.find((entry) => entry.id === networkId);
+if (!network) throw new Error(`Unknown network '${networkId}'.`);
+const outputRoot = path.resolve(repoRoot, process.env.NN2RTL_OUTPUT_DIR ?? network.outputDir);
+process.env.NN2RTL_NETWORK_ID = networkId;
+process.env.NN2RTL_OUTPUT_DIR = outputRoot;
 
 const DEFAULT_MODULES = ["node_conv_284", "node_conv_292", "node_conv_298"];
 const DEFAULT_PART = "xczu9eg-ffvb1156-2-e";
@@ -37,7 +53,7 @@ async function readJsonIfPresent<T>(p: string): Promise<T | null> {
 }
 
 async function resynthOne(moduleId: string): Promise<{ ok: boolean; msg: string }> {
-  const rtlPath = path.join(repoRoot, "output", "rtl", `${moduleId}.v`);
+  const rtlPath = path.join(outputRoot, "rtl", `${moduleId}.v`);
   let source: string;
   try {
     source = await readFile(rtlPath, "utf8");
@@ -54,7 +70,7 @@ async function resynthOne(moduleId: string): Promise<{ ok: boolean; msg: string 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[resynth]     ${elapsed}s  success=${report.success} lut=${report.lut_count} ff=${report.ff_count} dsp=${report.dsp_count} bram18=${report.bram18_count} bram36=${report.bram36_count} wns=${report.wns_ns} fmax=${report.fmax_mhz.toFixed(2)}`);
 
-  const outPath = path.join(repoRoot, "output", "reports", `${moduleId}.vivado.json`);
+  const outPath = path.join(outputRoot, "reports", `${moduleId}.vivado.json`);
   await writeFile(outPath, JSON.stringify(report, null, 2), "utf8");
   console.log(`[resynth]     wrote ${path.relative(repoRoot, outPath)}`);
 
@@ -68,7 +84,7 @@ async function resynthOne(moduleId: string): Promise<{ ok: boolean; msg: string 
 }
 
 async function flipState(moduleId: string): Promise<void> {
-  const statePath = path.join(repoRoot, "output", "pipeline_state.json");
+  const statePath = path.join(outputRoot, "pipeline_state.json");
   const state = await readJsonIfPresent<{ modules: Record<string, string> }>(statePath);
   if (!state || !state.modules) return;
   if (state.modules[moduleId] !== "pass") {
@@ -79,7 +95,8 @@ async function flipState(moduleId: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const modules = process.argv.slice(2).length > 0 ? process.argv.slice(2) : DEFAULT_MODULES;
+  const moduleArgs = rawArgs.filter((arg) => !arg.startsWith("--network="));
+  const modules = moduleArgs.length > 0 ? moduleArgs : DEFAULT_MODULES;
   console.log("[resynth] NN2RTL_VIVADO_BIN =", process.env.NN2RTL_VIVADO_BIN ?? "(unset)");
   console.log("[resynth] modules           =", modules.join(", "));
 
