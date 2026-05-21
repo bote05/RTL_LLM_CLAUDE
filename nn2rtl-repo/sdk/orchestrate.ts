@@ -6331,6 +6331,8 @@ function expectedLatencyCyclesForContract(layer: LayerIR, sidecarFields: Record<
       // Same public-interface latency contract as flat-bus: pipeline_latency_cycles
       // is the LayerIR-pinned time-to-first-output.
       return layer.pipeline_latency_cycles;
+    case "on-chip-weights":
+      return layer.pipeline_latency_cycles + (Number(params.uram_read_latency_cycles) || 2);
     case "flat-bus":
       return layer.pipeline_latency_cycles;
   }

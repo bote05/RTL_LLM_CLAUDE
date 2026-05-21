@@ -1,0 +1,63 @@
+{
+  "name": "on-chip-weights",
+  "display_name": "On-Chip Weights (UltraRAM)",
+  "complexity_rank": 1,
+  "interface_signals": [
+    { "name": "clk", "direction": "input", "width_bits": 1, "role": "clock" },
+    { "name": "rst_n", "direction": "input", "width_bits": 1, "role": "active-low reset" },
+    { "name": "valid_in", "direction": "input", "width_bits": 1, "role": "activation stream valid" },
+    { "name": "ready_in", "direction": "output", "width_bits": 1, "role": "activation stream ready/stall" },
+    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "one packed activation pixel per beat" },
+    { "name": "valid_out", "direction": "output", "width_bits": 1, "role": "output stream valid" },
+    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "one packed output pixel per beat" },
+    {
+      "name": "weight_rd_addr",
+      "direction": "output",
+      "width_expr": "weight_addr_bits",
+      "role": "URAM read address; layer's base address is parameter-loaded as weight_base_word"
+    },
+    {
+      "name": "weight_rd_en",
+      "direction": "output",
+      "width_bits": 1,
+      "role": "URAM read enable"
+    },
+    {
+      "name": "weight_rd_data",
+      "direction": "input",
+      "width_expr": "uram_word_bits",
+      "role": "URAM-word-wide read data (288 bits on UltraScale+ URAM72; 36 INT8 weights per word)"
+    },
+    {
+      "name": "weight_base_word",
+      "direction": "input",
+      "width_expr": "weight_addr_bits",
+      "role": "Layer's URAM base address (in 288-bit URAM words), loaded by scheduler before engine_start"
+    }
+  ],
+  "fit_constraints": {
+    "max_bus_width_bits": 8192,
+    "max_on_chip_weight_bytes": 4194304,
+    "default_beat_width_bits": 288,
+    "bram_formula": "Weights live in a shared on-chip UltraRAM region whose base address is parameter-loaded per layer; on-chip storage is bounded by the URAM region budget (e.g. ZCU102 ~25 Mbit, U250 ~90 Mbit) and is NOT recomputed per layer. The active bias/scale ROMs use BRAM18 sized as OC*4 bytes (bias) + OC*4 bytes (scale_mult).",
+    "buffer_sizing_rules": [
+      "Public streaming interface is identical to flat-bus (one packed activation pixel per beat).",
+      "Weight reads come from a URAM region whose base address is parameter-loaded per layer (weight_base_word).",
+      "URAM read data is a full URAM72 word (288 bits = 36 INT8 weights); address arithmetic must operate in URAM words, not bytes.",
+      "Activations are still streamed end-to-end; the activation BRAM ping-pong is managed by the scheduler outside this module."
+    ]
+  },
+  "supported_ops": ["conv2d"],
+  "dependencies": [],
+  "docs": [
+    "knowledge/patterns/protected/01_context.md",
+    "knowledge/patterns/protected/13_on_chip_weights.md",
+    "knowledge/patterns/protected/08_common_bugs.md"
+  ],
+  "protocol_rules": [
+    "All weight bytes for this layer must be addressable as a contiguous URAM region starting at weight_base_word.",
+    "The module must not have any external memory interface (no AXI4-MM master, no DDR controller, no AXI read channel).",
+    "Weight reads must use weight_rd_en + weight_rd_addr + weight_rd_data; no $readmemh of the full weight tensor inside the module (the URAM is initialised at bitfile load by the top-level wrapper).",
+    "weight_base_word must be stable from at least one cycle before engine_start through the layer's final valid_out beat; the scheduler enforces this externally."
+  ]
+}

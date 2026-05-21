@@ -5,7 +5,8 @@ export type ContractId =
   | "dram-backed-weights"
   | "activation-double-buffering"
   | "weight-tiling"
-  | "depthwise-conv";
+  | "depthwise-conv"
+  | "on-chip-weights";
 export type IoMode =
   | "packed_full"
   | "channel_tiled"

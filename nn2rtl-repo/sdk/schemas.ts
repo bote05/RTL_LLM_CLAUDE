@@ -89,6 +89,7 @@ const contractIdSchema = z.enum([
   "activation-double-buffering",
   "weight-tiling",
   "depthwise-conv",
+  "on-chip-weights",
 ]);
 
 const contractParamSchema = z.record(

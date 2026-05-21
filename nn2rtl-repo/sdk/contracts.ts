@@ -15,6 +15,7 @@ export const CONTRACT_IDS = [
   "activation-double-buffering",
   "weight-tiling",
   "depthwise-conv",
+  "on-chip-weights",
 ] as const;
 
 export type ContractId = typeof CONTRACT_IDS[number];
