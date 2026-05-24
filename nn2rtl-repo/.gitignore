@@ -38,6 +38,9 @@ venv/
 # `!output/<path>` un-ignore after this line.
 output/
 
+# Local savebacks / rollback snapshots
+backups/
+
 # Manual / one-off experiments (not part of the production pipeline)
 experiments/
 

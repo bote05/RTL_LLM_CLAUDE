@@ -1158,14 +1158,30 @@ export async function run_vivado(
   verilog_source: string,
   module_name: string,
   clockPeriodNsOrRuntimeOverrides: number | Partial<ToolsRuntime> = 0,
-  partOrRuntimeOverrides: string | Partial<ToolsRuntime> | undefined = VIVADO_DEFAULT_PART,
+  partOrRuntimeOverrides: string | Partial<ToolsRuntime> | undefined = undefined,
   threadsOrRuntimeOverrides: number | Partial<ToolsRuntime> | undefined = undefined,
   runtimeOverrides: Partial<ToolsRuntime> = {},
 ): Promise<VivadoSynthesisReport> {
   const clock_period_ns =
     typeof clockPeriodNsOrRuntimeOverrides === "number" ? clockPeriodNsOrRuntimeOverrides : 0;
-  const part =
-    typeof partOrRuntimeOverrides === "string" ? partOrRuntimeOverrides : VIVADO_DEFAULT_PART;
+  // Resolution order:
+  //   1. Explicit `part` arg passed by caller (string)
+  //   2. NN2RTL_VIVADO_PART env (lets the canary/rest wave gate on the
+  //      actual deploy target, e.g. xcu250-figd2104-2L-e, instead of the
+  //      historical ZCU102 default)
+  //   3. VIVADO_DEFAULT_PART module const (ZCU102, kept for back-compat
+  //      with old scripts that hard-code the default)
+  //
+  // The function parameter default is now `undefined` (rather than
+  // VIVADO_DEFAULT_PART) so the orchestrator's 3-arg call site doesn't
+  // silently receive a default-string that masks the env override.
+  let part: string;
+  if (typeof partOrRuntimeOverrides === "string") {
+    part = partOrRuntimeOverrides;
+  } else {
+    const envPart = process.env.NN2RTL_VIVADO_PART;
+    part = envPart && envPart.trim().length > 0 ? envPart.trim() : VIVADO_DEFAULT_PART;
+  }
   const explicitThreads =
     typeof threadsOrRuntimeOverrides === "number" ? threadsOrRuntimeOverrides : undefined;
   const overrides =
@@ -1655,6 +1671,21 @@ export async function get_rtl_patterns(
     }
   } else if (includeFlatBusProtectedReferences && op_type === "conv2d" && kernel_h === 7 && kernel_w === 7) {
     const ref = await readReferenceVariants("conv7x7_passing_reference.v", lifecycleReferencePaths);
+    if (ref !== null) {
+      reference_verilog = ref;
+    }
+  } else if (op_type === "maxpool") {
+    // Per 07_maxpool.md the maxpool top-level reuses the SAME library
+    // wiring as spatial conv (coord_scheduler + line_buf_window). There
+    // is no maxpool-specific protected reference yet, but the conv3x3
+    // protected reference demonstrates the exact library instantiation
+    // pattern the pattern doc requires. Returning it here gives Foundry
+    // a concrete anchor for the architecture; the pattern doc covers
+    // the compare-tree swap that replaces conv_datapath. Without this
+    // routing, every maxpool dispatch sees reference_verilog=null and
+    // falls back to its training prior (monolithic FSM), which trips
+    // the structural preflight (`coord_scheduler_missing`).
+    const ref = await readReferenceVariants("conv3x3_passing_reference.v", lifecycleReferencePaths);
     if (ref !== null) {
       reference_verilog = ref;
     }

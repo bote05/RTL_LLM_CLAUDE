@@ -1,5 +1,15 @@
 # 06 — ReLU
 
+> **Tile-ABI addendum (canonical for `io_mode == "channel_tiled"`)**: under the
+> `tiled-streaming` contract, `input_width_bits == output_width_bits ==
+> channel_tile*8` (default 256 for `channel_tile=32`). Each `data_in` beat
+> carries one tile of `channel_tile` INT8 channels; each `data_out` beat
+> carries the same `channel_tile` channels after element-wise `max(0, x)`.
+> 1:1 tile cadence — emit exactly one output tile beat per input tile
+> beat, no channel collapsing, no buffering across tiles. Pixel and tile
+> ordering preserved from input. See `knowledge/patterns/protected/01_context.md`
+> §"Bus convention — CANONICAL tiled-streaming ABI" for full rules.
+
 ## When to use
 
 `op_type == "relu"`.

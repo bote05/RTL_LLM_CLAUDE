@@ -42,13 +42,50 @@ contract whose `contracts/<contract_id>/metadata.json` declares additional
 Do not apply the seven-signal rule to contracts that explicitly declare these
 extra ports.
 
-## Packed-channel bus convention
+## Bus convention — CANONICAL `tiled-streaming` ABI
+
+ResNet-50 (and any network whose layers carry `io_mode == "channel_tiled"`)
+uses the **canonical tile ABI** below. This is the ONLY valid convention
+under the `tiled-streaming` contract; the legacy "packed-channel" form
+beneath is documented for historical / `flat-bus` contract reference only.
+
+Canonical ABI (`channel_tile = 32`, every beat = 256 bits):
+
+- **conv2d / relu / maxpool**: `input_width_bits == output_width_bits == 256`.
+  Each beat carries one tile of 32 INT8 channels. `data_in[c*8 +: 8]` is
+  channel `c` of the current tile (`c ∈ [0, 32)`), signed INT8 (byte 0 at
+  bits [7:0]).
+- **add**: `input_width_bits == 512` (two tile halves packed per beat),
+  `output_width_bits == 256`. Layout: `data_in[255:0]` = lhs tile,
+  `data_in[511:256]` = rhs tile. Both halves MUST present the same
+  `(pixel, tile_idx)` in lock-step; `valid_in` fires only when both are
+  present.
+
+Per-pixel beat count = `ceil(channels / 32)`. Pixels are emitted in
+raster order (`pixel_h` outer, `pixel_w` inner); within a pixel, tiles
+are emitted in ascending `tile_idx` order (tile 0 holds channels
+[0..31], tile 1 holds [32..63], etc.). Conv layers MUST accumulate
+partial sums across input-channel tiles for the same `(pixel, kh, kw)`
+before emitting the output tile; ReLU / maxpool must emit one output
+tile per input tile in lock-step (no channel collapsing).
+
+Foundry MUST honor `input_width_bits` / `output_width_bits` from the
+LayerIR verbatim. Never widen the bus back to `IC*8` / `OC*8` under
+`io_mode == "channel_tiled"`.
+
+### Legacy packed-channel bus convention (`flat-bus` contract only)
+
+Retained for the small layers that still elect `flat-bus`:
 
 - **conv2d / relu / maxpool**: `data_in` is `IC * 8` bits. `data_in[i*8 +: 8]`
   is channel `i` as a signed INT8. `data_out` is `OC * 8` bits, same layout.
 - **add**: `data_in` is `2 * W` bits where `W = output_width_bits`. The low
   half `data_in[W-1:0]` is the packed lhs channels; the high half
   `data_in[2W-1:W]` is the packed rhs channels. `data_out` is `OC * 8` bits.
+
+Under `flat-bus`, every layer's data is a single beat per pixel (no
+tile-cadence concerns). Do NOT mix `flat-bus` and `channel_tiled` widths
+in the same layer.
 
 ## INT8 quantization
 

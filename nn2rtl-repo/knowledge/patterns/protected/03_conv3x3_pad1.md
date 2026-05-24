@@ -1,5 +1,20 @@
 # 03 — Spatial 3×3 conv, padding=1 (instantiation-only pattern)
 
+> **Tile-ABI addendum (canonical for `io_mode == "channel_tiled"`)**: under the
+> `tiled-streaming` contract, `input_width_bits == output_width_bits ==
+> channel_tile*8` (default 256 for `channel_tile=32`). The 3×3 kernel walks
+> `kh ∈ [0,3) × kw ∈ [0,3)`; for each (oh, ow) output pixel and (kh, kw)
+> kernel position, the module reads `ceil(IC / channel_tile)` input tiles
+> from the line-buffer window, MAC-accumulates them into the per-output-
+> channel accumulators, and only emits the output tile beats after the
+> final (kh, kw, ic_tile) iteration. The line-buffer + window logic
+> (`coord_scheduler`, `line_buf_window`, `conv_datapath`) is shared across
+> all 3×3 convs; the per-layer wrapper only sets `IC`, `OC`, `channel_tile`,
+> and the bias/scale localparams. Receptive-field bounds with padding=1
+> still substitute zero for out-of-bounds input bytes (no change). See
+> `knowledge/patterns/protected/01_context.md` §"Bus convention —
+> CANONICAL tiled-streaming ABI" for full ABI rules.
+
 ## When to use
 
 `op_type == "conv2d"` with `weight_shape[2] == 3 && weight_shape[3] == 3`.

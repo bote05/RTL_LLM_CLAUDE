@@ -340,12 +340,21 @@ export function defaultImprovePaths(repoRoot = defaultRepoRoot): ImprovePaths {
   const outputRoot = repoRoot === defaultRepoRoot
     ? (process.env.NN2RTL_OUTPUT_DIR ? path.resolve(repoRoot, process.env.NN2RTL_OUTPUT_DIR) : path.join(repoRoot, "output"))
     : path.join(repoRoot, "output");
+  // NN2RTL_KNOWLEDGE_DIR lets parallel improve runners give each worker an
+  // isolated knowledge sandbox (own doc_lifecycle.json + own improved/ tier).
+  // Without this, multiple workers race on knowledge/doc_lifecycle.json's
+  // read-modify-write and lose lifecycle entries.
+  const knowledgeRoot = repoRoot === defaultRepoRoot
+    ? (process.env.NN2RTL_KNOWLEDGE_DIR
+        ? path.resolve(repoRoot, process.env.NN2RTL_KNOWLEDGE_DIR)
+        : path.join(repoRoot, "knowledge"))
+    : path.join(repoRoot, "knowledge");
   return {
     repoRoot,
     outputRoot,
     reportsDir: path.join(outputRoot, "reports"),
     rtlDir: path.join(outputRoot, "rtl"),
-    knowledgeRoot: path.join(repoRoot, "knowledge"),
+    knowledgeRoot,
   };
 }
 

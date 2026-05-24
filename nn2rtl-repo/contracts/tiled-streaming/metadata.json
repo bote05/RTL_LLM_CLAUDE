@@ -1,33 +1,53 @@
 {
   "name": "tiled-streaming",
-  "display_name": "Tiled Streaming",
+  "display_name": "Tiled Streaming (Canonical ResNet-50 ABI)",
   "complexity_rank": 1,
   "interface_signals": [
     { "name": "clk", "direction": "input", "width_bits": 1, "role": "clock" },
     { "name": "rst_n", "direction": "input", "width_bits": 1, "role": "active-low reset" },
     { "name": "valid_in", "direction": "input", "width_bits": 1, "role": "input beat valid" },
     { "name": "ready_in", "direction": "output", "width_bits": 1, "role": "input beat ready/backpressure" },
-    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "fixed-width channel tile beat" },
+    { "name": "data_in", "direction": "input", "width_expr": "input_width_bits", "role": "fixed-width channel tile beat (conv/relu/maxpool: input_width_bits == channel_tile*8 == 256; add: input_width_bits == 2*channel_tile*8 == 512, packed as {rhs_tile[255:0], lhs_tile[255:0]} with lhs in low bits)" },
     { "name": "valid_out", "direction": "output", "width_bits": 1, "role": "output beat valid" },
-    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "fixed-width output channel tile beat" }
+    { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "fixed-width output channel tile beat (always channel_tile*8 == 256 bits regardless of op_type)" }
   ],
   "fit_constraints": {
-    "max_bus_width_bits": 256,
-    "max_on_chip_weight_bytes": 1048576,
+    "max_bus_width_bits": 512,
+    "max_on_chip_weight_bytes": 4194304,
+    "max_on_chip_weight_bytes_note": "Raised from the historical ZCU102-era 1 MiB cap to 4 MiB so the four biggest ResNet-50 spatial convs (node_conv_284/288/292/298, ~2.36 MiB each) fit under one uniform tiled-streaming contract on AMD Alveo U250 (75.9 Mbit BRAM + 22.4 MiB URAM). Smaller targets that need the original 1 MiB cap should clone this contract with a different name.",
     "default_beat_width_bits": 256,
     "default_channel_tile": 32,
+    "canonical_channel_tile": 32,
+    "canonical_beat_width_bits": 256,
     "bram_formula": "line buffers store channel_tile lanes per spatial row; BRAM bits ~= channel_tile*8*image_width*(kernel_h-1) plus accumulator state.",
     "buffer_sizing_rules": [
-      "input_width_bits and output_width_bits must be <= 256",
-      "channel_tile defines channels per beat",
+      "channel_tile defines channels per beat; CANONICAL value for ResNet-50 ABI is 32",
+      "for conv2d / relu / maxpool: input_width_bits == output_width_bits == channel_tile*8 == 256",
+      "for add: input_width_bits == 2*channel_tile*8 == 512 (concatenates two 256-bit tile halves: lhs in [255:0], rhs in [511:256]); output_width_bits == 256",
       "beats per pixel = ceil(channels / channel_tile)",
       "spatial ops must retain line-buffer/window state across beats for the same pixel"
     ]
+  },
+  "abi_rules": {
+    "tile_order": "channel-major within a pixel: tile T contains channels [T*channel_tile .. (T+1)*channel_tile - 1]; tiles are emitted in ascending T order; pixels emitted in raster order (row-major: pixel_h outer, pixel_w inner)",
+    "byte_layout_in_beat": "within one 256-bit data beat, channel c (relative to the tile, c in [0, channel_tile)) lives at bits [c*8 +: 8] as a signed INT8 (byte 0 at bits [7:0], byte 31 at bits [255:248]). This matches the existing 01_context.md byte-order convention.",
+    "add_lhs_rhs_alignment": "in data_in for add: bits [255:0] = lhs_tile (matching the producer of mainSource), bits [511:256] = rhs_tile (matching the producer of skipSource). The two sides MUST present the same (pixel, tile_idx) in lock-step; valid_in fires only when both halves are present.",
+    "valid_ready_handshake": "valid_in pulses once per accepted beat; ready_in MUST be honored (no in-flight beat dropped). valid_out is the same shape on the output side. No fire-and-forget pulses; if downstream not ready, hold valid_out.",
+    "conv_ic_tile_accumulation": "for conv2d: across input-channel tiles for the SAME (pixel, kh, kw), the layer must accumulate partial sums in an internal accumulator. The accumulator clears when starting a new output pixel (or new oc_pass for tiled-output layers).",
+    "relu_maxpool_tile_cadence": "for relu/maxpool: output one tile beat for each input tile beat in lock-step. Maxpool with stride > 1 still emits all tile beats of the kept pixels; it does NOT collapse channel dimensions.",
+    "no_dram_ports": "tiled-streaming has NO DRAM AXI4 weight-read ports. Weights are loaded from on-chip BRAM via $readmemh of the LayerIR weights_path. Modules that need DRAM weights must use a different contract.",
+    "deterministic_emission": "given the same input beat sequence, the output beat sequence MUST be deterministic and byte-exact across runs. No randomness, no time-of-day, no clock-domain skew."
   },
   "supported_ops": ["conv2d", "relu", "add", "maxpool"],
   "dependencies": [],
   "docs": [
     "knowledge/patterns/01_context.md",
     "knowledge/patterns/08_common_bugs.md"
+  ],
+  "protocol_rules": [
+    "Foundry MUST set input_width_bits/output_width_bits from the LayerIR verbatim. For tiled-streaming these will be 256 (conv/relu/maxpool) or 512 (add input only) per the buffer_sizing_rules above.",
+    "Foundry MUST emit channel-major tile order matching abi_rules.tile_order. Any other order breaks chain coherence.",
+    "Foundry MUST NOT add DRAM AXI ports under tiled-streaming. If the layer's weight tensor exceeds max_on_chip_weight_bytes, the orchestrator escalates to a different contract.",
+    "Foundry MUST emit deterministic output for the same input sequence (golden-comparison gate enforces this)."
   ]
 }

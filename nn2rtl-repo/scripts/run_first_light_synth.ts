@@ -187,10 +187,17 @@ async function main(): Promise<void> {
     let stderr = "";
     let exitOk = true;
     try {
+      const timeoutMs = (() => {
+        const envVal = process.env.NN2RTL_VIVADO_TIMEOUT_MS;
+        if (envVal && Number.isFinite(Number(envVal)) && Number(envVal) > 0) {
+          return Number(envVal);
+        }
+        return VIVADO_TIMEOUT_MS;
+      })();
       const result = await execFileP(spawnFile, spawnArgs, {
         cwd: tempDir,
         env: process.env,
-        timeout: VIVADO_TIMEOUT_MS,
+        timeout: timeoutMs,
         maxBuffer: VIVADO_MAX_BUFFER_BYTES,
       });
       stdout = result.stdout;

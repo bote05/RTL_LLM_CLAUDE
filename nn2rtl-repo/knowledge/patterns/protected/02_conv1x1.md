@@ -1,5 +1,18 @@
 # 02 — Pointwise (1×1) conv2d
 
+> **Tile-ABI addendum (canonical for `io_mode == "channel_tiled"`)**: under the
+> `tiled-streaming` contract, `input_width_bits == output_width_bits ==
+> channel_tile*8` (default 256 for `channel_tile=32`). Each `data_in` beat
+> carries one tile of `channel_tile` INT8 input channels; each `data_out`
+> beat carries one tile of `channel_tile` INT8 output channels. Per pixel
+> the module consumes `ceil(IC / channel_tile)` input tiles and emits
+> `ceil(OC / channel_tile)` output tiles. Across input tiles for the same
+> pixel the module MUST accumulate partial sums per output channel before
+> emitting any output tile; the accumulator clears at the start of each
+> new output pixel. See
+> `knowledge/patterns/protected/01_context.md` §"Bus convention — CANONICAL
+> tiled-streaming ABI" for the full rule set.
+
 Canonical reference: `knowledge/references/protected/conv1x1_passing_reference.v`
 (Foundry first-shot, 0 Surgeon retries). The FSM is monolithic — pointwise
 convs do not use the split-architecture library because they have no line
