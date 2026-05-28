@@ -229,6 +229,7 @@ class Int8Conv2d(nn.Module):
         groups: int = 1,
         scale_factor: float = 1.0,
         rtl_compat: bool = False,
+        scale_factor_per_oc=None,
     ) -> None:
         super().__init__()
         self.register_buffer("weight", weight.to(torch.float32))
@@ -242,6 +243,10 @@ class Int8Conv2d(nn.Module):
         self.groups = int(groups)
         self.scale_factor = float(scale_factor)
         self.rtl_compat = bool(rtl_compat)
+        # per-output-channel requant (INT4/GPTQ). When set, overrides the scalar
+        # scale_factor with one (mult,shift) per output channel.
+        self.scale_factor_per_oc = (list(scale_factor_per_oc)
+                                    if scale_factor_per_oc is not None else None)
 
     def forward(self, x):
         weight = self.weight
@@ -261,6 +266,8 @@ class Int8Conv2d(nn.Module):
             dilation=self.dilation,
             groups=self.groups,
         )
+        if self.scale_factor_per_oc is not None:
+            return requantize_tensor_with_scale_per_oc(y, self.scale_factor_per_oc)
         return requantize_tensor_with_scale(y, self.scale_factor)
 
 
@@ -1108,6 +1115,40 @@ def requantize_tensor_with_scale(tensor: torch.Tensor, scale_factor: float) -> t
     divisor = 1 << shift
     # Snap the float input back to its underlying integer (acc+bias is an
     # exact integer; we trust the host computed it correctly).
+    integer_input = working.to(torch.float64).round().to(torch.int64)
+    raw = integer_input * mult + round_bias
+    scaled = torch.div(raw, divisor, rounding_mode="floor")
+    return torch.clamp(scaled.to(torch.float32), -128, 127)
+
+
+def requantize_tensor_with_scale_per_oc(tensor: torch.Tensor,
+                                        scale_factors) -> torch.Tensor:
+    """Per-output-channel variant of requantize_tensor_with_scale, for INT4
+    weights with per-OC scales (GPTQ). `scale_factors` has length OC = dim 1 of
+    `tensor` ([N,OC,H,W] conv, or [N,OC] gemm). Each output channel uses its own
+    (SCALE_MULT, SCALE_SHIFT) from compute_scale_approx — exactly what the RTL's
+    per-lane scale ROM will apply. Bit-identical integer multiply-add-shift."""
+    working = tensor.detach() if isinstance(tensor, torch.Tensor) else tensor
+    if isinstance(working, torch.Tensor) and working.is_quantized:
+        working = working.dequantize()
+    OC = working.shape[1]
+    if len(scale_factors) != OC:
+        raise GoldenGenerationError(
+            f"per-oc requant: {len(scale_factors)} scales vs {OC} channels")
+    mult_l, shift_l = [], []
+    for oc in range(OC):
+        m, sh = compute_scale_approx(float(scale_factors[oc]))
+        mult_l.append(m)
+        shift_l.append(sh)
+    dev = working.device
+    view = [1, OC] + [1] * (working.dim() - 2)
+    mult = torch.tensor(mult_l, dtype=torch.int64, device=dev).view(view)
+    shift = torch.tensor(shift_l, dtype=torch.int64, device=dev).view(view)
+    one = torch.ones_like(shift)
+    divisor = torch.bitwise_left_shift(one, shift)                       # 2^shift
+    round_bias = torch.where(shift > 0,
+                             torch.bitwise_left_shift(one, (shift - 1).clamp_min(0)),
+                             torch.zeros_like(shift))
     integer_input = working.to(torch.float64).round().to(torch.int64)
     raw = integer_input * mult + round_bias
     scaled = torch.div(raw, divisor, rounding_mode="floor")

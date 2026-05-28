@@ -960,6 +960,96 @@ def _quantize_bias_int32(
 
 
 # ---------------------------------------------------------------------------
+# Per-output-channel INT4 (GPTQ) helpers — Scheme A' (INT4 w / INT8 act,
+# per-output-channel weight scale). Gated by WEIGHT_BITS<8; naive per-tensor
+# INT4 collapses ResNet-50 accuracy (0%), GPTQ per-OC recovers it (~77%).
+# ---------------------------------------------------------------------------
+USE_GPTQ = (WEIGHT_BITS < 8) and (os.environ.get("NN2RTL_GPTQ", "1") == "1")
+
+
+def _spec_int_weight_and_scale(spec: "OnnxLayerSpec"):
+    """(int_weight_np [shape of spec.weight], scale) — scale scalar (per-tensor)
+    or np[OC] (per-OC GPTQ, when spec.weight_scale_per_oc was set)."""
+    poc = getattr(spec, "weight_scale_per_oc", None)
+    if poc is not None:
+        return getattr(spec, "gptq_qweight"), poc
+    return _quantize_weights_int8(spec.weight, spec.weight_scale), spec.weight_scale
+
+
+def _spec_bias_int(spec: "OnnxLayerSpec") -> np.ndarray:
+    poc = getattr(spec, "weight_scale_per_oc", None)
+    if poc is not None:                      # per-OC: bias_int[oc]=round(b[oc]/(in*ws[oc]))
+        acc = spec.input_scale * np.asarray(poc, dtype=np.float64)
+        acc = np.where(acc == 0.0, 1.0, acc)
+        return np.round(np.asarray(spec.bias, dtype=np.float64) / acc).astype(np.int32)
+    return _quantize_bias_int32(spec.bias, spec.input_scale, spec.weight_scale)
+
+
+def _composite_conv_scale_per_oc(spec: "OnnxLayerSpec"):
+    """np[OC] composite requant scale per output channel, or None if per-tensor."""
+    poc = getattr(spec, "weight_scale_per_oc", None)
+    if poc is None:
+        return None
+    acc = spec.input_scale * np.asarray(poc, dtype=np.float64)
+    return acc if spec.output_scale == 0.0 else acc / spec.output_scale
+
+
+def _int8_ref_conv_module(spec):
+    """Build a genuine INT8-weight conv module (8-bit, ws=max/127) for realistic
+    Hessian-capture activations — naive-INT4 deep-layer activations are garbage
+    and ruin GPTQ. INT8-weight network ~75% acc -> good activations."""
+    W = np.asarray(spec.weight, dtype=np.float64)
+    ws8 = float(np.abs(W).max()) / 127.0 or 1.0
+    w8 = np.clip(np.round(W / ws8), -128, 127).astype(np.float32)
+    acc8 = spec.input_scale * ws8
+    b8 = np.round(np.asarray(spec.bias, dtype=np.float64) / (acc8 or 1.0)).astype(np.float32)
+    comp8 = acc8 if spec.output_scale == 0.0 else acc8 / spec.output_scale
+    return Int8Conv2d(
+        weight=torch.tensor(w8), bias=torch.tensor(b8),
+        stride=spec.stride, padding=spec.padding, dilation=spec.dilation,
+        groups=spec.groups, scale_factor=float(comp8), rtl_compat=False)
+
+
+def _gptq_quantize_convs(specs, modules, gptq_inputs) -> None:
+    """Set spec.gptq_qweight (INT4 ints) + spec.weight_scale_per_oc (per-OC) on
+    every conv2d, via GPTQ using per-conv input Hessians. Hessians are captured
+    from an INT8-WEIGHT reference forward (good activations), not the naive-INT4
+    modules (whose deep activations are garbage)."""
+    import torch.nn.functional as _F
+    import gptq_core
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    conv_specs = [s for s in specs if s.op_type == "conv2d" and s.weight is not None]
+    H = {s.module_id: None for s in conv_specs}
+    cnt = {s.module_id: 0 for s in conv_specs}
+    ref = {s.module_id: (_int8_ref_conv_module(s) if (s.op_type == "conv2d" and s.weight is not None)
+                         else modules[s.module_id]) for s in specs}
+    gmods = {k: m.to(dev) for k, m in ref.items()}
+    with torch.no_grad():
+        for inp in gptq_inputs:
+            tmap = run_int8_network(specs, gmods, inp.to(dev))
+            for s in conv_specs:
+                x = tmap[s.input_tensor_names[0]].to(dev).float()
+                kh, kw = int(s.weight.shape[2]), int(s.weight.shape[3])
+                xu = _F.unfold(x, (kh, kw), dilation=tuple(s.dilation),
+                               padding=tuple(s.padding), stride=tuple(s.stride))
+                xu = xu.transpose(1, 2).reshape(-1, xu.shape[1])
+                h = (xu.t() @ xu).cpu()
+                H[s.module_id] = h if H[s.module_id] is None else H[s.module_id] + h
+                cnt[s.module_id] += xu.shape[0]
+    del gmods, ref  # free GPU ref modules
+    for s in conv_specs:
+        W = torch.tensor(np.asarray(s.weight, dtype=np.float32), device=dev)
+        OC = W.shape[0]
+        W2d = W.reshape(OC, -1)
+        scale = gptq_core.per_oc_scale(W2d, _WQMAX)            # [OC,1]
+        Hm = (H[s.module_id] / max(1, cnt[s.module_id]))
+        Qint = gptq_core.gptq_int_weights(W2d, Hm, scale, _WQMIN, _WQMAX)
+        s.gptq_qweight = Qint.reshape(W.shape).cpu().numpy().astype(np.int8)
+        s.weight_scale_per_oc = scale.squeeze(1).cpu().numpy().astype(np.float64)
+    print(f"[gptq] quantized {len(conv_specs)} conv layers to INT4 per-output-channel")
+
+
+# ---------------------------------------------------------------------------
 # Build and run the quantised INT8 forward network
 # ---------------------------------------------------------------------------
 
@@ -975,10 +1065,20 @@ def _build_int8_module(spec: OnnxLayerSpec, rtl_compat_conv: bool = True) -> nn.
     """
     if spec.op_type == "conv2d":
         assert spec.weight is not None
-        w_int8 = _quantize_weights_int8(spec.weight, spec.weight_scale)
+        w_int8, _wsc = _spec_int_weight_and_scale(spec)
         w_tensor = torch.tensor(w_int8.astype(np.float32))
-        b_int32 = _quantize_bias_int32(spec.bias, spec.input_scale, spec.weight_scale)
+        b_int32 = _spec_bias_int(spec)
         b_tensor = torch.tensor(b_int32.astype(np.float32))
+        _per_oc = _composite_conv_scale_per_oc(spec)
+        if _per_oc is not None:
+            return Int8Conv2d(
+                weight=w_tensor, bias=b_tensor,
+                stride=spec.stride, padding=spec.padding,
+                dilation=spec.dilation, groups=spec.groups,
+                scale_factor=float(_per_oc.mean()),  # metadata only; per-OC used
+                rtl_compat=rtl_compat_conv,
+                scale_factor_per_oc=[float(v) for v in _per_oc.tolist()],
+            )
         # Composite requantisation multiplier.  Derivation:
         #   input_float = input_int * input_scale
         #   weight_float = weight_int * weight_scale
@@ -1138,8 +1238,8 @@ def _write_conv_hex_artifacts(
 ) -> tuple[list[int], list[int]]:
     """Write weight and bias hex files for a conv2d spec. Return (weight_values, bias_values)."""
     assert spec.weight is not None
-    w_int8 = _quantize_weights_int8(spec.weight, spec.weight_scale)
-    b_int32 = _quantize_bias_int32(spec.bias, spec.input_scale, spec.weight_scale)
+    w_int8, _wsc = _spec_int_weight_and_scale(spec)   # GPTQ INT4 ints when per-OC
+    b_int32 = _spec_bias_int(spec)
 
     weight_values = [int(v) for v in w_int8.reshape(-1).tolist()]
     bias_values = [int(v) for v in b_int32.reshape(-1).tolist()]
@@ -1499,20 +1599,35 @@ def build_pipeline_ir_from_onnx(
                 stacklevel=2,
             )
 
+    # input scale for golden quantization (needed early for GPTQ calib inputs)
+    _in_scale = float(specs[0].input_scale) if use_real_input_scale else 1.0
+    if not _in_scale:
+        _in_scale = 1.0
+
+    def _golden_input(i):
+        return quantize_tensor_to_int8_range(
+            torch.tensor(cal_feeds[i][network_input_name]).reshape(first_input_shape)
+            / _in_scale)
+
     # --- Step 6: Build INT8 modules -----------------------------------------
     modules: dict[str, nn.Module] = {
         s.module_id: _build_int8_module(s, rtl_compat_conv=rtl_compat_conv) for s in specs
     }
 
+    # --- Step 6b: GPTQ INT4 (per-output-channel) -----------------------------
+    # Naive INT4 collapses accuracy; GPTQ per-OC recovers it. Quantize convs to
+    # INT4 using calibration Hessians, then rebuild the modules per-OC.
+    if USE_GPTQ:
+        n_gptq = min(num_calibration_samples,
+                     int(os.environ.get("NN2RTL_GPTQ_CALIB", "128")))
+        gptq_inputs = [_golden_input(i) for i in range(n_gptq)]
+        _gptq_quantize_convs(specs, modules, gptq_inputs)
+        modules = {
+            s.module_id: _build_int8_module(s, rtl_compat_conv=rtl_compat_conv) for s in specs
+        }
+
     # --- Step 7: Run INT8 simulation to capture golden activations ----------
     torch.manual_seed(calibration_seed)
-    # Golden network input = round(input_float / input_scale) clamped to INT8.
-    # Synthetic path: inputs are already INT8-range (input_scale≈1) -> feed raw
-    # (historical behavior). Real-image path: divide the normalized float image
-    # by the calibrated input_scale so it maps onto the full INT8 range.
-    _in_scale = float(specs[0].input_scale) if use_real_input_scale else 1.0
-    if not _in_scale:
-        _in_scale = 1.0
     # Calibration uses ALL N feeds (for scale stats), but the GOLDENS only need a
     # few vectors for RTL verification. NN2RTL_GOLDEN_VECTORS caps the golden
     # forward so 256-image calibration doesn't emit 256-vector (GB-sized) goldens.
@@ -1520,13 +1635,7 @@ def build_pipeline_ir_from_onnx(
     golden_vectors = (_gv_env if _gv_env > 0
                       else (2 if use_real_input_scale else num_calibration_samples))
     golden_vectors = max(1, min(golden_vectors, num_calibration_samples))
-    input_tensors = [
-        quantize_tensor_to_int8_range(
-            torch.tensor(cal_feeds[i][network_input_name]).reshape(first_input_shape)
-            / _in_scale
-        )
-        for i in range(golden_vectors)
-    ]
+    input_tensors = [_golden_input(i) for i in range(golden_vectors)]
 
     all_tensors: list[dict[str, torch.Tensor]] = []
     with torch.no_grad():
@@ -1609,9 +1718,16 @@ def build_pipeline_ir_from_onnx(
             layer_payload["clip_max"] = float(spec.clip_max)
 
         if spec.op_type in ("conv2d", "gemm"):
-            # Scheme A: weights are WEIGHT_BITS-wide (4 for INT4), activations INT8.
+            # Scheme A': weights WEIGHT_BITS-wide (4=INT4), activations INT8.
             layer_payload["weight_bits"] = WEIGHT_BITS
             layer_payload["activation_bits"] = 8
+            _per_oc = _composite_conv_scale_per_oc(spec) if spec.op_type == "conv2d" else None
+            if _per_oc is not None:
+                # Per-output-channel requant: one composite scale per OC. The RTL
+                # builds a per-lane SCALE_MULT/SHIFT ROM from these.
+                layer_payload["scale_factor_per_oc"] = [float(v) for v in _per_oc.tolist()]
+                layer_payload["weight_scale_per_oc"] = [
+                    float(v) for v in np.asarray(spec.weight_scale_per_oc).tolist()]
 
         if spec.op_type == "conv2d":
             layer_payload["stride"] = list(spec.stride)

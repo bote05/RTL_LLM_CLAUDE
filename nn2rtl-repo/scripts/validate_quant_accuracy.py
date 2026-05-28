@@ -43,6 +43,14 @@ def build_quant_modules(n_calib: int):
     modules = {s.module_id: F._build_int8_module(s, rtl_compat_conv=False)
                for s in specs}
     in_scale = float(specs[0].input_scale) or 1.0
+    # Exercise the integrated GPTQ per-OC path (the real golden-gen route).
+    if getattr(F, "USE_GPTQ", False):
+        gptq_inputs = [F.quantize_tensor_to_int8_range(
+            torch.tensor(imgs[i:i+1]) / in_scale) for i in range(n_calib)]
+        F._gptq_quantize_convs(specs, modules, gptq_inputs)
+        modules = {s.module_id: F._build_int8_module(s, rtl_compat_conv=False)
+                   for s in specs}
+        print("[validate] GPTQ per-OC path exercised")
     final = specs[-1]
     return specs, modules, in_scale, net_in, final.output_tensor_name, \
         float(final.output_scale)
