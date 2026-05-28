@@ -907,7 +907,7 @@ async function materializeAddTiledGoldenInputs(
   return outputPath;
 }
 
-async function materializeContractGoldens(layer: LayerIR): Promise<{
+export async function materializeContractGoldens(layer: LayerIR): Promise<{
   goldenInputsPath: string;
   goldenOutputsPath: string;
 }> {
