@@ -89,6 +89,11 @@ module engine_one_layer_tb;
     wire          engine_bias_rd_en;
     wire [8191:0] engine_bias_rd_data;
 
+    // ----- engine <-> per-OC scale ROM (Phase 2 INT4-GPTQ) -----
+    wire [21:0]   engine_scale_rd_addr;
+    wire          engine_scale_rd_en;
+    wire [8191:0] engine_scale_rd_data;
+
     // ====================================================================
     // 8 URAM weight banks (each 288-bit wide; only low 256 bits used).
     // ====================================================================
@@ -153,6 +158,15 @@ module engine_one_layer_tb;
         .rd_data(engine_bias_rd_data),
         .rd_en(engine_bias_rd_en));
 
+    // Per-OC scale ROM: same 8192-bit word geometry as bias, read at the same
+    // address (scale base_words == bias base_words). Reuses the bias_mem module.
+    bias_mem #(.SIZE_WORDS(256), .WORD_WIDTH(8192), .ADDR_W(8),
+        .MEM_INIT_FILE("output/weights/scale.mem"))
+      u_scale_mem (.clk(clk),
+        .rd_addr(engine_scale_rd_addr[7:0]),
+        .rd_data(engine_scale_rd_data),
+        .rd_en(engine_scale_rd_en));
+
     // ====================================================================
     // Activation BRAM (unified 24576×2048).
     // ====================================================================
@@ -206,7 +220,10 @@ module engine_one_layer_tb;
         .weight_rd_data (engine_weight_rd_data),
         .bias_rd_addr   (engine_bias_rd_addr),
         .bias_rd_en     (engine_bias_rd_en),
-        .bias_rd_data   (engine_bias_rd_data)
+        .bias_rd_data   (engine_bias_rd_data),
+        .scale_rd_addr  (engine_scale_rd_addr),
+        .scale_rd_en    (engine_scale_rd_en),
+        .scale_rd_data  (engine_scale_rd_data)
     );
 
     // ====================================================================
