@@ -23,9 +23,18 @@ def main() -> int:
         if not vf.exists():
             print(f"  skip {mid}: no {vf.name}"); skipped += 1; continue
         src = vf.read_text()
+        # ABSOLUTE path (match WEIGHTS_PATH/BIAS_PATH) so $readmemh resolves
+        # regardless of the sim cwd. A relative path leaves scale_rom uninit -> 0.
+        scale_path = f"{ROOT.as_posix()}/output/weights/{mid}_scale.mem"
         if ".SCALE_PATH(" in src:
-            already += 1; continue
-        scale_path = f"output/weights/{mid}_scale.mem"
+            # replace any existing (e.g. earlier relative) SCALE_PATH.
+            new, n = re.subn(r'\.SCALE_PATH\("[^"]*"\)',
+                             f'.SCALE_PATH("{scale_path}")', src, count=1)
+            if n == 1 and new != src:
+                vf.write_text(new); patched += 1
+            else:
+                already += 1
+            continue
         # insert .SCALE_PATH(...) right after the .SCALE_SHIFT(...) param.
         new, n = re.subn(r"(\.SCALE_SHIFT\s*\([^)]*\)\s*,)",
                          r'\1.SCALE_PATH("' + scale_path + r'"),',
