@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
   for(auto&w:act) w.fill(0);
   std::vector<std::array<uint32_t,64>> wmem;          // combined 8-bank low256 = 2048b
   std::vector<std::array<uint32_t,256>> bmem;         // 8192b bias words
+  std::vector<std::array<uint32_t,256>> smem;         // 8192b per-OC scale words
 
   // load 8 weight banks -> combined wmem[addr] = {bank7..bank0 low256}
   {
@@ -85,6 +86,14 @@ int main(int argc, char** argv) {
       std::array<uint32_t,256> wd; hex_to_words(ln,wd.data(),256); bmem.push_back(wd); }
     std::printf("[iso] loaded bias entries=%zu\n",bmem.size());
   }
+  // per-OC scale ROM (scale.mem in wdir): one 8192b word per oc_pass, read at
+  // the SAME address as bias (base_words identical).
+  {
+    std::ifstream f(wdir+"/scale.mem"); if(!f){ std::fprintf(stderr,"missing scale.mem\n"); return 2; }
+    std::string ln; while(std::getline(f,ln)){ if(ln.empty()) continue;
+      std::array<uint32_t,256> wd; hex_to_words(ln,wd.data(),256); smem.push_back(wd); }
+    std::printf("[iso] loaded scale entries=%zu\n",smem.size());
+  }
   // preload activations from goldin vec0 (256 bytes/pixel -> 2048b word, ch0=byte0)
   {
     std::ifstream f(goldin,std::ios::binary); if(!f){ std::fprintf(stderr,"missing goldin\n"); return 2; }
@@ -107,8 +116,8 @@ int main(int argc, char** argv) {
 
   auto* dut=new Vshared_engine;
   // registered-read holding regs (value latched at previous posedge)
-  std::array<uint32_t,64> act_reg{}, w_reg{}, w_reg2{}; std::array<uint32_t,256> b_reg{};
-  act_reg.fill(0); w_reg.fill(0); w_reg2.fill(0); b_reg.fill(0);
+  std::array<uint32_t,64> act_reg{}, w_reg{}, w_reg2{}; std::array<uint32_t,256> b_reg{}, s_reg{};
+  act_reg.fill(0); w_reg.fill(0); w_reg2.fill(0); b_reg.fill(0); s_reg.fill(0);
   uint64_t cyc=0;
 
   auto tick=[&](){
@@ -117,22 +126,25 @@ int main(int argc, char** argv) {
     for(int i=0;i<64;i++) dut->act_in_rd_data[i]=act_reg[i];
     for(int i=0;i<64;i++) dut->weight_rd_data[i]=wpresent[i];
     for(int i=0;i<256;i++) dut->bias_rd_data[i]=b_reg[i];
+    for(int i=0;i<256;i++) dut->scale_rd_data[i]=s_reg[i];
     // 2) clk low: settle combinational, engine presents addr/en + writes
     dut->clk=0; dut->eval();
     bool are=dut->act_in_rd_en; uint32_t ara=dut->act_in_rd_addr & 0x7FFF;
     bool we=dut->act_out_wr_en; uint32_t wa=dut->act_out_wr_addr & 0x7FFF;
     bool wre=dut->weight_rd_en; uint32_t wra=dut->weight_rd_addr & 0x1FFFF; // [16:0]
     bool bre=dut->bias_rd_en;   uint32_t bra=dut->bias_rd_addr & 0xFF;
+    bool sre=dut->scale_rd_en;  uint32_t sra=dut->scale_rd_addr & 0xFF;
     std::array<uint32_t,64> wrd; for(int i=0;i<64;i++) wrd[i]=dut->act_out_wr_data[i];
     // 3) compute upcoming registered values
-    std::array<uint32_t,64> n_act=act_reg, n_w=w_reg; std::array<uint32_t,256> n_b=b_reg;
+    std::array<uint32_t,64> n_act=act_reg, n_w=w_reg; std::array<uint32_t,256> n_b=b_reg, n_s=s_reg;
     if(are && ara<act.size()) n_act=act[ara];
     if(wre && wra<wmem.size()) n_w=wmem[wra];
     if(bre && bra<bmem.size()) n_b=bmem[bra];
+    if(sre && sra<smem.size()) n_s=smem[sra];
     // 4) clk high: posedge (engine consumes rd_data = *_reg)
     dut->clk=1; dut->eval();
     // 5) commit posedge effects (weights pipelined: w_reg2 <= w_reg <= mem)
-    act_reg=n_act; w_reg2=w_reg; w_reg=n_w; b_reg=n_b;
+    act_reg=n_act; w_reg2=w_reg; w_reg=n_w; b_reg=n_b; s_reg=n_s;
     if(we && wa<act.size()) act[wa]=wrd;
     cyc++;
   };
