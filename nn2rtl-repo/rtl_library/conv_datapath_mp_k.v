@@ -105,6 +105,9 @@ module conv_datapath_mp_k #(
     reg signed [SCALED_W-1:0] v_tmp;
     reg        [5:0]          out_shift;   // per-OC shift (OUTPUT stage)
     reg signed [SCALED_W-1:0] out_round;   // per-OC round bias (OUTPUT stage)
+`ifdef DBG_SCALE
+    integer dbg_n; initial dbg_n = 0;
+`endif
 
     reg [KGROUP_COUNTER_W-1:0] k_group;
     reg [OC_GROUP_W-1:0]       oc_group;
@@ -290,6 +293,16 @@ module conv_datapath_mp_k #(
                             data_out[out_oc*8 +: 8] <=
                                 (v_tmp >  127) ?  8'sd127 :
                                 (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
+`ifdef DBG_SCALE
+                            if ((out_oc == 0 || out_oc == 32) && dbg_n < 8) begin
+                                $display("[DBG_SCALE] oc=%0d biased=%0d scale_rom=%h mult=%0d shift=%0d out_round=%0d scaled=%0d v_tmp=%0d -> out=%0d",
+                                    out_oc, $signed(biased[fsm_lane_i]), scale_rom[out_oc],
+                                    $signed({1'b0,scale_rom[out_oc][15:0]}), out_shift, $signed(out_round),
+                                    $signed(scaled[fsm_lane_i]), $signed(v_tmp),
+                                    $signed((v_tmp>127)?8'sd127:(v_tmp<-128)?-8'sd128:v_tmp[7:0]));
+                                dbg_n = dbg_n + 1;
+                            end
+`endif
                         end
                     end
 
