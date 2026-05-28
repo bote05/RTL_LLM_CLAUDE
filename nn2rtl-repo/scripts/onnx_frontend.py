@@ -25,6 +25,7 @@ Flow
 from __future__ import annotations
 
 import copy
+import os
 import re
 import tempfile
 import warnings
@@ -835,6 +836,20 @@ def _safe_scale(max_abs: float) -> float:
     return max_abs / 127.0 if max_abs > 0.0 else 1.0
 
 
+# --- INT4/INT8 WEIGHT quantization (Scheme A: INT4 weights, INT8 activations) ---
+# Activations stay INT8 (_safe_scale, /127). Only WEIGHTS switch width via
+# NN2RTL_WEIGHT_BITS (8 default, 4 for INT4). The composite scale_factor and the
+# requant pipeline are unchanged — they operate on the 32-bit accumulator and
+# pick up the new (coarser) weight_scale automatically.
+WEIGHT_BITS = int(os.environ.get("NN2RTL_WEIGHT_BITS", "8"))
+_WQMAX = (1 << (WEIGHT_BITS - 1)) - 1   # INT8: 127, INT4: 7
+_WQMIN = -(1 << (WEIGHT_BITS - 1))      # INT8: -128, INT4: -8
+
+
+def _safe_weight_scale(max_abs: float) -> float:
+    return max_abs / float(_WQMAX) if max_abs > 0.0 else 1.0
+
+
 def fill_calibration_stats(
     specs: list[OnnxLayerSpec],
     stats: dict[str, float],
@@ -863,10 +878,10 @@ def fill_calibration_stats(
         spec.output_scale = _safe_scale(observed)
 
         if spec.op_type == "conv2d" and spec.weight is not None:
-            spec.weight_scale = _safe_scale(float(np.abs(spec.weight).max()))
+            spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
 
         if spec.op_type == "gemm" and spec.weight is not None:
-            spec.weight_scale = _safe_scale(float(np.abs(spec.weight).max()))
+            spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
 
         if spec.op_type == "add":
             spec.lhs_scale = _safe_scale(
@@ -882,7 +897,10 @@ def fill_calibration_stats(
 # ---------------------------------------------------------------------------
 
 def _quantize_weights_int8(weight: np.ndarray, scale: float) -> np.ndarray:
-    return np.clip(np.round(weight / scale), -128, 127).astype(np.int8)
+    # Name kept for call-site stability; clamp range follows WEIGHT_BITS
+    # (INT8: [-128,127], INT4: [-8,7]). Stored in int8 either way (INT4 values
+    # fit; the nibble-packing happens later in repack_weights_wide.py).
+    return np.clip(np.round(weight / scale), _WQMIN, _WQMAX).astype(np.int8)
 
 
 def _layer_ir_scale_factor(spec: OnnxLayerSpec) -> float:
@@ -1412,14 +1430,37 @@ def build_pipeline_ir_from_onnx(
         if first_input_shape:
             first_input_shape[0] = 1  # force batch=1
 
-    # --- Step 4: Build synthetic calibration inputs -------------------------
-    rng = np.random.default_rng(calibration_seed)
-    cal_feeds: list[dict[str, np.ndarray]] = [
-        {network_input_name: rng.integers(
-            -128, 128, size=tuple(first_input_shape), dtype=np.int32
-        ).astype(np.float32)}
-        for _ in range(num_calibration_samples)
-    ]
+    # --- Step 4: Build calibration inputs -----------------------------------
+    # NN2RTL_IMAGENET_CALIB=N feeds N real preprocessed ImageNet images (float,
+    # resize256+crop224+normalize) instead of synthetic INT8-range noise. With
+    # real floats, calibrate_onnx records true activation ranges -> proper scales
+    # (input_scale becomes ~range/127, not ~1.0). The golden input is then
+    # int8-quantized by input_scale at Step 7 (see use_real_input_scale).
+    imagenet_calib = int(os.environ.get("NN2RTL_IMAGENET_CALIB", "0"))
+    use_real_input_scale = imagenet_calib > 0
+    if imagenet_calib > 0:
+        import sys as _sys
+        _sd = str((repo_root / "scripts").resolve())
+        if _sd not in _sys.path:
+            _sys.path.insert(0, _sd)
+        import imagenet_util as _iu
+        _imgs, _labels = _iu.load_batch(imagenet_calib)  # (N,3,224,224) float32
+        num_calibration_samples = imagenet_calib
+        cal_feeds = [
+            {network_input_name: _imgs[i:i + 1].astype(np.float32)}
+            for i in range(imagenet_calib)
+        ]
+        warnings.warn(
+            f"ImageNet calibration: {imagenet_calib} real images "
+            f"(WEIGHT_BITS={WEIGHT_BITS}).", RuntimeWarning, stacklevel=2)
+    else:
+        rng = np.random.default_rng(calibration_seed)
+        cal_feeds = [
+            {network_input_name: rng.integers(
+                -128, 128, size=tuple(first_input_shape), dtype=np.int32
+            ).astype(np.float32)}
+            for _ in range(num_calibration_samples)
+        ]
 
     # --- Step 4b: Resolve concrete shapes (dynamic ONNX exports have -1 dims)
     concrete_shapes = resolve_concrete_shapes(model, cal_feeds[0])
@@ -1465,11 +1506,26 @@ def build_pipeline_ir_from_onnx(
 
     # --- Step 7: Run INT8 simulation to capture golden activations ----------
     torch.manual_seed(calibration_seed)
+    # Golden network input = round(input_float / input_scale) clamped to INT8.
+    # Synthetic path: inputs are already INT8-range (input_scale≈1) -> feed raw
+    # (historical behavior). Real-image path: divide the normalized float image
+    # by the calibrated input_scale so it maps onto the full INT8 range.
+    _in_scale = float(specs[0].input_scale) if use_real_input_scale else 1.0
+    if not _in_scale:
+        _in_scale = 1.0
+    # Calibration uses ALL N feeds (for scale stats), but the GOLDENS only need a
+    # few vectors for RTL verification. NN2RTL_GOLDEN_VECTORS caps the golden
+    # forward so 256-image calibration doesn't emit 256-vector (GB-sized) goldens.
+    _gv_env = int(os.environ.get("NN2RTL_GOLDEN_VECTORS", "0"))
+    golden_vectors = (_gv_env if _gv_env > 0
+                      else (2 if use_real_input_scale else num_calibration_samples))
+    golden_vectors = max(1, min(golden_vectors, num_calibration_samples))
     input_tensors = [
         quantize_tensor_to_int8_range(
             torch.tensor(cal_feeds[i][network_input_name]).reshape(first_input_shape)
+            / _in_scale
         )
-        for i in range(num_calibration_samples)
+        for i in range(golden_vectors)
     ]
 
     all_tensors: list[dict[str, torch.Tensor]] = []
@@ -1551,6 +1607,11 @@ def build_pipeline_ir_from_onnx(
 
         if spec.op_type == "relu" and spec.clip_max is not None:
             layer_payload["clip_max"] = float(spec.clip_max)
+
+        if spec.op_type in ("conv2d", "gemm"):
+            # Scheme A: weights are WEIGHT_BITS-wide (4 for INT4), activations INT8.
+            layer_payload["weight_bits"] = WEIGHT_BITS
+            layer_payload["activation_bits"] = 8
 
         if spec.op_type == "conv2d":
             layer_payload["stride"] = list(spec.stride)
