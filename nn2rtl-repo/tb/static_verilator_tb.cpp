@@ -1000,6 +1000,18 @@ int main(int argc, char** argv) {
     // and the Surgeon delegation prompt (which must fit in a model context
     // window). Surgeon only needs a sample of the mismatch to diagnose; the
     // aggregate stats (max_error, mean_error, sample_count) cover the rest.
+    // OPT-IN full dump (NN2RTL_DUMP_FULL=<path-prefix>) of the COMPLETE emission-order
+    // actual + expected arrays, for order-invariant MULTISET analysis in Python (the
+    // per-position compare below is tiling-order-sensitive and over-counts).
+    if (const char* dp = std::getenv("NN2RTL_DUMP_FULL")) {
+      auto dump = [&](const std::string& suf, const std::vector<int64_t>& vec) {
+        std::ofstream o(std::string(dp) + suf, std::ios::binary);
+        for (int64_t x : vec) { char c = static_cast<char>(x); o.write(&c, 1); }
+      };
+      dump(".actual.i8", actual_flat);
+      dump(".expected.i8", expected_flat);
+      std::fprintf(stderr, "[dump] wrote %s.{actual,expected}.i8 (%zu samples)\n", dp, actual_flat.size());
+    }
     constexpr size_t kMaxDiagnosticSamples = 1000;
     json expected_json;
     json got_json;

@@ -59,6 +59,7 @@ const part = flag("part") ?? "xcu250-figd2104-2L-e";
 const clockNs = Number(flag("clock-ns") ?? "20");
 const threads = Number(flag("threads") ?? "8");
 const topModule = "nn2rtl_top";
+const synthOnly = rawArgs.includes("--synth-only");
 
 const reportsDir = path.join(repoRoot, "output", "reports_integrated");
 const jsonReportPath = path.join(reportsDir, "first_light_synth.json");
@@ -102,6 +103,8 @@ async function collectSources(): Promise<string[]> {
     path.join(repoRoot, "output", "rtl", "engine", "requant_pipeline.v"),
     path.join(repoRoot, "output", "rtl", "engine", "bram_to_stream_bridge.v"),
     path.join(repoRoot, "rtl_library", "conv_datapath.v"),
+    path.join(repoRoot, "rtl_library", "conv_datapath_parallel.v"),
+    path.join(repoRoot, "rtl_library", "conv_datapath_mp_k.v"),
     path.join(repoRoot, "rtl_library", "coord_scheduler.v"),
     path.join(repoRoot, "rtl_library", "line_buf_window.v"),
   ];
@@ -128,15 +131,70 @@ function buildIntegratedTcl(input: {
   timingReportPath: string;
   checkpointPath: string;
 }): string {
+  // Sister report paths for post-route artifacts. We sit them next to the
+  // synth-level reports so both pre- and post-route data land in the tmpdir.
+  const postRouteUtilPath = input.utilReportPath.replace(/_util\.rpt$/, "_postroute_util.rpt");
+  const postRouteTimingPath = input.timingReportPath.replace(/_timing\.rpt$/, "_postroute_timing.rpt");
+  const postRoutePowerPath = input.timingReportPath.replace(/_timing\.rpt$/, "_postroute_power.rpt");
+  const synthDcpPath = input.checkpointPath.replace(/\.dcp$/, "_synth.dcp");
+  const optDcpPath = input.checkpointPath.replace(/\.dcp$/, "_opt.dcp");
+  const placedDcpPath = input.checkpointPath.replace(/\.dcp$/, "_placed.dcp");
   return [
     `set_param general.maxThreads ${threads}`,
     `puts "NN2RTL_INFO: requested general.maxThreads=${threads}, effective=[get_param general.maxThreads]"`,
     `read_verilog -sv ${input.verilogPaths.map(tclQuote).join(" \\\n                 ")}`,
-    `synth_design -top ${topModule} -part ${part} -flatten_hierarchy rebuilt`,
+    `puts "NN2RTL_INFO: auto_detect_xpm (load XPM library for URAM primitives)"`,
+    `auto_detect_xpm`,
+    `puts "NN2RTL_INFO: starting synth_design (with -verilog_define NN2RTL_SYNTHESIS for XPM-URAM path)"`,
+    `synth_design -top ${topModule} -part ${part} -flatten_hierarchy rebuilt -verilog_define NN2RTL_SYNTHESIS=1`,
     `create_clock -name clk -period ${clockNs} [get_ports clk]`,
-    `report_utilization -file ${tclQuote(input.utilReportPath)}`,
-    `report_timing_summary -check_timing_verbose -max_paths 20 -file ${tclQuote(input.timingReportPath)}`,
-    `write_checkpoint -force ${tclQuote(input.checkpointPath)}`,
+    `puts "NN2RTL_INFO: synth-level utilization (saved to ${path.basename(input.utilReportPath)}.synth)"`,
+    `report_utilization -file ${tclQuote(input.utilReportPath + '.synth')}`,
+    `puts "NN2RTL_INFO: write synth checkpoint"`,
+    `write_checkpoint -force ${tclQuote(synthDcpPath)}`,
+    ...(synthOnly
+      ? [
+          // Synth-only spike: stop here and surface the synth-level numbers via
+          // the conventional sinks so parseVivadoReport sees them.
+          `puts "NN2RTL_INFO: --synth-only: mirroring synth util to conventional sink"`,
+          `file copy -force ${tclQuote(input.utilReportPath + '.synth')} ${tclQuote(input.utilReportPath)}`,
+          `puts "NN2RTL_INFO: synth-only spike complete (no opt/place/route)"`,
+        ]
+      : [
+          `puts "NN2RTL_INFO: starting opt_design"`,
+          `opt_design`,
+          `puts "NN2RTL_INFO: write opt checkpoint"`,
+          `write_checkpoint -force ${tclQuote(optDcpPath)}`,
+          `puts "NN2RTL_INFO: starting place_design"`,
+          `place_design`,
+          `puts "NN2RTL_INFO: write placed checkpoint"`,
+          `write_checkpoint -force ${tclQuote(placedDcpPath)}`,
+          // route_design -directive Explore: the 2026-05-25 default route at
+          // 20 ns failed at Phase 5.1 with 1.05M overlaps; the 2026-05-26
+          // Explore route at 40 ns succeeded with +10 ns slack. With the
+          // requant_pipeline fanout fix (per-group g_ctrl replication), the
+          // 20 ns target should now be reachable, but keep Explore as the
+          // safer default. To use the stock router, set NN2RTL_VIVADO_ROUTE
+          // _DIRECTIVE_NONE=1 in the env (not implemented; remove the flag
+          // here to revert).
+          `puts "NN2RTL_INFO: starting route_design (directive=Explore)"`,
+          `route_design -directive Explore`,
+          `puts "NN2RTL_INFO: write routed checkpoint"`,
+          `write_checkpoint -force ${tclQuote(input.checkpointPath)}`,
+          `puts "NN2RTL_INFO: post-route utilization (the meaningful number)"`,
+          `report_utilization -file ${tclQuote(postRouteUtilPath)}`,
+          `puts "NN2RTL_INFO: post-route timing summary"`,
+          `report_timing_summary -check_timing_verbose -max_paths 20 -file ${tclQuote(postRouteTimingPath)}`,
+          `puts "NN2RTL_INFO: post-route power (vectorless)"`,
+          `report_power -file ${tclQuote(postRoutePowerPath)}`,
+          // The TS parser reads utilReportPath + timingReportPath at the
+          // conventional names. Make those the POST-ROUTE versions so
+          // parseVivadoReport sees the meaningful numbers (the synth-level
+          // numbers stay available next to them as `*.rpt.synth`).
+          `file copy -force ${tclQuote(postRouteUtilPath)} ${tclQuote(input.utilReportPath)}`,
+          `file copy -force ${tclQuote(postRouteTimingPath)} ${tclQuote(input.timingReportPath)}`,
+          `puts "NN2RTL_INFO: full integration flow complete"`,
+        ]),
   ].join("\n") + "\n";
 }
 
@@ -157,6 +215,20 @@ async function main(): Promise<void> {
       const text = await readFile(src, "utf8");
       await writeFile(dest, convertReadmemhAbs(text, repoRoot), "utf8");
       copiedPaths.push(dest);
+    }
+
+    // Belt-and-suspenders for XPM MEMORY_INIT_FILE resolution: Vivado looks for
+    // the .mem file as a Tcl source file path AND in the working directory. We
+    // already rewrite paths to absolute via convertReadmemhAbs; ALSO copy the
+    // .mem files into the Vivado tempdir so basename-lookup works (in case some
+    // Vivado XPM internal path expects same-dir resolution).
+    const weightsDir = path.join(repoRoot, "output", "weights");
+    if (existsSync(weightsDir)) {
+      const memFiles = (await readdir(weightsDir)).filter((f) => f.endsWith(".mem"));
+      for (const mem of memFiles) {
+        await copyFile(path.join(weightsDir, mem), path.join(tempDir, mem));
+      }
+      console.log(`[first-light] copied ${memFiles.length} .mem files into Vivado tempdir`);
     }
 
     const utilReportPath = path.join(tempDir, "first_light_util.rpt");
@@ -210,6 +282,25 @@ async function main(): Promise<void> {
     }
     const elapsed = (Date.now() - t0) / 1000;
     console.log(`[first-light] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk})`);
+
+    // Persist any intermediate checkpoints from the tmpdir to the safe
+    // location so we can resume opt/place/route without redoing synth.
+    // The tmpdir is auto-deleted on exit; checkpoints there would be lost.
+    const safeCheckpointDir = path.join(reportsDir, "checkpoints");
+    await mkdir(safeCheckpointDir, { recursive: true });
+    const tag = synthOnly ? "_URAM" : "";
+    const dcpsToPersist = [
+      { src: checkpointPath.replace(/\.dcp$/, "_synth.dcp"),  dst: `first_light_synth${tag}.dcp` },
+      { src: checkpointPath.replace(/\.dcp$/, "_opt.dcp"),    dst: `first_light_opt${tag}.dcp` },
+      { src: checkpointPath.replace(/\.dcp$/, "_placed.dcp"), dst: `first_light_placed${tag}.dcp` },
+      { src: checkpointPath,                                   dst: `first_light_routed${tag}.dcp` },
+    ];
+    for (const { src, dst } of dcpsToPersist) {
+      if (existsSync(src)) {
+        await copyFile(src, path.join(safeCheckpointDir, dst));
+        console.log(`[first-light] persisted ${path.basename(src)} -> ${dst}`);
+      }
+    }
 
     const utilReport = existsSync(utilReportPath) ? await readFile(utilReportPath, "utf8") : "";
     const timingReport = existsSync(timingReportPath) ? await readFile(timingReportPath, "utf8") : "";

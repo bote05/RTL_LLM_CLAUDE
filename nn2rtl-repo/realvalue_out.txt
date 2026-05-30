@@ -1,0 +1,4 @@
+COMPILE_RC=0
+=== captured 6272 output beats (expect 6272) ===
+tb\conv200_realvalue_tb.v:74: $finish called at 10682825000 (1ps)
+RUN_RC=0

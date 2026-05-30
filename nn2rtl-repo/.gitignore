@@ -18,13 +18,19 @@ npm-debug.log*
 
 # Simulator artifacts (Verilator / Icarus / Yosys / GTKWave)
 obj_dir/
+obj_dir*/
 tb_build*/
 build_*_tb/
+build_*tb*/
+build_engine_*/
 build_skip_fifo_block/
 *.vcd
 *.fst
 *.vvp
 *.blif
+
+# One-off Vivado/sim experiment harnesses (proof scripts + EDA droppings)
+uram_init_test/
 
 # Python virtualenvs
 .venv/

@@ -585,6 +585,9 @@ function emit(input: EmitInput): string {
   lines.push(`    wire [21:0]                engine_bias_rd_addr;`);
   lines.push(`    wire                       engine_bias_rd_en;`);
   lines.push(`    wire [8191:0]              engine_bias_rd_data;`);
+  lines.push(`    wire [21:0]                engine_scale_rd_addr;`);
+  lines.push(`    wire                       engine_scale_rd_en;`);
+  lines.push(`    wire [8191:0]              engine_scale_rd_data;`);
   lines.push(`    wire                       engine_start;`);
   lines.push(`    wire                       engine_busy;`);
   lines.push(`    wire                       engine_done;`);
@@ -906,6 +909,21 @@ function emit(input: EmitInput): string {
   lines.push(`        .rd_en(engine_bias_rd_en)`);
   lines.push(`    );`);
   lines.push(``);
+  // ----- per-OC requant scale ROM (Phase 2 INT4-GPTQ): same shape as bias, read
+  //       at the SAME address as bias (scale base_words == bias base_words). -----
+  lines.push(`    // ----- per-OC requant scale ROM (256 × {shift,mult} per oc_pass) -----`);
+  lines.push(`    bias_mem #(`);
+  lines.push(`        .SIZE_WORDS(256),`);
+  lines.push(`        .WORD_WIDTH(8192),`);
+  lines.push(`        .ADDR_W(8),`);
+  lines.push(`        .MEM_INIT_FILE("output/weights/scale.mem")`);
+  lines.push(`    ) u_scale_mem (`);
+  lines.push(`        .clk(clk),`);
+  lines.push(`        .rd_addr(engine_scale_rd_addr[7:0]),`);
+  lines.push(`        .rd_data(engine_scale_rd_data),`);
+  lines.push(`        .rd_en(engine_scale_rd_en)`);
+  lines.push(`    );`);
+  lines.push(``);
 
   // ---------------- Activation BRAM subsystem (Fix 8) ----------------
   //
@@ -1141,7 +1159,10 @@ function emit(input: EmitInput): string {
   // Bias port (task 13a Bundle A / Fix 5).
   lines.push(`        .bias_rd_addr(engine_bias_rd_addr),`);
   lines.push(`        .bias_rd_en(engine_bias_rd_en),`);
-  lines.push(`        .bias_rd_data(engine_bias_rd_data)`);
+  lines.push(`        .bias_rd_data(engine_bias_rd_data),`);
+  lines.push(`        .scale_rd_addr(engine_scale_rd_addr),`);
+  lines.push(`        .scale_rd_en(engine_scale_rd_en),`);
+  lines.push(`        .scale_rd_data(engine_scale_rd_data)`);
   lines.push(`    );`);
   lines.push(``);
 
@@ -1398,13 +1419,16 @@ function emit(input: EmitInput): string {
   lines.push(``);
 
   // ---- uram_weight_bank: one of NUM_BANKS parallel URAM banks. ----
-  //   - Native 288-bit width (URAM cascade: 4 URAM288 primitives in parallel).
-  //   - DEPTH = total_mac_cycles from the weight memory map.
-  //   - The .mem file is one bank's slice: 72 hex chars per line, low 256
-  //     bits useful, high 32 bits zero-pad (matches the URAM physical width).
-  //   - `(* ram_style = "ultra" *)` directs Vivado to URAM placement (vs
-  //     BRAM). One bank uses ~96 URAM288 primitives for 22.4 MB / 8 banks of
-  //     weight storage.
+  //   Two implementations behind a `NN2RTL_SYNTHESIS` ifdef:
+  //     - Synthesis path (Vivado): xpm_memory_sprom with MEMORY_PRIMITIVE="ultra".
+  //       Forces actual URAM placement; takes a `.mem` MEMORY_INIT_FILE.
+  //     - Simulation path (Verilator/iverilog): behavioral reg array +
+  //       $readmemh on a `.hex` file. XPM primitives don't simulate cleanly
+  //       under open-source simulators.
+  //   Define `+define+NN2RTL_SYNTHESIS` (or read_verilog -d NN2RTL_SYNTHESIS)
+  //   when building for Vivado synthesis.
+  //   The `.mem` and `.hex` files are emitted in parallel by the weight
+  //   exporter — same content, just whitespace vs $readmemh hex syntax.
   lines.push(`module uram_weight_bank #(`);
   lines.push(`    parameter integer DEPTH         = 1024,`);
   lines.push(`    parameter integer ADDR_W        = 17,`);
@@ -1412,17 +1436,66 @@ function emit(input: EmitInput): string {
   lines.push(`) (`);
   lines.push(`    input  wire                    clk,`);
   lines.push(`    input  wire [ADDR_W-1:0]       rd_addr,`);
-  lines.push(`    output reg  [287:0]            rd_data,`);
+  lines.push(`    output wire [287:0]            rd_data,`);
   lines.push(`    input  wire                    rd_en`);
   lines.push(`);`);
-  lines.push(`    (* ram_style = "ultra" *) reg [287:0] mem [0:DEPTH-1];`);
+  lines.push(`\`ifdef NN2RTL_SYNTHESIS`);
+  lines.push(`    // Vivado-only: forces URAM via XPM. MEM_INIT_FILE is a .mem file.`);
+  lines.push(`    xpm_memory_sprom #(`);
+  lines.push(`        .ADDR_WIDTH_A(ADDR_W),`);
+  lines.push(`        .AUTO_SLEEP_TIME(0),`);
+  lines.push(`        .CASCADE_HEIGHT(0),`);
+  lines.push(`        .ECC_MODE("no_ecc"),`);
+  lines.push(`        .MEMORY_INIT_FILE(MEM_INIT_FILE),`);
+  lines.push(`        .MEMORY_INIT_PARAM(""),`);
+  lines.push(`        .MEMORY_OPTIMIZATION("true"),`);
+  lines.push(`        .MEMORY_PRIMITIVE("ultra"),`);
+  // MEMORY_SIZE is the actual memory size in bits (not address-space size).
+  // DEPTH * 288 fits the .mem init file exactly; unused addresses up to
+  // 2^ADDR_WIDTH_A read 0. Sizing by DEPTH (instead of 2^ADDR_W) drops the
+  // URAM count from ~80% to ~60% utilization, leaving headroom.
+  lines.push(`        .MEMORY_SIZE(DEPTH * 288),`);
+  lines.push(`        .MESSAGE_CONTROL(0),`);
+  lines.push(`        .READ_DATA_WIDTH_A(288),`);
+  // READ_LATENCY_A must be >= 2 for MEMORY_PRIMITIVE="ultra". With 1, XPM
+  // elaboration leaves `aread__N` primitives as black boxes and opt_design
+  // refuses to run. URAM physically needs 2+ cycles for the cascade output
+  // register. Consumer-side (engine mac_array) sees data 1 cycle later than
+  // before; output values are unchanged, just the emit cycle shifts by 1.
+  lines.push(`        .READ_LATENCY_A(2),`);
+  lines.push(`        .READ_RESET_VALUE_A("0"),`);
+  lines.push(`        .RST_MODE_A("SYNC"),`);
+  lines.push(`        .SIM_ASSERT_CHK(0),`);
+  lines.push(`        .USE_MEM_INIT(1),`);
+  lines.push(`        .USE_MEM_INIT_MMI(0),`);
+  lines.push(`        .WAKEUP_TIME("disable_sleep")`);
+  lines.push(`    ) u_xpm (`);
+  lines.push(`        .douta(rd_data),`);
+  lines.push(`        .addra(rd_addr),`);
+  lines.push(`        .clka(clk),`);
+  lines.push(`        .ena(rd_en),`);
+  lines.push(`        .rsta(1'b0),`);
+  lines.push(`        .regcea(1'b1),`);
+  lines.push(`        .sleep(1'b0),`);
+  lines.push(`        .injectdbiterra(1'b0),`);
+  lines.push(`        .injectsbiterra(1'b0),`);
+  lines.push(`        .dbiterra(),`);
+  lines.push(`        .sbiterra()`);
+  lines.push(`    );`);
+  lines.push(`\`else`);
+  lines.push(`    // Behavioral path for Verilator/iverilog. MEM_INIT_FILE is a .hex file.`);
+  lines.push(`    // 2-cycle read latency to match XPM URAM READ_LATENCY_A=2.`);
+  lines.push(`    reg [287:0] mem [0:DEPTH-1];`);
   lines.push(`    initial begin`);
   lines.push(`        if (MEM_INIT_FILE != "") $readmemh(MEM_INIT_FILE, mem);`);
   lines.push(`    end`);
-  lines.push(`    // Synchronous 1-cycle read (UltraScale+ URAM cascade native).`);
+  lines.push(`    reg [287:0] rd_data_r1, rd_data_r2;`);
   lines.push(`    always @(posedge clk) begin`);
-  lines.push(`        if (rd_en) rd_data <= mem[rd_addr];`);
+  lines.push(`        if (rd_en) rd_data_r1 <= mem[rd_addr];`);
+  lines.push(`        rd_data_r2 <= rd_data_r1;`);
   lines.push(`    end`);
+  lines.push(`    assign rd_data = rd_data_r2;`);
+  lines.push(`\`endif`);
   lines.push(`endmodule`);
   lines.push(``);
 

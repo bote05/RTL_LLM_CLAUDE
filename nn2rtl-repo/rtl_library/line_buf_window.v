@@ -170,6 +170,20 @@ module line_buf_window #(
             reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
             reg [IC*8-1:0] q_reg;
 
+            // [BANK-INIT FIX] Explicitly zero the line-buffer BRAM + output reg.
+            // The padding/never-written cells (e.g. addr=MAX_IN_COL) are READ for
+            // border padding and were previously RELIED UPON to be 0 via Vivado's
+            // implicit BRAM config-zeroing — a dependency on uninitialized memory.
+            // That is fragile (X/non-zero in sim depending on --x-initial) and is the
+            // suspected source of the 3x3-conv in-chain magnitude deficit. Zeroing
+            // here matches FPGA power-on BRAM state and makes sim deterministic.
+            integer _binit;
+            initial begin
+                q_reg = {(IC*8){1'b0}};
+                for (_binit = 0; _binit < MEM_DEPTH; _binit = _binit + 1)
+                    mem[_binit] = {(IC*8){1'b0}};
+            end
+
             wire is_writing = (current_write_slot == g_slot[SLOT_W-1:0]);
             wire write_en   =
                 handshake_real && !right_padded && !bottom_padded && is_writing;

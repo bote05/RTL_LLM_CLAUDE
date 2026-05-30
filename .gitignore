@@ -33,3 +33,16 @@ vitis_hls.log
 vitis_hls.jou
 dfx_runtime.txt
 .Xil/
+*.dcp
+*.pb
+*.wdb
+*.backup.log
+xsim.dir/
+clockInfo.txt
+
+# Large datasets (downloaded, never committed)
+imagenet-val/
+imagenet/
+**/imagenet-val/
+*.tar
+*.tar.gz

@@ -12,8 +12,8 @@
     { "name": "data_out", "direction": "output", "width_expr": "output_width_bits", "role": "one packed output pixel per beat" }
   ],
   "fit_constraints": {
-    "max_bus_width_bits": 4096,
-    "max_on_chip_weight_bytes": 1048576,
+    "max_bus_width_bits": 16384,
+    "max_on_chip_weight_bytes": 2097152,
     "bram_formula": "conv2d weights use num_weights bytes plus optional output_channels*4 bias bytes; activations are streamed and not stored by the contract.",
     "buffer_sizing_rules": [
       "input_width_bits must equal full input channel pack (or lhs/rhs operand pack for add)",

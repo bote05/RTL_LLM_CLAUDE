@@ -55,7 +55,7 @@ module conv_datapath_mp_k #(
 
     // ---------------- Derived widths ----------------------------------
     localparam integer K_GROUPS         = K_TOTAL / MP_K;  // assumes K_TOTAL % MP_K == 0
-    localparam integer WIDE_W           = MP * MP_K * 8;   // bits per weight entry
+    localparam integer WIDE_W           = MP * MP_K * 4;   // bits per weight entry (INT4 nibble-packed, 2 wt/byte)
     localparam integer PROD_W           = 16;
     localparam integer TREE_W           = PROD_W + ((MP_K <= 1) ? 0 : $clog2(MP_K));
     localparam integer ACC_W            = TREE_W + ((K_GROUPS <= 1) ? 0 : $clog2(K_GROUPS));
@@ -182,7 +182,7 @@ module conv_datapath_mp_k #(
         for (cs_lane_i = 0; cs_lane_i < MP; cs_lane_i = cs_lane_i + 1) begin
             sum_lane_w[cs_lane_i] = {TREE_W{1'b0}};
             for (cs_kpos = 0; cs_kpos < MP_K; cs_kpos = cs_kpos + 1) begin
-                prod_w = $signed(weight_word_q[(cs_lane_i * MP_K + cs_kpos) * 8 +: 8]) *
+                prod_w = $signed(weight_word_q[(cs_lane_i * MP_K + cs_kpos) * 4 +: 4]) *
                          $signed(tap_q[cs_kpos]);
                 sum_lane_w[cs_lane_i] = sum_lane_w[cs_lane_i] + prod_w;
             end
