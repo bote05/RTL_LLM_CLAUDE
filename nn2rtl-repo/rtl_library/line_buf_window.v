@@ -61,7 +61,35 @@ module line_buf_window #(
     parameter integer KH = 3,
     parameter integer KW = 3,
     parameter integer PW = 1,
-    parameter integer PH = 1
+    parameter integer PH = 1,
+    // When 1, drive the legacy wide `window_flat` output (KH*KW*IC*8 bits).
+    // Default 1 = BACKWARD-COMPATIBLE: legacy (cross-channel) consumers that
+    // instantiate WITHOUT this param (all ResNet spatial convs: node_conv_196..,
+    // and conv_datapath_mp_k) keep driving the full window_flat unchanged.
+    // The routing-congestion fix consumers (MobileNet depthwise) EXPLICITLY pass
+    // EXPOSE_FULL_WINDOW(0) + read the narrow `chan_window_flat` (one channel per
+    // cycle via `channel_select`), so the wide cross-channel mux is NOT built for
+    // them. (Flipping default 0->1 prevents a silent break of unmodified ResNet
+    // instantiations on a fresh rebuild; mbv2 sets it to 0 explicitly.)
+    parameter integer EXPOSE_FULL_WINDOW = 1,
+
+    // [FIT-FIX 2026-06-02] Selects the synthesis ram_style attribute placed on the
+    // per-slot line-buffer memories (`mem`). This is a MAPPING-ONLY knob: it only
+    // tells Vivado which primitive to infer; the RTL behaviour (values, latency,
+    // control) is BIT-IDENTICAL for either setting (Verilator ignores ram_style),
+    // and the right-pad read is masked explicitly so correctness does NOT depend
+    // on the chosen primitive's power-up state in either case.
+    //   1 (DEFAULT) = "ultra"  -> URAM288. BACKWARD-COMPATIBLE: ResNet spatial
+    //                 convs (node_conv_196.., conv_datapath_mp_k) instantiate
+    //                 WITHOUT this param and keep the intentional URAM mapping
+    //                 alongside EXPOSE_FULL_WINDOW=1.
+    //   0           = "block"  -> RAMB36. MobileNetV2 depthwise convs pass 0 so
+    //                 their shallow-but-very-wide per-slot buffers (e.g. C=960 ->
+    //                 8 deep x 7680 bit) reshape into block RAM instead of
+    //                 width-binding URAM288 (4096x72 fixed geometry => ~2394
+    //                 URAM288 = 187% OVER on U250). The same 2.87 Mbit packs into
+    //                 ~78 RAMB36. URAM is reserved for the engine weight banks.
+    parameter integer LINE_BUF_USE_URAM = 1
 ) (
     input  wire                               clk,
     input  wire                               rst_n,
@@ -84,9 +112,25 @@ module line_buf_window #(
     input  wire                               valid_in,
     input  wire [IC*8-1:0]                    data_in,
 
+    // Channel selector for the narrow `chan_window_flat` output below.
+    // Depthwise datapaths drive this with current_global_oc (one channel
+    // per cycle). Width is wide enough to index any of the IC channels.
+    // (IC==1 would make $clog2 zero-width, so floor the width at 1.)
+    input  wire [((IC > 1) ? $clog2(IC) : 1)-1:0] channel_select,
+
+    // Narrow per-channel window for depthwise datapaths. KH*KW bytes, one
+    // per receptive-field tap, all for the SINGLE channel `channel_select`:
+    //   chan_window_flat[(kh*KW + kw)*8 +: 8]
+    //     == window_flat[((kh*KW + kw)*IC + channel_select)*8 +: 8]
+    // Read from the SAME three source regions as window_flat (window shift
+    // regs / window_kwm1_wire BRAM mux / bypass_reg). ZERO arithmetic change.
+    output wire [KH*KW*8-1:0]                 chan_window_flat,
+
     // Flat packed window for the datapath. Layout matches
     // conv_datapath's tap_at():
     //   window_flat[(kh*KW*IC + kw*IC + ic)*8 +: 8]
+    // Only driven when EXPOSE_FULL_WINDOW==1 (see generate at end). When 0
+    // it is held at 0 so the wide cross-channel mux is not instantiated.
     output wire [KH*KW*IC*8-1:0]              window_flat
 );
 
@@ -96,6 +140,8 @@ module line_buf_window #(
     localparam integer SLOT_W     = (KH > 1) ? $clog2(KH) : 1;
     localparam integer SCHED_COL_W = $clog2(IW + PW + 1);
     localparam integer SCHED_ROW_W = $clog2(IH + PH + 1);
+    // Width of channel_select (matches the port-declaration expression).
+    localparam integer CSEL_W      = (IC > 1) ? $clog2(IC) : 1;
 
     // KH is a 32-bit `parameter integer`; we perform pointer arithmetic
     // and modulo-KH reductions in (SLOT_W+1)-bit space. The width
@@ -153,58 +199,88 @@ module line_buf_window #(
         end
     end
 
-    // ---------------- Per-slot BRAM storage --------------------------
+    // ---------------- Per-slot BRAM/URAM storage ---------------------
     // KH separate single-port memories. Vivado infers each as a
-    // BRAM18/BRAM36 instance from the standard "if (we) write; q <=
-    // mem[addr];" template + the (* ram_style = "block" *) attribute.
+    // BRAM/URAM instance from the standard "if (we) write; q <=
+    // mem[addr];" template + the (* ram_style = ... *) attribute.
     // The address path is unconditional (sched_in_col) so synth
     // sees a clean inference target -- no muxes wrapped around the
     // address.
+    //
+    // [FIT-FIX 2026-06-02] The ram_style attribute is selected by the
+    // LINE_BUF_USE_URAM parameter via a generate-if. The two branches are
+    // BIT-IDENTICAL apart from the single (* ram_style *) attribute line:
+    //   LINE_BUF_USE_URAM==1 -> "ultra" (URAM288) -- ResNet default, unchanged.
+    //   LINE_BUF_USE_URAM==0 -> "block" (RAMB36)  -- MobileNet depthwise; the
+    //     shallow-wide buffers reshape into block RAM instead of width-binding
+    //     URAM (see the parameter doc above). ram_style is a SYNTHESIS attribute
+    //     only -- Verilator ignores it, so simulation output is identical for
+    //     either branch (this is what the byte-exact verification confirms).
+    //
+    // Shared correctness reasoning (holds for BOTH primitives):
+    // [FIT-FIX 2026-05-30] mem is NOT content-initialized (URAM cannot be, and we
+    // keep the no-init template uniform so the two branches stay bit-identical).
+    // Correctness does NOT depend on the mem power-up state: the only read path
+    // that previously relied on a never-written cell reading 0 is the RIGHT-PAD
+    // column (addr >= IW, e.g. MAX_IN_COL); that is masked explicitly at the read
+    // (`right_padded ? 0` below). Top-/bottom-pad + cross-frame stale reads are
+    // already masked by `row_valid` (window_kwm1_wire), so no undefined mem cell
+    // is ever consumed. q_reg is a fabric reg (not BRAM/URAM) so its zero-init is
+    // kept.
 
     wire [IC*8-1:0] q_array [0:KH-1];
 
     genvar g_slot;
     generate
         for (g_slot = 0; g_slot < KH; g_slot = g_slot + 1) begin : gen_slot
-            (* ram_style = "block" *)
-            reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
             reg [IC*8-1:0] q_reg;
-
-            // [BANK-INIT FIX] Explicitly zero the line-buffer BRAM + output reg.
-            // The padding/never-written cells (e.g. addr=MAX_IN_COL) are READ for
-            // border padding and were previously RELIED UPON to be 0 via Vivado's
-            // implicit BRAM config-zeroing — a dependency on uninitialized memory.
-            // That is fragile (X/non-zero in sim depending on --x-initial) and is the
-            // suspected source of the 3x3-conv in-chain magnitude deficit. Zeroing
-            // here matches FPGA power-on BRAM state and makes sim deterministic.
-            integer _binit;
-            initial begin
-                q_reg = {(IC*8){1'b0}};
-                for (_binit = 0; _binit < MEM_DEPTH; _binit = _binit + 1)
-                    mem[_binit] = {(IC*8){1'b0}};
-            end
+            initial q_reg = {(IC*8){1'b0}};
 
             wire is_writing = (current_write_slot == g_slot[SLOT_W-1:0]);
             wire write_en   =
                 handshake_real && !right_padded && !bottom_padded && is_writing;
 
-            always @(posedge clk) begin
-                if (write_en) begin
-                    mem[sched_in_col] <= data_in;
+            if (LINE_BUF_USE_URAM != 0) begin : gen_mem_ultra
+                (* ram_style = "ultra" *)
+                reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
+
+                always @(posedge clk) begin
+                    if (write_en) begin
+                        mem[sched_in_col] <= data_in;
+                    end
+                    // q_reg must be FROZEN whenever the scheduler is stalled.
+                    // The scheduler asserts output_fires the cycle AFTER it
+                    // advances past a firing coordinate, with sched_in_col
+                    // already pointing at the NEXT coord. If q_reg free-ran
+                    // off live sched_in_col, the rightmost window column would
+                    // change mid-MAC -- the MAC's tap_at() reads window_flat
+                    // at every k_counter step, so a moving q would corrupt
+                    // every k>=1 contribution. Gating on sched_advance keeps
+                    // q stable from output_fires through the entire MAC pass
+                    // (stall_in = mac_busy holds sched_advance low for that
+                    // window, by design of the split-architecture contract).
+                    // [FIT-FIX 2026-05-30] right-pad columns (addr >= IW) read 0,
+                    // masked explicitly (mem has no zero-init). Byte-exact vs the
+                    // prior BRAM-zero-init design (which also yielded 0 here, and
+                    // which Verilator --x-initial 0 reproduced).
+                    if (sched_advance) begin
+                        q_reg <= right_padded ? {(IC*8){1'b0}} : mem[sched_in_col];
+                    end
                 end
-                // q_reg must be FROZEN whenever the scheduler is stalled.
-                // The scheduler asserts output_fires the cycle AFTER it
-                // advances past a firing coordinate, with sched_in_col
-                // already pointing at the NEXT coord. If q_reg free-ran
-                // off live sched_in_col, the rightmost window column would
-                // change mid-MAC -- the MAC's tap_at() reads window_flat
-                // at every k_counter step, so a moving q would corrupt
-                // every k>=1 contribution. Gating on sched_advance keeps
-                // q stable from output_fires through the entire MAC pass
-                // (stall_in = mac_busy holds sched_advance low for that
-                // window, by design of the split-architecture contract).
-                if (sched_advance) begin
-                    q_reg <= mem[sched_in_col];
+            end else begin : gen_mem_block
+                (* ram_style = "block" *)
+                reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
+
+                // Identical template to gen_mem_ultra; differs ONLY in the
+                // (* ram_style = "block" *) attribute above so the shallow-wide
+                // buffers reshape into RAMB36 rather than width-binding URAM.
+                always @(posedge clk) begin
+                    if (write_en) begin
+                        mem[sched_in_col] <= data_in;
+                    end
+                    if (sched_advance) begin
+                        q_reg <= right_padded ? {(IC*8){1'b0}} : mem[sched_in_col];
+                    end
                 end
             end
 
@@ -310,19 +386,59 @@ module line_buf_window #(
 
     genvar g_kh, g_kw, g_ic;
     generate
-        for (g_kh = 0; g_kh < KH; g_kh = g_kh + 1) begin : gen_win_kh
-            for (g_kw = 0; g_kw < KW; g_kw = g_kw + 1) begin : gen_win_kw
-                for (g_ic = 0; g_ic < IC; g_ic = g_ic + 1) begin : gen_win_ic
-                    if (g_kw < KW - 1) begin : gen_shift_col
-                        assign window_flat[(g_kh*KW*IC + g_kw*IC + g_ic)*8 +: 8] =
-                            window[g_kh][g_kw][g_ic];
-                    end else if (g_kh < KH - 1) begin : gen_bram_col
-                        assign window_flat[(g_kh*KW*IC + g_kw*IC + g_ic)*8 +: 8] =
-                            window_kwm1_wire[g_kh][g_ic*8 +: 8];
-                    end else begin : gen_bypass_col
-                        assign window_flat[(g_kh*KW*IC + g_kw*IC + g_ic)*8 +: 8] =
-                            bypass_reg[g_ic];
+        if (EXPOSE_FULL_WINDOW != 0) begin : gen_full_window
+            for (g_kh = 0; g_kh < KH; g_kh = g_kh + 1) begin : gen_win_kh
+                for (g_kw = 0; g_kw < KW; g_kw = g_kw + 1) begin : gen_win_kw
+                    for (g_ic = 0; g_ic < IC; g_ic = g_ic + 1) begin : gen_win_ic
+                        if (g_kw < KW - 1) begin : gen_shift_col
+                            assign window_flat[(g_kh*KW*IC + g_kw*IC + g_ic)*8 +: 8] =
+                                window[g_kh][g_kw][g_ic];
+                        end else if (g_kh < KH - 1) begin : gen_bram_col
+                            assign window_flat[(g_kh*KW*IC + g_kw*IC + g_ic)*8 +: 8] =
+                                window_kwm1_wire[g_kh][g_ic*8 +: 8];
+                        end else begin : gen_bypass_col
+                            assign window_flat[(g_kh*KW*IC + g_kw*IC + g_ic)*8 +: 8] =
+                                bypass_reg[g_ic];
+                        end
                     end
+                end
+            end
+        end else begin : gen_no_full_window
+            // Wide window not exposed -- tie off so the cross-channel mux is
+            // never instantiated (eliminates the window_flat routing
+            // congestion). Depthwise consumers use chan_window_flat only.
+            assign window_flat = {(KH*KW*IC*8){1'b0}};
+        end
+    endgenerate
+
+    // ---------------- Narrow per-channel window output ----------------
+    // chan_window_flat[(kh*KW + kw)*8 +: 8] is the byte that window_flat
+    // would have produced at index ((kh*KW + kw)*IC + channel_select).
+    // It reads the SAME three source regions, indexed by channel_select:
+    //   - columns 0..KW-2          : window[kh][kw][channel_select]
+    //   - column KW-1, rows < KH-1 : window_kwm1_wire[kh][channel_select*8 +: 8]
+    //   - column KW-1, row  KH-1   : bypass_reg[channel_select]
+    // channel_select is a runtime byte-index into the existing packed
+    // arrays -- a single C-way mux per tap (KH*KW muxes) instead of the
+    // full KH*KW*IC-wide window_flat. ZERO arithmetic change: each output
+    // byte is bit-identical to the corresponding window_flat byte.
+    /* verilator lint_off WIDTH */
+    wire [CSEL_W-1:0] csel = channel_select;
+    /* verilator lint_on WIDTH */
+
+    genvar c_kh, c_kw;
+    generate
+        for (c_kh = 0; c_kh < KH; c_kh = c_kh + 1) begin : gen_chan_kh
+            for (c_kw = 0; c_kw < KW; c_kw = c_kw + 1) begin : gen_chan_kw
+                if (c_kw < KW - 1) begin : gen_chan_shift_col
+                    assign chan_window_flat[(c_kh*KW + c_kw)*8 +: 8] =
+                        window[c_kh][c_kw][csel];
+                end else if (c_kh < KH - 1) begin : gen_chan_bram_col
+                    assign chan_window_flat[(c_kh*KW + c_kw)*8 +: 8] =
+                        window_kwm1_wire[c_kh][csel*8 +: 8];
+                end else begin : gen_chan_bypass_col
+                    assign chan_window_flat[(c_kh*KW + c_kw)*8 +: 8] =
+                        bypass_reg[csel];
                 end
             end
         end

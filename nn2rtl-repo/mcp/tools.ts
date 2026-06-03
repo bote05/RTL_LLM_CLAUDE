@@ -30,6 +30,7 @@ export const RTL_LIBRARY_SOURCES: readonly string[] = [
   path.resolve(repoRoot, "rtl_library", "coord_scheduler.v"),
   path.resolve(repoRoot, "rtl_library", "line_buf_window.v"),
   path.resolve(repoRoot, "rtl_library", "conv_datapath.v"),
+  path.resolve(repoRoot, "rtl_library", "conv_datapath_mp_k.v"),
 ];
 export const VIVADO_DEFAULT_PART = "xczu9eg-ffvb1156-2-e";
 export const VIVADO_TIMEOUT_MS = 90 * 60 * 1000;

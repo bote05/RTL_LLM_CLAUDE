@@ -116,6 +116,7 @@ def compute_conv2d_latency_cycles(
     stride: Sequence[int] | None = None,
     padding: Sequence[int] | None = None,
     mac_parallelism: int | None = None,
+    mp_k: int | None = None,
 ) -> int:
     """Return the cycle count from first valid_in to first valid_out.
 
@@ -165,7 +166,27 @@ def compute_conv2d_latency_cycles(
     mp = int(mac_parallelism) if mac_parallelism and mac_parallelism > 0 else oc_i
     mp = min(mp, oc_i) if oc_i > 0 else mp
     oc_passes = (oc_i + mp - 1) // mp if mp > 0 and oc_i > 0 else 1
-    pass_cycles = mp * k_total + CONV_PIPELINE_STAGES
+    # A2 tap-parallel: MP_K kernel-parallel reduction issues ceil(K_TOTAL/MP_K)
+    # group cycles instead of K_TOTAL. MP_K defaults to 1 (the legacy tap-serial
+    # datapath -> identical to the old mp*k_total+6). Requires K_TOTAL % MP_K == 0.
+    #
+    # TWO distinct MP_K datapaths (verified byte-exact via Verilator):
+    #  * Inline depthwise (weight ic==1): the LANE axis stays SERIAL — it issues
+    #    MP*ceil(K_TOTAL/MP_K) cycles per OC pass. MBv2 depthwise: MP*1+6 = 10.
+    #  * conv_datapath_mp_k module (dense, group=1, e.g. the MBv2 stem): does ALL
+    #    MP lanes AND MP_K taps in parallel -> ceil(K_TOTAL/MP_K) cycles per OC
+    #    pass (no MP factor). MBv2 stem (K_TOTAL=27): 27/9+6 = 9. (Module header:
+    #    "Total cycles per OC pass: K_TOTAL/MP_K + 5"; the +1 over that is the
+    #    spatial ST_IDLE->ST_MAC offset already in CONV_PIPELINE_STAGES below.)
+    mpk = int(mp_k) if mp_k and mp_k > 0 else 1
+    k_groups = -(-k_total // mpk)  # ceil(k_total / mpk), no `import math`
+    if mpk > 1 and ic_i == 1:
+        # inline depthwise: lane-serial issue.
+        pass_cycles = mp * k_groups + CONV_PIPELINE_STAGES
+    else:
+        # mpk==1 (legacy tap-serial, where k_groups==k_total -> mp*k_total) OR the
+        # dense conv_datapath_mp_k module (lane-parallel -> k_groups, no mp).
+        pass_cycles = (mp * k_groups if mpk == 1 else k_groups) + CONV_PIPELINE_STAGES
 
     if kh_i * kw_i <= 1:
         # Pointwise — no window fill. First input triggers output_fires

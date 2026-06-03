@@ -70,7 +70,18 @@ def main(argv=None) -> int:
         oc_passes = layer_oc_passes(L)
         per_oc = L.get("scale_factor_per_oc")
         if per_oc is None:
-            raise SystemExit(f"{mid}: no scale_factor_per_oc (regenerate goldens with GPTQ)")
+            # Per-tensor fallback (e.g. int8_symmetric_per_tensor — MobileNetV2).
+            # The engine's requant_pipeline always reads a per-OC wide scale word
+            # from the scale ROM (the former per-tensor config-register scale path
+            # was removed in Phase 2). For a per-tensor network the correct content
+            # is the single layer scale_factor broadcast across all OC lanes.
+            sf = L.get("scale_factor")
+            if sf is None:
+                raise SystemExit(
+                    f"{mid}: neither scale_factor_per_oc nor scale_factor present"
+                )
+            per_oc = [float(sf)] * oc
+            print(f"[scale-mem] {mid}: per-tensor scale_factor={sf} broadcast to {oc} OC")
         if len(per_oc) != oc:
             raise SystemExit(f"{mid}: scale_factor_per_oc len {len(per_oc)} != oc {oc}")
         packed = []

@@ -53,7 +53,7 @@ def read_flat_weights(path: Path) -> list[int]:
     return out
 
 
-def write_wide_weights(out_path: Path, weights: list[int], oc: int, k_total: int, mp: int, mp_k: int = 1) -> tuple[int, int]:
+def write_wide_weights(out_path: Path, weights: list[int], oc: int, k_total: int, mp: int, mp_k: int = 1, wgt_bits: int = 4) -> tuple[int, int]:
     """Write the MP*MP_K-byte-packed hex file. Returns (entries_written, padded_zeros).
 
     For mp_k=1 this is the original MP-byte-per-word format (consumed by
@@ -70,10 +70,13 @@ def write_wide_weights(out_path: Path, weights: list[int], oc: int, k_total: int
     oc_passes = (oc + mp - 1) // mp
     k_groups = k_total // mp_k
     bytes_per_word = mp * mp_k
-    # INT4 NIBBLE-PACKING: each weight is stored as a 4-bit nibble (2 weights/byte),
-    # halving weight BRAM. One hex char per weight => word = mp*mp_k hex chars.
-    # The RTL (conv_datapath_mp_k.v) reads weight_word_q[(lane*mp_k+kpos)*4 +: 4] (signed).
-    nibbles_per_word = bytes_per_word
+    # WGT_BITS-wide packing: each weight is stored in `wgt_bits` bits (4=INT4
+    # nibble-packed, 3=INT3). The word is mp*mp_k*wgt_bits bits wide -> ceil(/4)
+    # hex chars. The RTL (conv_datapath_mp_k.v) reads
+    # weight_word_q[(lane*mp_k+kpos)*WGT_BITS +: WGT_BITS] (signed), so the pack
+    # stride (wgt_bits) and mask ((1<<wgt_bits)-1) MUST match WGT_BITS exactly.
+    mask = (1 << wgt_bits) - 1
+    hex_chars = (bytes_per_word * wgt_bits + 3) // 4   # ceil to next nibble
     lines: list[str] = []
     padded = 0
     for g in range(oc_passes):
@@ -84,12 +87,12 @@ def write_wide_weights(out_path: Path, weights: list[int], oc: int, k_total: int
                     global_oc = g * mp + lane
                     k_lin = kg * mp_k + kpos
                     if global_oc < oc:
-                        byte_val = weights[global_oc * k_total + k_lin] & 0xf
+                        byte_val = weights[global_oc * k_total + k_lin] & mask
                     else:
                         byte_val = 0
                         padded += 1
-                    packed |= byte_val << ((lane * mp_k + kpos) * 4)
-            lines.append(format(packed, f"0{nibbles_per_word}x"))
+                    packed |= byte_val << ((lane * mp_k + kpos) * wgt_bits)
+            lines.append(format(packed, f"0{hex_chars}x"))
     out_path.write_text("\n".join(lines) + "\n")
     return len(lines), padded
 
@@ -186,6 +189,7 @@ def main() -> None:
     p.add_argument("--k-total", type=int, help="single-file mode K_TOTAL")
     p.add_argument("--mp", type=int, default=8, help="MP parameter (default 8)")
     p.add_argument("--mp-k", type=int, default=1, help="MP_K kernel parallelism (default 1)")
+    p.add_argument("--wgt-bits", type=int, default=4, help="weight bit-width: 4=INT4 nibble, 3=INT3 (default 4)")
     p.add_argument("--output-suffix", default="_weights_wide.hex", help="output suffix (e.g. _weights_mp_k_9.hex)")
     p.add_argument("--batch", action="store_true", help="batch mode: process all weights from sidecar dir")
     p.add_argument("--sidecar-dir", type=Path, default=Path("output/tb"))
@@ -207,7 +211,7 @@ def main() -> None:
         print(f"[dry-run] would repack {args.input} -> {args.output}, "
               f"OC={args.oc} K_TOTAL={args.k_total} MP={args.mp} MP_K={args.mp_k}, weights={len(weights)}")
         return
-    entries, padded = write_wide_weights(args.output, weights, args.oc, args.k_total, args.mp, args.mp_k)
+    entries, padded = write_wide_weights(args.output, weights, args.oc, args.k_total, args.mp, args.mp_k, args.wgt_bits)
     print(f"[ok] wrote {entries} entries to {args.output} (padded_zeros={padded})")
 
 

@@ -1037,16 +1037,31 @@ def _gptq_quantize_convs(specs, modules, gptq_inputs) -> None:
                 H[s.module_id] = h if H[s.module_id] is None else H[s.module_id] + h
                 cnt[s.module_id] += xu.shape[0]
     del gmods, ref  # free GPU ref modules
+    # [INT3-MIXED 2026-05-30] Per-layer bit-width. Module_ids listed in the
+    # NN2RTL_INT3_LAYERS env var (comma-separated) are quantized at INT3
+    # (qmax=3, qmin=-4) using the SAME Hessian-aware GPTQ as INT4 (gptq_core,
+    # error-compensated — NOT a naive round), so the mixed-precision accuracy
+    # matches the measured sweep. Everything else stays INT4 (_WQMAX/_WQMIN).
+    # Each conv records s.weight_bits (3|4) for the downstream packers
+    # (repack 3-bit, engine banks 3-bit) and the layer_ir export.
+    import os as _os
+    _int3 = {m for m in _os.environ.get("NN2RTL_INT3_LAYERS", "").split(",") if m}
+    n_int3 = 0
     for s in conv_specs:
+        is_int3 = s.module_id in _int3
+        qmax, qmin = (3, -4) if is_int3 else (_WQMAX, _WQMIN)
         W = torch.tensor(np.asarray(s.weight, dtype=np.float32), device=dev)
         OC = W.shape[0]
         W2d = W.reshape(OC, -1)
-        scale = gptq_core.per_oc_scale(W2d, _WQMAX)            # [OC,1]
+        scale = gptq_core.per_oc_scale(W2d, qmax)             # [OC,1]
         Hm = (H[s.module_id] / max(1, cnt[s.module_id]))
-        Qint = gptq_core.gptq_int_weights(W2d, Hm, scale, _WQMIN, _WQMAX)
+        Qint = gptq_core.gptq_int_weights(W2d, Hm, scale, qmin, qmax)
         s.gptq_qweight = Qint.reshape(W.shape).cpu().numpy().astype(np.int8)
         s.weight_scale_per_oc = scale.squeeze(1).cpu().numpy().astype(np.float64)
-    print(f"[gptq] quantized {len(conv_specs)} conv layers to INT4 per-output-channel")
+        s.weight_bits = 3 if is_int3 else 4
+        n_int3 += int(is_int3)
+    print(f"[gptq] quantized {len(conv_specs)} conv layers per-output-channel "
+          f"({n_int3} INT3, {len(conv_specs) - n_int3} INT4)")
 
 
 # ---------------------------------------------------------------------------
@@ -1401,11 +1416,40 @@ def _spec_output_width_bits(spec: OnnxLayerSpec) -> int:
 # Pipeline latency
 # ---------------------------------------------------------------------------
 
+# [THROUGHPUT A2 2026-06-03] Per-module MP override for the 3x3 depthwises (byte-exact:
+# depthwise is per-channel, MP only sets lane parallelism; reg widths derived from MP).
+# The on-disk node_conv_*.v were edited to these MP values + e2e-verified byte-exact
+# (mismatch_bytes=0, 6,823,395 cyc). 15 DW at MP=16; the two 2-BEAT modules (884, 908)
+# stay at MP=4 -- their lo/hi beat emission de-syncs the consumer at MP>4 (deadlock), so
+# they are GATED on a beat-timing/skid fix (Phase B). This keeps compute_conv2d_latency_cycles
+# consistent with the live RTL for a future regen. See [[project-mbv2-throughput-corrected]].
+_A2_MP_OVERRIDE = {
+    "node_conv_812": 16, "node_conv_818": 16, "node_conv_824": 16, "node_conv_830": 16,
+    "node_conv_836": 16, "node_conv_842": 16, "node_conv_848": 16, "node_conv_854": 16,
+    "node_conv_860": 16, "node_conv_866": 16, "node_conv_872": 16, "node_conv_878": 16,
+    "node_conv_890": 16, "node_conv_896": 16, "node_conv_902": 16,
+    # node_conv_884, node_conv_908 (2-beat): MP=4 (default) until skid fix.
+}
+
+
 def _conv_mac_parallelism(spec: OnnxLayerSpec) -> int:
     """Accumulator-group size for an ONNX conv layer: min(OC, MAX_PARALLEL_MACS)."""
     if spec.weight is None or len(spec.weight.shape) < 1:
         return 1
+    ov = _A2_MP_OVERRIDE.get(getattr(spec, "module_id", None))
+    if ov is not None:
+        return ov
     return conv_mac_parallelism(int(spec.weight.shape[0]))
+
+
+def _conv_mp_k(spec: OnnxLayerSpec) -> int:
+    """A2: the 3x3 spatial path (MBv2 stem + 17 depthwise) uses the MP_K=9
+    tap-parallel datapath; everything else stays tap-serial (mp_k=1)."""
+    if spec.weight is not None and len(spec.weight.shape) >= 4:
+        kh, kw = int(spec.weight.shape[2]), int(spec.weight.shape[3])
+        if kh == 3 and kw == 3:
+            return 9
+    return 1
 
 
 def _pipeline_latency(spec: OnnxLayerSpec) -> int:
@@ -1417,6 +1461,7 @@ def _pipeline_latency(spec: OnnxLayerSpec) -> int:
             stride=spec.stride,
             padding=spec.padding,
             mac_parallelism=_conv_mac_parallelism(spec),
+            mp_k=_conv_mp_k(spec),
         )
     if spec.op_type == "maxpool":
         return compute_maxpool_latency_cycles(spec)
@@ -1719,7 +1764,10 @@ def build_pipeline_ir_from_onnx(
 
         if spec.op_type in ("conv2d", "gemm"):
             # Scheme A': weights WEIGHT_BITS-wide (4=INT4), activations INT8.
-            layer_payload["weight_bits"] = WEIGHT_BITS
+            # [INT3-MIXED] per-layer override: convs quantized at INT3 (set in
+            # _gptq_quantize_convs via NN2RTL_INT3_LAYERS) carry weight_bits=3 so
+            # the spatial repack / engine bank packers know to use 3-bit fields.
+            layer_payload["weight_bits"] = int(getattr(spec, "weight_bits", WEIGHT_BITS))
             layer_payload["activation_bits"] = 8
             _per_oc = _composite_conv_scale_per_oc(spec) if spec.op_type == "conv2d" else None
             if _per_oc is not None:

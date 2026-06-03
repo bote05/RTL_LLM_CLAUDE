@@ -40,7 +40,12 @@ module conv_datapath_mp_k #(
     // Phase 2 INT4-GPTQ: per-OUTPUT-CHANNEL requant scale. When non-empty, one
     // 32-bit hex entry per OC: bits[15:0]=mult (15-bit compute_scale_approx),
     // bits[21:16]=shift. Overrides the per-tensor SCALE_MULT/SCALE_SHIFT.
-    parameter         SCALE_PATH   = ""
+    parameter         SCALE_PATH   = "",
+    // [INT3-MIXED] weight bit-width. 4 = INT4 (default, nibble-packed); 3 = INT3.
+    // Drives WIDE_W and the MAC weight slice below. The 4 spatial INT3 convs
+    // (node_conv_284/288/292/298) instantiate this with WGT_BITS(3); all others
+    // keep the default 4 -> backward-compatible.
+    parameter integer WGT_BITS     = 4
 ) (
     input  wire                               clk,
     input  wire                               rst_n,
@@ -55,7 +60,7 @@ module conv_datapath_mp_k #(
 
     // ---------------- Derived widths ----------------------------------
     localparam integer K_GROUPS         = K_TOTAL / MP_K;  // assumes K_TOTAL % MP_K == 0
-    localparam integer WIDE_W           = MP * MP_K * 4;   // bits per weight entry (INT4 nibble-packed, 2 wt/byte)
+    localparam integer WIDE_W           = MP * MP_K * WGT_BITS; // bits/weight entry (WGT_BITS-wide; 4=INT4 nibble, 3=INT3)
     localparam integer PROD_W           = 16;
     localparam integer TREE_W           = PROD_W + ((MP_K <= 1) ? 0 : $clog2(MP_K));
     localparam integer ACC_W            = TREE_W + ((K_GROUPS <= 1) ? 0 : $clog2(K_GROUPS));
@@ -182,7 +187,7 @@ module conv_datapath_mp_k #(
         for (cs_lane_i = 0; cs_lane_i < MP; cs_lane_i = cs_lane_i + 1) begin
             sum_lane_w[cs_lane_i] = {TREE_W{1'b0}};
             for (cs_kpos = 0; cs_kpos < MP_K; cs_kpos = cs_kpos + 1) begin
-                prod_w = $signed(weight_word_q[(cs_lane_i * MP_K + cs_kpos) * 4 +: 4]) *
+                prod_w = $signed(weight_word_q[(cs_lane_i * MP_K + cs_kpos) * WGT_BITS +: WGT_BITS]) *
                          $signed(tap_q[cs_kpos]);
                 sum_lane_w[cs_lane_i] = sum_lane_w[cs_lane_i] + prod_w;
             end

@@ -32,6 +32,33 @@ build_skip_fifo_block/
 # One-off Vivado/sim experiment harnesses (proof scripts + EDA droppings)
 uram_init_test/
 
+# Per-experiment Verilator build dirs (engine-isolation / mbv2 harnesses).
+# Each is a ~240MB Verilator obj tree (Vengine_iso_wrap*.cpp/.o/...). These
+# are the "extreme git status" bulk (3 dirs == ~730MB). Names the existing
+# obj_dir*/ / build_*_tb/ globs above don't catch.
+obj_iso*/
+w2*/
+tb_iso*/
+tb_a850/
+tb_p1/
+
+# Root-level run/done markers + EDA scratch from the fit/INT3 campaign
+*.flag
+*_err.txt
+*.bin
+bak_lint.txt
+cur_lint.txt
+scratch/
+
+# Underscore-prefixed scratch scripts (private one-offs; the convention
+# already used by scripts/_applied_layer_288.json below)
+scripts/_*
+
+# Root-level Vivado experiment TCL (the production flow lives in scripts/)
+/analyze_fmax.tcl
+/get_fit_numbers.tcl
+/physopt_route.tcl
+
 # Python virtualenvs
 .venv/
 venv/
@@ -109,3 +136,24 @@ knowledge/references/active/*
 !knowledge/references/active/.gitkeep
 knowledge/references/archive/*
 !knowledge/references/archive/.gitkeep
+
+# --- One-off isolation / debug scratch (machine-specific, hardcoded paths;
+#     not part of the reproducible pipeline). Kept on disk, excluded from git. ---
+_iso912/
+scripts/build_iso*.bat
+scripts/build_engine_iso*.bat
+scripts/run_engine_iso*.bat
+scripts/gen_iso*.py
+scripts/gen_engine_iso_cfg.py
+scripts/gen_priv*_cfg.py
+scripts/*.mk
+run_e2e_after_route.sh
+test_all_int4_e2e.sh
+# per-session engine-isolation harness variants — keep only the canonical mbv2 pair
+tb/engine_iso_*
+!tb/engine_iso_wrap_mbv2.v
+!tb/engine_iso_wrap_mbv2_tb.cpp
+tb/priv*/
+tb/*_BROKEN.*
+tb/*.vlt
+tb/mbv2_engine_bp_probe*

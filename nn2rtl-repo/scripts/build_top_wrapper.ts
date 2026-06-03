@@ -58,6 +58,13 @@ interface CliArgs {
   weightMap: string;
   schedule: string;
   out: string;
+  // Directory (relative to repoRoot, or absolute) holding the engine
+  // weight banks (uram_weights_bank<N>.mem), bias.mem and scale.mem that
+  // are baked into the generated top via MEM_INIT_FILE. For resnet-50 this
+  // is the historical "output/weights"; for any other network it defaults
+  // to "output/<network>/weights" so multi-network builds don't collide.
+  // Can be overridden explicitly with --weights-dir=.
+  weightsDir: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -66,10 +73,15 @@ function parseArgs(argv: string[]): CliArgs {
     layerIr: "output/layer_ir.json",
     engineModules: "docs/agent_tasks/06_phase1_compression_candidates_HEAVY.txt",
     fifoSizes: "output/wrapper/skip_fifo_sizes.json",
-    weightMap: "output/weights/weight_memory_map.json",
+    weightMap: "",
     schedule: "output/rtl/nn2rtl_scheduler_schedule.json",
     out: "output/rtl/nn2rtl_top.v",
+    weightsDir: "",
   };
+  // Track explicit overrides so the per-network defaults below only fill in
+  // the gaps the caller left unset.
+  let weightMapSet = false;
+  let weightsDirSet = false;
   for (const raw of argv.slice(2)) {
     const m = raw.match(/^--([^=]+)=(.*)$/);
     if (!m) continue;
@@ -79,11 +91,23 @@ function parseArgs(argv: string[]): CliArgs {
       case "layer-ir": args.layerIr = v; break;
       case "engine-modules": args.engineModules = v; break;
       case "fifo-sizes": args.fifoSizes = v; break;
-      case "weight-map": args.weightMap = v; break;
+      case "weight-map": args.weightMap = v; weightMapSet = true; break;
+      case "weights-dir": args.weightsDir = v; weightsDirSet = true; break;
       case "schedule": args.schedule = v; break;
       case "out": args.out = v; break;
       default: throw new Error(`unknown flag --${k}`);
     }
+  }
+  // Resolve per-network defaults AFTER all flags are parsed so --network can
+  // appear in any position. resnet-50 keeps the legacy "output/weights"
+  // location; every other network maps to "output/<network>/weights".
+  if (!weightsDirSet) {
+    args.weightsDir = args.network === "resnet-50"
+      ? "output/weights"
+      : `output/${args.network}/weights`;
+  }
+  if (!weightMapSet) {
+    args.weightMap = `${args.weightsDir}/weight_memory_map.json`;
   }
   return args;
 }
@@ -749,14 +773,14 @@ function emit(input: EmitInput): string {
       // bus to that width — the wave-2 retile bridge will handle channel
       // re-tiling when the producer's bus is wider than a single add tile.
       const halfW = Math.floor(m.busInBits / 2);
-      lines.push(`    // residual add: lhs (low half) from main path, rhs (high half) from skip FIFO`);
+      lines.push(`    // residual add: lhs (LOW half) from skip FIFO, rhs (HIGH half) from main path`);
       lines.push(`    ${id} u_${id} (`);
       lines.push(`        .clk(clk), .rst_n(rst_n),`);
       // The add fires only when both halves are valid AND the engine is
       // not currently consuming a heavy layer (04c spatial_throttle).
       lines.push(`        .valid_in(${mainV} & ${skipV} & spatial_run),`);
       lines.push(`        .ready_in(${id}_ready_in),`);
-      lines.push(`        .data_in({${skipD}, ${mainD}[${halfW - 1}:0]}),`);
+      lines.push(`        .data_in({${mainD}[${halfW - 1}:0], ${skipD}}),`);
       lines.push(`        .valid_out(${id}_valid_out),`);
       lines.push(`        .data_out(${id}_data_out)`);
       lines.push(`    );`);
@@ -853,6 +877,11 @@ function emit(input: EmitInput): string {
   //
   // URAM accounting per weight_memory_map.json (Path D / banked):
   //   total_mac_cycles, num_banks, per_bank_uram_blocks, etc.
+  // Engine weight/bias/scale .mem directory. Forward-slash normalized so the
+  // baked-in $readmemh paths are valid for both iverilog/Verilator on any
+  // platform. Defaults to "output/weights" for resnet-50, "output/<net>/weights"
+  // otherwise; overridable via --weights-dir (see parseArgs).
+  const weightsDirPosix = args.weightsDir.replace(/\\/g, "/").replace(/\/+$/, "");
   const numBanks = Number(weightMap.num_banks ?? 8);
   const totalMacCycles = Number(weightMap.total_mac_cycles ?? 0);
   const macAddrBits = Math.max(1, Math.ceil(Math.log2(Math.max(2, totalMacCycles))));
@@ -880,7 +909,7 @@ function emit(input: EmitInput): string {
     lines.push(`    uram_weight_bank #(`);
     lines.push(`        .DEPTH(${totalMacCycles}),`);
     lines.push(`        .ADDR_W(${macAddrBits}),`);
-    lines.push(`        .MEM_INIT_FILE("output/weights/uram_weights_bank${b}.mem")`);
+    lines.push(`        .MEM_INIT_FILE("${weightsDirPosix}/uram_weights_bank${b}.mem")`);
     lines.push(`    ) u_uram_weight_bank${b} (`);
     lines.push(`        .clk(clk),`);
     lines.push(`        .rd_addr(weight_bank_rd_addr),`);
@@ -901,7 +930,7 @@ function emit(input: EmitInput): string {
   lines.push(`        .SIZE_WORDS(256),`);
   lines.push(`        .WORD_WIDTH(8192),`);
   lines.push(`        .ADDR_W(8),`); // 256 entries = 8-bit address
-  lines.push(`        .MEM_INIT_FILE("output/weights/bias.mem")`);
+  lines.push(`        .MEM_INIT_FILE("${weightsDirPosix}/bias.mem")`);
   lines.push(`    ) u_bias_mem (`);
   lines.push(`        .clk(clk),`);
   lines.push(`        .rd_addr(engine_bias_rd_addr[7:0]),`); // engine emits 22b; we use the 8 LSBs
@@ -916,7 +945,7 @@ function emit(input: EmitInput): string {
   lines.push(`        .SIZE_WORDS(256),`);
   lines.push(`        .WORD_WIDTH(8192),`);
   lines.push(`        .ADDR_W(8),`);
-  lines.push(`        .MEM_INIT_FILE("output/weights/scale.mem")`);
+  lines.push(`        .MEM_INIT_FILE("${weightsDirPosix}/scale.mem")`);
   lines.push(`    ) u_scale_mem (`);
   lines.push(`        .clk(clk),`);
   lines.push(`        .rd_addr(engine_scale_rd_addr[7:0]),`);
@@ -1889,15 +1918,17 @@ function emit(input: EmitInput): string {
   lines.push(`    localparam integer EXPECTED_TILES = EXPECTED_BEATS * TILES_PER_BEAT;`);
   lines.push(``);
   lines.push(`    // dispatch_count gates active_slot; ticks once per scheduler 'start' pulse.`);
-  lines.push(`    // Width is sized to log2(NUM_DISPATCHES) + 1 headroom bit (max 16 supported`);
-  lines.push(`    // here; Fix 14's "+1" cushion catches the final S_NEXT_DISP increment past`);
-  lines.push(`    // LAST_DISPATCH).`);
-  lines.push(`    reg [3:0] dispatch_count;`);
+  lines.push(`    // Width = clog2(NUM_DISPATCHES)+1 headroom bit so it scales past 16 dispatches`);
+  lines.push(`    // (MobileNet-v2 has 34 -> needs 6 bits; the old fixed [3:0] truncated SLOT 16..33`);
+  lines.push(`    // and wrapped dispatch_count at 16 = guaranteed deadlock on dispatches 16+).`);
+  lines.push(`    // Fix 14's "+1" cushion also catches the final S_NEXT_DISP increment past LAST_DISPATCH.`);
+  lines.push(`    localparam integer DC_W = ((NUM_DISPATCHES <= 1) ? 1 : $clog2(NUM_DISPATCHES)) + 1;`);
+  lines.push(`    reg [DC_W-1:0] dispatch_count;`);
   lines.push(`    always @(posedge clk or negedge rst_n) begin`);
-  lines.push(`        if (!rst_n) dispatch_count <= 4'd0;`);
-  lines.push(`        else if (start) dispatch_count <= dispatch_count + 4'd1;`);
+  lines.push(`        if (!rst_n) dispatch_count <= {DC_W{1'b0}};`);
+  lines.push(`        else if (start) dispatch_count <= dispatch_count + {{(DC_W-1){1'b0}}, 1'b1};`);
   lines.push(`    end`);
-  lines.push(`    wire active_slot = (dispatch_count == SLOT[3:0]);`);
+  lines.push(`    wire active_slot = (dispatch_count == SLOT[DC_W-1:0]);`);
   lines.push(``);
   lines.push(`    // Beat buffer + tile index. beat_buf holds the current engine beat;`);
   lines.push(`    // tile_idx walks 0..TILES_PER_BEAT-1, emitting one slice per ready cycle.`);

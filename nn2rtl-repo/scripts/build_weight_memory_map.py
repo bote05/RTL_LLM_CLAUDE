@@ -182,6 +182,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weights-dir", default=None)
     parser.add_argument("--out-header", default=None)
     parser.add_argument("--out-json", default=None)
+    parser.add_argument(
+        "--engine-modules",
+        "--heavy-list",
+        dest="engine_modules",
+        default=None,
+        help=(
+            "Optional newline-delimited file of engine-dispatched (heavy) "
+            "module ids. When given, ONLY these convs are packed into the "
+            "URAM weight banks (their base_mac_cycle offsets are computed in "
+            "the file's listed order). When omitted, ALL conv2d layers are "
+            "packed (legacy ResNet flow). Required for networks where some "
+            "convs stay spatial (e.g. MobileNetV2 depthwise) so they do not "
+            "pollute the engine banks."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_root = detect_repo_root(Path(__file__))
@@ -196,12 +211,46 @@ def main(argv: list[str] | None = None) -> int:
     with layer_ir_path.open("r", encoding="utf-8") as fh:
         ir = json.load(fh)
 
+    # Optional engine-module (heavy-list) filter. When provided, only the
+    # listed convs are packed into the URAM banks, walked in the file's order
+    # so the base_mac_cycle layout matches the bias/scale maps' dispatch order.
+    # When absent, every conv2d in LayerIR order is packed (legacy behaviour).
+    engine_order: list[str] | None = None
+    engine_set: set[str] | None = None
+    if args.engine_modules:
+        em_path = Path(args.engine_modules)
+        if not em_path.is_absolute():
+            em_path = repo_root / em_path
+        with em_path.open("r", encoding="utf-8") as fh:
+            engine_order = [
+                ln.strip() for ln in fh
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+        if not engine_order:
+            raise SystemExit(f"engine-modules list is empty: {em_path}")
+        engine_set = set(engine_order)
+
+    layers_by_id = {L["module_id"]: L for L in ir.get("layers", [])}
+    if engine_order is not None:
+        layer_iter = []
+        for mid in engine_order:
+            L = layers_by_id.get(mid)
+            if L is None:
+                raise SystemExit(
+                    f"engine module '{mid}' not found in LayerIR ({layer_ir_path})"
+                )
+            if L.get("op_type") != "conv2d":
+                raise SystemExit(f"engine module '{mid}' is not a conv2d")
+            layer_iter.append(L)
+    else:
+        layer_iter = ir.get("layers", [])
+
     # bank_lines[bank] = list of 72-hex-char strings, one per MAC cycle.
     bank_lines: list[list[str]] = [[] for _ in range(NUM_BANKS)]
     layers_out: list[dict] = []
     cur_mac_cycle = 0
 
-    for layer in ir.get("layers", []):
+    for layer in layer_iter:
         if layer.get("op_type") != "conv2d":
             continue
         weights_path = layer.get("weights_path")
@@ -289,6 +338,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sidecar = {
         "schema": "weight_memory_map_v2_banked",
+        "engine_modules_filter": (
+            str(Path(args.engine_modules)) if args.engine_modules else None
+        ),
+        "engine_module_count": (len(engine_order) if engine_order is not None else None),
         "mac_count": MAC_COUNT,
         "num_banks": NUM_BANKS,
         "weights_per_bank_per_cycle": WEIGHTS_PER_BANK,
