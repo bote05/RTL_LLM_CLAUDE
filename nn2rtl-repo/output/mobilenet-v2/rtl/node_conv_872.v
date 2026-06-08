@@ -112,10 +112,15 @@ module node_conv_872 #(
     reg signed [7:0]  weights [0:C*K_TOTAL-1];
     (* rom_style = "block", ram_style = "block" *)
     reg signed [31:0] biases  [0:C-1];
+    // [PER-OC 2026-06-08] per-output-channel requant ROM: {shift[21:16], mult[15:0]} per OC
+    // (compute_scale_approx of the composite per-OC scale). Replaces the per-tensor SCALE_*.
+    (* rom_style = "block", ram_style = "block" *)
+    reg [31:0]        scale_rom [0:C-1];
 
     initial begin
         $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_872_weights.hex", weights);
         $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_872_bias.hex", biases);
+        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_872_scale.mem", scale_rom);
     end
 
     // ----------------- Scheduler / window wires -----------------
@@ -249,10 +254,12 @@ module node_conv_872 #(
     reg signed [BIASED_W-1:0] biased [0:MP-1];
     (* use_dsp = "yes" *) reg signed [SCALED_W-1:0] scaled [0:MP-1];
     reg signed [SCALED_W-1:0] v_tmp;
+    reg        [5:0]          out_shift;  // [PER-OC] per-OC shift (OUTPUT stage)
+    reg signed [SCALED_W-1:0] out_round;  // [PER-OC] per-OC round bias (OUTPUT stage)
 
 
     integer i, lane_i;
-    integer bias_oc, out_oc;
+    integer bias_oc, out_oc, sc_oc;
 
 
     // Tap selector: chan_window_flat is the NEW narrow per-channel window
@@ -392,8 +399,13 @@ module node_conv_872 #(
                 end
 
                 ST_SCALE: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
-                        scaled[lane_i] <= $signed(biased[lane_i]) * $signed(SCALE_MULT_CONST);
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        sc_oc = oc_group * MP + lane_i;
+                        if (sc_oc < C)
+                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed(scale_rom[sc_oc][15:0]);
+                        else
+                            scaled[lane_i] <= {SCALED_W{1'b0}};
+                    end
                     state <= ST_OUTPUT;
                 end
 
@@ -402,7 +414,10 @@ module node_conv_872 #(
                         out_oc = oc_group * MP + lane_i;
                         if (out_oc < C) begin
                             // [INVARIANT:ROUNDING]
-                            v_tmp = (scaled[lane_i] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;
+                            out_shift = scale_rom[out_oc][21:16];
+                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
+                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
+                            v_tmp = (scaled[lane_i] + out_round) >>> out_shift;
                             dp_data_out[out_oc*8 +: 8] <=
                                 (v_tmp >  127) ?  8'sd127 :
                                 (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];

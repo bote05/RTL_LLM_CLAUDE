@@ -878,7 +878,26 @@ def fill_calibration_stats(
         spec.output_scale = _safe_scale(observed)
 
         if spec.op_type == "conv2d" and spec.weight is not None:
-            spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
+            _dw = (int(spec.groups) == int(spec.weight.shape[0])) and \
+                  (int(spec.weight.shape[1]) == 1)
+            if _dw and os.environ.get("NN2RTL_DW_PER_CHANNEL", "1") != "0":
+                # [ACCURACY 2026-06-08] per-CHANNEL INT8 for DEPTHWISE convs. DEFAULT ON: VERIFIED
+                # +4.00% deployed top-1 (67.27 -> 71.27 on 1500 imgs, all trust gates) AND byte-exact
+                # e2e 8/8 with the per-OC scale-ROM RTL (node_conv_8XX scale_rom + scale.mem). Per-
+                # tensor depthwise quant was the dominant MBv2 INT8 penalty. Plain per-OUTPUT-CHANNEL
+                # max/qmax (INT8 is forgiving; no GPTQ/Hessian). Sets weight_scale_per_oc + gptq_qweight
+                # so the EXISTING per-OC downstream (_spec_int_weight_and_scale / _spec_bias_int /
+                # _composite_conv_scale_per_oc / layer_ir export) applies. Pointwise/engine convs stay
+                # per-tensor (the engine already requants per-OC). Set NN2RTL_DW_PER_CHANNEL=0 to revert.
+                _W = spec.weight
+                _per_oc = np.maximum(
+                    np.abs(_W).reshape(_W.shape[0], -1).max(axis=1) / _WQMAX, 1e-12)
+                spec.weight_scale_per_oc = _per_oc.astype(np.float64)
+                spec.gptq_qweight = np.clip(
+                    np.round(_W / _per_oc.reshape((-1,) + (1,) * (_W.ndim - 1))),
+                    _WQMIN, _WQMAX).astype(np.int8)
+            else:
+                spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
 
         if spec.op_type == "gemm" and spec.weight is not None:
             spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))

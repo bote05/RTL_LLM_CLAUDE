@@ -285,7 +285,19 @@ def build_deployed(base: nn.Module, refs):
             Wf_np = Wf.detach().cpu().numpy().astype(np.float64)
 
             is_dw = (int(c.groups) == int(c.weight.shape[0])) and (int(c.weight.shape[1]) == 1)
-            if PER_CHANNEL_DW and is_dw:
+            _poc_ir = layer.get("weight_scale_per_oc")
+            if _poc_ir is not None:
+                # [DEPLOYED PER-OC 2026-06-08] measure the ACTUAL deployed per-channel weights:
+                # dequant the deployed integers via layer_ir's per-OC weight scale (the TRUE
+                # deployed-accuracy measurement, NOT a re-quant of the folded reference). Auto-
+                # detected from layer_ir, so this reports whatever is actually deployed.
+                _poc = np.asarray(_poc_ir, dtype=np.float64)
+                float_w = (int_w.astype(np.float64)
+                           * _poc.reshape((-1,) + (1,) * (int_w.ndim - 1))).astype(np.float32)
+                qmin_seen, qmax_seen = int(int_w.min()), int(int_w.max())
+                range_ok = (qmin_seen >= QMIN_INT8) and (qmax_seen <= QMAX_INT8)
+                match_frac = 1.0  # deployed integers measured as-is (per-OC scale from layer_ir)
+            elif PER_CHANNEL_DW and is_dw:
                 # [ACCURACY ESTIMATE 2026-06-08] NON-DESTRUCTIVE per-CHANNEL depthwise dequant:
                 # re-quantize the FOLDED reference per OUTPUT CHANNEL (what per-channel deployment
                 # WOULD produce) instead of the per-tensor deployed integers. Measure-only; does

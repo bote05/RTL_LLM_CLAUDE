@@ -10,7 +10,7 @@ an engine dispatch (engine convs use the wide scale.mem instead).
 Run after the INT4-GPTQ goldens are regenerated (needs scale_factor_per_oc).
 """
 from __future__ import annotations
-import json, sys
+import json, os, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -18,12 +18,18 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from golden_impl import compute_scale_approx  # noqa: E402
 
+# [MBV2 2026-06-08] per-network base-dir override (e.g. output/mobilenet-v2) so this works for
+# any network; default = ROOT/output (ResNet legacy layout) is unchanged.
+BASE = Path(os.environ.get("NN2RTL_GOLDEN_BASE", str(ROOT / "output")))
+if not BASE.is_absolute():
+    BASE = ROOT / BASE
+
 
 def main() -> int:
-    ir = json.loads((ROOT / "output/layer_ir.json").read_text())
-    sched = json.loads((ROOT / "output/rtl/nn2rtl_scheduler_schedule.json").read_text())
+    ir = json.loads((BASE / "layer_ir.json").read_text())
+    sched = json.loads((BASE / "rtl/nn2rtl_scheduler_schedule.json").read_text())
     engine_ids = {d["module_id"] for d in sched["dispatches"]}
-    wdir = ROOT / "output/weights"
+    wdir = BASE / "weights"
     n = 0
     for L in ir["layers"]:
         if L.get("op_type") != "conv2d":
