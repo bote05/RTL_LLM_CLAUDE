@@ -131,7 +131,8 @@ module node_conv_812 #(
     end
 
     // ----------------- start_pulse generator (mirrors conv3x3 ref) -----------------
-    reg started, start_pulse, pending_rearm;
+    reg started, pending_rearm;
+    (* max_fanout = 256 *) reg start_pulse;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             started       <= 1'b0;

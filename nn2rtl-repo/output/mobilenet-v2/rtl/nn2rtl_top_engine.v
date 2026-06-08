@@ -25,7 +25,7 @@ module nn2rtl_top (
     // AXI4-Stream feature output (final layer's data_out)
     output wire                m_axis_tvalid,
     input  wire                m_axis_tready,
-    output wire [7999:0]       m_axis_tdata,
+    output wire [255:0]        m_axis_tdata,
     output wire                m_axis_tlast,
 
     // AXI4-Lite control slave (forwarded to shared_engine)
@@ -1569,7 +1569,7 @@ module nn2rtl_top (
         .valid_in(node_mean_valid_out & spatial_run),
         .ready_in(node_linear_ready_in),
         .data_in(node_mean_data_out),
-        .out_ready_in(m_axis_tready),
+        .out_ready_in(ser_ready_out),
         .valid_out(node_linear_valid_out),
         .data_out(node_linear_data_out)
     );
@@ -3603,22 +3603,21 @@ module nn2rtl_top (
     assign all_drain[63] = 1'b1;
     assign current_drain_complete = all_drain[sched_dispatch_idx[5:0]];
 
-    // ----- network output (Fix #4: tlast on final output beat) -----
-    assign m_axis_tvalid = node_linear_valid_out;
-    assign m_axis_tdata  = node_linear_data_out;
-    // Output frame size: C=1000 H=1 W=1, busOut=8000b -> 1 beats
-    reg [0:0] m_axis_beat_count;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            m_axis_beat_count <= 1'd0;
-        end else if (m_axis_tvalid & m_axis_tready) begin
-            if (m_axis_beat_count == 1'd0)
-                m_axis_beat_count <= 1'd0;
-            else
-                m_axis_beat_count <= m_axis_beat_count + 1'd1;
-        end
-    end
-    assign m_axis_tlast = (m_axis_beat_count == 1'd0);
+    // ----- network output: ResNet-style 256b STREAMING (FMAX/OOC-FIX 2026-06-08) -----
+    // node_linear's 8000b logit word is serialized to 32x256b beats (byte-exact reslice,
+    // tlast on beat 31). Narrows the m_axis pin bus 8000b->256b so the design places
+    // IN-CONTEXT (no OOC) like ResNet and deletes the ~8000 parallel output nets.
+    wire ser_ready_out;
+    output_serializer #(.W_IN(8000), .BEATW(256)) u_output_serializer (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in(node_linear_valid_out),
+        .data_in(node_linear_data_out),
+        .ready_out(ser_ready_out),
+        .valid_out(m_axis_tvalid),
+        .data_out(m_axis_tdata),
+        .last_out(m_axis_tlast),
+        .ready_in(m_axis_tready)
+    );
 
 endmodule
 

@@ -166,11 +166,12 @@ module node_conv_908 #(
     wire                              mac_busy;
     reg [1:0] lane_counter;
     reg [7:0] oc_group;            // OC_PASSES=240 needs 8 bits (0..239)
-    wire [10:0] current_global_oc = oc_group * MP + lane_counter;
+    (* max_fanout = 256 *) wire [10:0] current_global_oc = oc_group * MP + lane_counter;
     wire [15:0] weight_base_addr  = current_global_oc * K_TOTAL;  // contiguous K_TOTAL taps for this channel
 
     // ----------------- start_pulse generator (mirrors conv_818 ref) -----------------
-    reg started, start_pulse, pending_rearm;
+    reg started, pending_rearm;
+    (* max_fanout = 256 *) reg start_pulse;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             started       <= 1'b0;
