@@ -87,6 +87,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -248,6 +249,7 @@ def build_deployed(base: nn.Module, refs):
         (module_id, qmin_seen, qmax_seen, ok, requant_match_frac)
     and fc_row mirrors it for the classifier."""
     ir = json.loads(LAYER_IR.read_text())
+    PER_CHANNEL_DW = os.environ.get("NN2RTL_MEASURE_DW_PER_CHANNEL") == "1"
     conv_layers = [l for l in ir["layers"] if l.get("op_type") == "conv2d"]
     gemm_layers = [l for l in ir["layers"] if l.get("op_type") == "gemm"]
 
@@ -282,21 +284,34 @@ def build_deployed(base: nn.Module, refs):
             int_w = _load_int_weights(Path(layer["weights_path"]), shape)
             Wf_np = Wf.detach().cpu().numpy().astype(np.float64)
 
-            # PROVEN per-tensor generating scale from the FOLDED reference
-            # (the layer_ir "scale_factor" is the activation scale, NOT this).
-            scale = _pertensor_scale(Wf_np)
-            float_w = (int_w.astype(np.float64) * scale).astype(np.float32)
+            is_dw = (int(c.groups) == int(c.weight.shape[0])) and (int(c.weight.shape[1]) == 1)
+            if PER_CHANNEL_DW and is_dw:
+                # [ACCURACY ESTIMATE 2026-06-08] NON-DESTRUCTIVE per-CHANNEL depthwise dequant:
+                # re-quantize the FOLDED reference per OUTPUT CHANNEL (what per-channel deployment
+                # WOULD produce) instead of the per-tensor deployed integers. Measure-only; does
+                # NOT touch the deployed weight hex. Estimates the recovered top-1 before we commit
+                # to the (atomic) frontend+RTL per-OC scale-ROM deployment.
+                per_oc = np.maximum(
+                    np.abs(Wf_np).reshape(Wf_np.shape[0], -1).max(axis=1) / GEN_QMAX_INT8, 1e-12)
+                int_pc = np.clip(np.round(Wf_np / per_oc[:, None, None, None]),
+                                 QMIN_INT8, QMAX_INT8)
+                float_w = (int_pc * per_oc[:, None, None, None]).astype(np.float32)
+                qmin_seen, qmax_seen = int(int_pc.min()), int(int_pc.max())
+                range_ok, match_frac = True, 1.0  # re-quantized estimate (not deployed integers)
+            else:
+                # PROVEN per-tensor generating scale from the FOLDED reference
+                # (the layer_ir "scale_factor" is the activation scale, NOT this).
+                scale = _pertensor_scale(Wf_np)
+                float_w = (int_w.astype(np.float64) * scale).astype(np.float32)
+                qmin_seen, qmax_seen = int(int_w.min()), int(int_w.max())
+                range_ok = (qmin_seen >= QMIN_INT8) and (qmax_seen <= QMAX_INT8)
+                q = np.clip(np.round(Wf_np / scale), QMIN_INT8, QMAX_INT8).astype(np.int32)
+                match_frac = float((q == int_w.astype(np.int32)).mean())
 
             _attach_conv_bias(c)
             c.weight.copy_(torch.from_numpy(float_w).to(c.weight.dtype))
             c.bias.copy_(bf.to(c.bias.dtype))  # folded-float bias proxy
             set_bn_identity(bn)
-
-            # --- sanity: integer range + requant element-exact round-trip ---
-            qmin_seen, qmax_seen = int(int_w.min()), int(int_w.max())
-            range_ok = (qmin_seen >= QMIN_INT8) and (qmax_seen <= QMAX_INT8)
-            q = np.clip(np.round(Wf_np / scale), QMIN_INT8, QMAX_INT8).astype(np.int32)
-            match_frac = float((q == int_w.astype(np.int32)).mean())
             sanity_rows.append((layer["module_id"], qmin_seen, qmax_seen,
                                 range_ok, match_frac))
 
