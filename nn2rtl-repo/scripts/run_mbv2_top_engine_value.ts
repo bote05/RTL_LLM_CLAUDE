@@ -218,6 +218,9 @@ async function main(): Promise<void> {
       // [DEBUG] NN2RTL_PUBLIC=1 exposes ALL internal nets (engine conv data_out, relus, act-mem)
       // for the per-node localization probe. Slower sim; do NOT use for the final/fit build.
       ...(process.env.NN2RTL_PUBLIC ? ["--public-flat-rw"] : []),
+      // [MT-DEBUG 2026-06-08] extra verilator args (e.g. --no-threads-coarsen) for the #5
+      // multithread-determinism investigation. Space-separated. No-op when unset.
+      ...(process.env.NN2RTL_VERILATOR_EXTRA ? process.env.NN2RTL_VERILATOR_EXTRA.trim().split(/\s+/) : []),
       ...sources.map(toForwardSlash), toForwardSlash(tbCpp),
     ];
     console.log(`[verilate] starting verilator (${sources.length} RTL sources, REAL engine, ~5-15 min)`);
