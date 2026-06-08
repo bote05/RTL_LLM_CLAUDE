@@ -196,7 +196,13 @@ async function main(): Promise<void> {
     const sources = await collectSources();
     console.log(`[setup] collected ${sources.length} RTL files (REAL engine path active); tb=${path.relative(repoRoot, tbCpp)}`);
     const verilatorArgs = [
-      "--cc", "--exe", "-O3", "--threads", "4", "--top-module", "nn2rtl_top", "--Mdir", toForwardSlash(buildDir),
+      // [DETERMINISM 2026-06-08] default to SINGLE-THREAD: the design has benign UNOPTFLAT
+      // (false combinational loops, e.g. wide bit-sliced buses) that Verilator's MULTITHREADED
+      // scheduler settles NON-DETERMINISTICALLY -> --threads 4 gave spurious 688-byte e2e
+      // mismatches (Vivado synth confirms NO real loop; per-module TBs + ST e2e are byte-exact).
+      // --threads 1 is deterministic + hardware-faithful = the reliable verification gate.
+      // Set MBV2_THREADS=4 only for faster (non-authoritative) iteration.
+      "--cc", "--exe", "-O3", "--threads", String(process.env.MBV2_THREADS ?? "1"), "--top-module", "nn2rtl_top", "--Mdir", toForwardSlash(buildDir),
       "-CFLAGS", "-O2 -std=c++17 -DNDEBUG",
       "--x-initial", "0",   // force uninitialized state to 0 (FPGA power-on), hardware-faithful
       "-DNN2RTL_ENGINE_SUBBLOCKS_PROVIDED",  // suppress the skeleton's empty stub submodules; use the REAL engine/*.v

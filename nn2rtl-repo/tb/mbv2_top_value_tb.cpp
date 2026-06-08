@@ -248,7 +248,10 @@ FrameStats runFrame(Vnn2rtl_top* dut, const VectorFile& goldin, const VectorFile
       st.input_beats_sent++;
     }
     if (output_accept) {
-      auto ow = readWords(dut->m_axis_tdata, goldout.words_per_sample);
+      // [SERIALIZED OUTPUT 2026-06-08] m_axis is now a 256b stream (8 words/beat); the 1000
+      // logits arrive over ceil(1000/32)=32 beats with tlast on the last. Capture every beat
+      // (8 words), then reassemble into the 1000-byte logit vector in the compare below.
+      auto ow = readWords(dut->m_axis_tdata, 8);
       if (st.output_beats_seen < 2) {
         // first few logit bytes for a quick sanity glance
         std::printf("[dbg-out] beat %llu logit[0..7]=%d %d %d %d %d %d %d %d\n",
@@ -260,8 +263,8 @@ FrameStats runFrame(Vnn2rtl_top* dut, const VectorFile& goldin, const VectorFile
       }
       captured.push_back(std::move(ow));
       st.output_beats_seen++;
-      // Stop on tlast OR once we've captured a full frame of goldout beats.
-      if (output_last || st.output_beats_seen >= kOutputBeats) {
+      // Stop on tlast (serialized: tlast on the final 256b beat). 256 = safety cap >> 32.
+      if (output_last || st.output_beats_seen >= 256) {
         last_output_cycle = cycle; done = true;
       }
     }
@@ -306,24 +309,30 @@ FrameStats runFrame(Vnn2rtl_top* dut, const VectorFile& goldin, const VectorFile
     }
   }
 
-  // ---- byte-exact compare: captured vs goldout, bps bytes/beat (1000) ----
+  // ---- byte-exact compare: reassemble the serialized 256b beats into one byte stream
+  //      (beat0 bytes 0..31, beat1 32..63, ...) then compare the first bps(=1000) bytes to
+  //      the single 1000-byte goldout sample. Byte order = same low-to-high logit order the
+  //      output_serializer emits (beat b lane j = logit b*32+j), so the concatenation is the
+  //      original dp_data_out[7999:0] byte-for-byte. ----
   const uint32_t bps = goldout.bytes_per_sample;   // 1000
-  const uint64_t beats_to_cmp = (st.output_beats_seen < kOutputBeats) ? st.output_beats_seen : kOutputBeats;
-  for (uint64_t b = 0; b < beats_to_cmp; ++b) {
-    const auto& got = captured[b];
-    const auto& exp = out_samples[b];
-    for (uint32_t byte = 0; byte < bps; ++byte) {
-      const uint8_t gb = static_cast<uint8_t>((got[byte / 4] >> (8U * (byte % 4))) & 0xFF);
-      const uint8_t eb = static_cast<uint8_t>((exp[byte / 4] >> (8U * (byte % 4))) & 0xFF);
-      if (gb != eb) {
-        if (st.first_mm_beat < 0) {
-          st.first_mm_beat = static_cast<int64_t>(b);
-          st.first_mm_byte = static_cast<int64_t>(byte);
-          st.first_mm_exp  = static_cast<int8_t>(eb);
-          st.first_mm_got  = static_cast<int8_t>(gb);
-        }
-        st.mismatch_bytes++;
+  std::vector<uint8_t> got_bytes;
+  got_bytes.reserve(captured.size() * 32);
+  for (const auto& beat : captured)
+    for (uint32_t w = 0; w < beat.size(); ++w)
+      for (int k = 0; k < 4; ++k)
+        got_bytes.push_back(static_cast<uint8_t>((beat[w] >> (8U * k)) & 0xFF));
+  const auto& exp = out_samples[0];
+  for (uint32_t byte = 0; byte < bps; ++byte) {
+    const uint8_t gb = (byte < got_bytes.size()) ? got_bytes[byte] : 0xFFu;
+    const uint8_t eb = static_cast<uint8_t>((exp[byte / 4] >> (8U * (byte % 4))) & 0xFF);
+    if (gb != eb) {
+      if (st.first_mm_beat < 0) {
+        st.first_mm_beat = 0;
+        st.first_mm_byte = static_cast<int64_t>(byte);
+        st.first_mm_exp  = static_cast<int8_t>(eb);
+        st.first_mm_got  = static_cast<int8_t>(gb);
       }
+      st.mismatch_bytes++;
     }
   }
   return st;
@@ -432,7 +441,11 @@ int main(int argc, char** argv) {
     }
 
     total_mismatch += st.mismatch_bytes;
-    const bool vec_pass = (st.mismatch_bytes == 0) && (st.output_beats_seen == goldout.samples_per_vector);
+    // [SERIALIZED OUTPUT 2026-06-08] the DUT now emits the 1000-byte logit vector as
+    // ceil(1000/32)=32 beats of 256b (was 1 beat of 8000b). The reassembled byte content
+    // (st.mismatch_bytes) is the correctness gate; expect the serialized beat count, not 1.
+    const uint64_t kExpBeats = (static_cast<uint64_t>(goldout.bytes_per_sample) * goldout.samples_per_vector + 31) / 32;
+    const bool vec_pass = (st.mismatch_bytes == 0) && (st.output_beats_seen == kExpBeats);
     if (!vec_pass) all_pass = false;
     if (st.first_mm_beat >= 0) {
       if (overall_first_mm_beat < 0) overall_first_mm_beat = st.first_mm_beat;
