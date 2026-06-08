@@ -266,7 +266,7 @@ module nn2rtl_top (
     wire [255:0] n4_29_data_out;
     wire n4_29_ready_in;
     wire node_conv_896_valid_out;
-    wire [4095:0] node_conv_896_data_out;  // [HIGH-OC] C=960 flat 1-beat = 7680b (was truncated)
+    wire [255:0] node_conv_896_data_out;  // [NATIVE_TILED_896] narrowed: native 256b tile bus
     wire node_conv_896_ready_in;
     wire n4_30_valid_out;
     wire [255:0] n4_30_data_out;
@@ -282,7 +282,7 @@ module nn2rtl_top (
     wire [255:0] n4_31_data_out;
     wire n4_31_ready_in;
     wire node_conv_902_valid_out;
-    wire [4095:0] node_conv_902_data_out;  // [HIGH-OC] C=960 flat 1-beat = 7680b (was truncated)
+    wire [255:0] node_conv_902_data_out;  // [NATIVE_TILED_902] narrowed: native 256b tile bus
     wire node_conv_902_ready_in;
     wire n4_32_valid_out;
     wire [255:0] n4_32_data_out;
@@ -298,7 +298,7 @@ module nn2rtl_top (
     wire [255:0] n4_33_data_out;
     wire n4_33_ready_in;
     wire node_conv_908_valid_out;
-    wire [4095:0] node_conv_908_data_out;
+    wire [255:0] node_conv_908_data_out;  // [NATIVE_TILED_908] narrowed: native 256b tile bus
     wire node_conv_908_ready_in;
     wire n4_34_valid_out;
     wire [255:0] n4_34_data_out;
@@ -462,6 +462,9 @@ module nn2rtl_top (
     // [NATIVE_TILED_878] node_conv_878 bridgeless native-256b re-arch applied
     // [NATIVE_TILED_884] node_conv_884 bridgeless native-256b re-arch applied
     // [NATIVE_TILED_890] node_conv_890 bridgeless native-256b re-arch applied
+    // [NATIVE_TILED_896] node_conv_896 bridgeless native-256b re-arch applied
+    // [NATIVE_TILED_902] node_conv_902 bridgeless native-256b re-arch applied
+    // [NATIVE_TILED_908] node_conv_908 bridgeless native-256b re-arch applied
     // ===== WAVE-2 RETILE BRIDGES (apply_mbv2_wave2_bridges.py) =====
     // Pure byte gather/scatter between tiled-streaming (256b, 32ch/beat)
     // and flat/depthwise full-width beats. No channel reordering.
@@ -474,12 +477,6 @@ module nn2rtl_top (
     // any_retile_stall and each br_*_stall_out are declared below; a continuous
     // wire net assign may forward-reference a net (legal Verilog).
 
-    wire spatial_run_drain_br_896 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_896_stall_out));
-    wire spatial_run_drain_br_902 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_902_stall_out));
-    wire spatial_run_drain_br_908 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_908_stall_out));
-    wire spatial_run_drain_br_n4_30 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_n4_30_stall_out));
-    wire spatial_run_drain_br_n4_32 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_n4_32_stall_out));
-    wire spatial_run_drain_br_n4_34 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_n4_34_stall_out));
     wire spatial_run_drain_br_mean = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_mean_stall_out));
     wire spatial_run_drain_br_ldr22 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_ldr22_stall_out));
     wire spatial_run_drain_br_ldr24 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_ldr24_stall_out));
@@ -488,36 +485,6 @@ module nn2rtl_top (
     wire spatial_run_drain_br_ldr30 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_ldr30_stall_out));
     wire spatial_run_drain_br_ldr32 = ~(engine_busy | sched_spatial_stall | (any_retile_stall & ~br_ldr32_stall_out));
 
-    wire br_896_valid_out;
-    wire [4095:0] br_896_data_out;
-    wire br_896_ready_out;  // toward producer (free-running; observed for completeness)
-    wire br_896_stall_out;
-    wire br_896_wr_accept;  // (full0 & full1) -> spatial_throttle
-    wire br_902_valid_out;
-    wire [4095:0] br_902_data_out;
-    wire br_902_ready_out;  // toward producer (free-running; observed for completeness)
-    wire br_902_stall_out;
-    wire br_902_wr_accept;  // (full0 & full1) -> spatial_throttle
-    wire br_908_valid_out;
-    wire [4095:0] br_908_data_out;
-    wire br_908_ready_out;  // toward producer (free-running; observed for completeness)
-    wire br_908_stall_out;
-    wire br_908_wr_accept;  // (full0 & full1) -> spatial_throttle
-    wire br_n4_30_valid_out;
-    wire [255:0] br_n4_30_data_out;
-    wire br_n4_30_ready_out;  // toward producer (free-running; observed for completeness)
-    wire br_n4_30_stall_out;
-    wire br_n4_30_wr_accept;  // (full0 & full1) -> spatial_throttle
-    wire br_n4_32_valid_out;
-    wire [255:0] br_n4_32_data_out;
-    wire br_n4_32_ready_out;  // toward producer (free-running; observed for completeness)
-    wire br_n4_32_stall_out;
-    wire br_n4_32_wr_accept;  // (full0 & full1) -> spatial_throttle
-    wire br_n4_34_valid_out;
-    wire [255:0] br_n4_34_data_out;
-    wire br_n4_34_ready_out;  // toward producer (free-running; observed for completeness)
-    wire br_n4_34_stall_out;
-    wire br_n4_34_wr_accept;  // (full0 & full1) -> spatial_throttle
     wire br_mean_valid_out;
     wire [2047:0] br_mean_data_out;
     wire br_mean_ready_out;  // toward producer (free-running; observed for completeness)
@@ -557,87 +524,15 @@ module nn2rtl_top (
     
     
     
-    retile_gather #(.TILE_W(256), .N_TILES(30), .OUT_W(4096), .OUT_BEATS(2), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_896 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(n4_29_valid_out),  // RAW producer valid (always-accept; free-running producers)
-        .ready_out(br_896_ready_out),
-        .data_in(n4_29_data_out),
-        .valid_out(br_896_valid_out),
-        .ready_down(node_conv_896_ready_in),  // consumer-raw accept, NO spatial_run
-        .drain_en(spatial_run_drain_br_896),  // == consumer valid_in gate; excludes ONLY this bridge's own stall
-        .data_out(br_896_data_out),
-        .stall_out(br_896_stall_out),
-        .wr_accept(br_896_wr_accept)
-    );
-
-    retile_gather #(.TILE_W(256), .N_TILES(30), .OUT_W(4096), .OUT_BEATS(2), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_902 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(n4_31_valid_out),  // RAW producer valid (always-accept; free-running producers)
-        .ready_out(br_902_ready_out),
-        .data_in(n4_31_data_out),
-        .valid_out(br_902_valid_out),
-        .ready_down(node_conv_902_ready_in),  // consumer-raw accept, NO spatial_run
-        .drain_en(spatial_run_drain_br_902),  // == consumer valid_in gate; excludes ONLY this bridge's own stall
-        .data_out(br_902_data_out),
-        .stall_out(br_902_stall_out),
-        .wr_accept(br_902_wr_accept)
-    );
-
-    retile_gather #(.TILE_W(256), .N_TILES(30), .OUT_W(4096), .OUT_BEATS(2), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_908 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(n4_33_valid_out),  // RAW producer valid (always-accept; free-running producers)
-        .ready_out(br_908_ready_out),
-        .data_in(n4_33_data_out),
-        .valid_out(br_908_valid_out),
-        .ready_down(node_conv_908_ready_in),  // consumer-raw accept, NO spatial_run
-        .drain_en(spatial_run_drain_br_908),  // == consumer valid_in gate; excludes ONLY this bridge's own stall
-        .data_out(br_908_data_out),
-        .stall_out(br_908_stall_out),
-        .wr_accept(br_908_wr_accept)
-    );
-
     
     
     
-    retile_scatter #(.TILE_W(256), .N_TILES(30), .IN_W(4096), .IN_BEATS(2), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_n4_30 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_896_valid_out),  // RAW producer valid (always-accept; free-running producers)
-        .ready_out(br_n4_30_ready_out),
-        .data_in(node_conv_896_data_out),
-        .valid_out(br_n4_30_valid_out),
-        .ready_down(n4_30_ready_in),  // consumer-raw accept, NO spatial_run
-        .drain_en(spatial_run_drain_br_n4_30),  // == consumer valid_in gate; excludes ONLY this bridge's own stall
-        .data_out(br_n4_30_data_out),
-        .stall_out(br_n4_30_stall_out),
-        .wr_accept(br_n4_30_wr_accept)
-    );
-
-    retile_scatter #(.TILE_W(256), .N_TILES(30), .IN_W(4096), .IN_BEATS(2), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_n4_32 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_902_valid_out),  // RAW producer valid (always-accept; free-running producers)
-        .ready_out(br_n4_32_ready_out),
-        .data_in(node_conv_902_data_out),
-        .valid_out(br_n4_32_valid_out),
-        .ready_down(n4_32_ready_in),  // consumer-raw accept, NO spatial_run
-        .drain_en(spatial_run_drain_br_n4_32),  // == consumer valid_in gate; excludes ONLY this bridge's own stall
-        .data_out(br_n4_32_data_out),
-        .stall_out(br_n4_32_stall_out),
-        .wr_accept(br_n4_32_wr_accept)
-    );
-
-    retile_scatter #(.TILE_W(256), .N_TILES(30), .IN_W(4096), .IN_BEATS(2), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_n4_34 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_908_valid_out),  // RAW producer valid (always-accept; free-running producers)
-        .ready_out(br_n4_34_ready_out),
-        .data_in(node_conv_908_data_out),
-        .valid_out(br_n4_34_valid_out),
-        .ready_down(n4_34_ready_in),  // consumer-raw accept, NO spatial_run
-        .drain_en(spatial_run_drain_br_n4_34),  // == consumer valid_in gate; excludes ONLY this bridge's own stall
-        .data_out(br_n4_34_data_out),
-        .stall_out(br_n4_34_stall_out),
-        .wr_accept(br_n4_34_wr_accept)
-    );
-
+    
+    
+    
+    
+    
+    
     retile_gather #(.TILE_W(256), .N_TILES(40), .OUT_W(2048), .OUT_BEATS(5), .SPATIAL(49), .SYNTH_FIXED_MUX(1)) u_br_mean (
         .clk(clk), .rst_n(rst_n),
         .valid_in(n4_35_valid_out),  // RAW producer valid (always-accept; free-running producers)
@@ -729,7 +624,7 @@ module nn2rtl_top (
         .wr_accept(br_ldr32_wr_accept)
     );
 
-    wire any_retile_stall = br_896_stall_out | br_902_stall_out | br_908_stall_out | br_n4_30_stall_out | br_n4_32_stall_out | br_n4_34_stall_out | br_mean_stall_out | br_ldr22_stall_out | br_ldr24_stall_out | br_ldr26_stall_out | br_ldr28_stall_out | br_ldr30_stall_out | br_ldr32_stall_out;
+    wire any_retile_stall = br_mean_stall_out | br_ldr22_stall_out | br_ldr24_stall_out | br_ldr26_stall_out | br_ldr28_stall_out | br_ldr30_stall_out | br_ldr32_stall_out;
 
     // ===== END WAVE-2 RETILE BRIDGES =====
     // [BP-STEM 2026-06-02] STEM SEGMENT elastic backpressure (param-gated).
@@ -1335,26 +1230,29 @@ module nn2rtl_top (
         .valid_in(node_conv_894_valid_out & spatial_run),
         .ready_in(n4_29_ready_in),
         .data_in(node_conv_894_data_out),
-        .out_ready_in(br_896_wr_accept),
+        .out_ready_in(node_conv_896_ready_in),
         .valid_out(n4_29_valid_out),
         .data_out(n4_29_data_out)
-    );
-
-    node_conv_896 #(.ENABLE_BACKPRESSURE(1)) u_node_conv_896 (
+    );node_conv_896 #(.ENABLE_BACKPRESSURE(1), .NATIVE_TILED(1)) u_node_conv_896 (
 .clk(clk), .rst_n(rst_n),
-        .valid_in( br_896_valid_out & spatial_run_drain_br_896),
-        .ready_in(node_conv_896_ready_in),
-        .data_in(br_896_data_out),
-        .out_ready_in(br_n4_30_wr_accept),
-        .valid_out(node_conv_896_valid_out),
-        .data_out(node_conv_896_data_out)
+        // [NATIVE_TILED_896] bridgeless native 256b tiled ports wired DIRECTLY
+        // n4_29 -> 896 -> n4_30 (legacy wide ports unconnected -> tied off inside).
+        // RAW valid (no & spatial_run): advance-iff-latch via the shared ready
+        // boolean (node_conv_896_ready_in on the input edge, n4_30_ready_in on the
+        // output edge); see retile_bridge.v THE INVARIANT and apply_mbv2_native_tiled_repl.py.
+        .valid_in_t(n4_29_valid_out),
+        .ready_in_t(node_conv_896_ready_in),
+        .data_in_t(n4_29_data_out),
+        .out_ready_in_t(n4_30_ready_in),
+        .valid_out_t(node_conv_896_valid_out),
+        .data_out_t(node_conv_896_data_out)
     );
 
     n4_30 #(.ENABLE_BACKPRESSURE(1)) u_n4_30 (
 .clk(clk), .rst_n(rst_n),
-        .valid_in( br_n4_30_valid_out & spatial_run_drain_br_n4_30),
+        .valid_in(node_conv_896_valid_out),
         .ready_in(n4_30_ready_in),
-        .data_in(br_n4_30_data_out),
+        .data_in(node_conv_896_data_out),
         .out_ready_in(br_ldr28_wr_accept),
         .valid_out(n4_30_valid_out),
         .data_out(n4_30_data_out)
@@ -1380,26 +1278,29 @@ module nn2rtl_top (
         .valid_in(node_conv_900_valid_out & spatial_run),
         .ready_in(n4_31_ready_in),
         .data_in(node_conv_900_data_out),
-        .out_ready_in(br_902_wr_accept),
+        .out_ready_in(node_conv_902_ready_in),
         .valid_out(n4_31_valid_out),
         .data_out(n4_31_data_out)
-    );
-
-    node_conv_902 #(.ENABLE_BACKPRESSURE(1)) u_node_conv_902 (
+    );node_conv_902 #(.ENABLE_BACKPRESSURE(1), .NATIVE_TILED(1)) u_node_conv_902 (
 .clk(clk), .rst_n(rst_n),
-        .valid_in( br_902_valid_out & spatial_run_drain_br_902),
-        .ready_in(node_conv_902_ready_in),
-        .data_in(br_902_data_out),
-        .out_ready_in(br_n4_32_wr_accept),
-        .valid_out(node_conv_902_valid_out),
-        .data_out(node_conv_902_data_out)
+        // [NATIVE_TILED_902] bridgeless native 256b tiled ports wired DIRECTLY
+        // n4_31 -> 902 -> n4_32 (legacy wide ports unconnected -> tied off inside).
+        // RAW valid (no & spatial_run): advance-iff-latch via the shared ready
+        // boolean (node_conv_902_ready_in on the input edge, n4_32_ready_in on the
+        // output edge); see retile_bridge.v THE INVARIANT and apply_mbv2_native_tiled_repl.py.
+        .valid_in_t(n4_31_valid_out),
+        .ready_in_t(node_conv_902_ready_in),
+        .data_in_t(n4_31_data_out),
+        .out_ready_in_t(n4_32_ready_in),
+        .valid_out_t(node_conv_902_valid_out),
+        .data_out_t(node_conv_902_data_out)
     );
 
     n4_32 #(.ENABLE_BACKPRESSURE(1)) u_n4_32 (
 .clk(clk), .rst_n(rst_n),
-        .valid_in( br_n4_32_valid_out & spatial_run_drain_br_n4_32),
+        .valid_in(node_conv_902_valid_out),
         .ready_in(n4_32_ready_in),
-        .data_in(br_n4_32_data_out),
+        .data_in(node_conv_902_data_out),
         .out_ready_in(br_ldr30_wr_accept),
         .valid_out(n4_32_valid_out),
         .data_out(n4_32_data_out)
@@ -1425,26 +1326,29 @@ module nn2rtl_top (
         .valid_in(node_conv_906_valid_out & spatial_run),
         .ready_in(n4_33_ready_in),
         .data_in(node_conv_906_data_out),
-        .out_ready_in(br_908_wr_accept),
+        .out_ready_in(node_conv_908_ready_in),
         .valid_out(n4_33_valid_out),
         .data_out(n4_33_data_out)
-    );
-
-    node_conv_908 #(.ENABLE_BACKPRESSURE(1)) u_node_conv_908 (
+    );node_conv_908 #(.ENABLE_BACKPRESSURE(1), .NATIVE_TILED(1)) u_node_conv_908 (
 .clk(clk), .rst_n(rst_n),
-        .valid_in( br_908_valid_out & spatial_run_drain_br_908),
-        .ready_in(node_conv_908_ready_in),
-        .data_in(br_908_data_out),
-        .out_ready_in(br_n4_34_wr_accept),
-        .valid_out(node_conv_908_valid_out),
-        .data_out(node_conv_908_data_out)
+        // [NATIVE_TILED_908] bridgeless native 256b tiled ports wired DIRECTLY
+        // n4_33 -> 908 -> n4_34 (legacy wide ports unconnected -> tied off inside).
+        // RAW valid (no & spatial_run): advance-iff-latch via the shared ready
+        // boolean (node_conv_908_ready_in on the input edge, n4_34_ready_in on the
+        // output edge); see retile_bridge.v THE INVARIANT and apply_mbv2_native_tiled_repl.py.
+        .valid_in_t(n4_33_valid_out),
+        .ready_in_t(node_conv_908_ready_in),
+        .data_in_t(n4_33_data_out),
+        .out_ready_in_t(n4_34_ready_in),
+        .valid_out_t(node_conv_908_valid_out),
+        .data_out_t(node_conv_908_data_out)
     );
 
     n4_34 #(.ENABLE_BACKPRESSURE(1)) u_n4_34 (
 .clk(clk), .rst_n(rst_n),
-        .valid_in( br_n4_34_valid_out & spatial_run_drain_br_n4_34),
+        .valid_in(node_conv_908_valid_out),
         .ready_in(n4_34_ready_in),
-        .data_in(br_n4_34_data_out),
+        .data_in(node_conv_908_data_out),
         .out_ready_in(br_ldr32_wr_accept),
         .valid_out(n4_34_valid_out),
         .data_out(n4_34_data_out)
