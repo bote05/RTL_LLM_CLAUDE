@@ -76,7 +76,7 @@ module node_conv_896 #(
     localparam integer PH        = 1;
     localparam integer PW        = 1;
     localparam integer K_TOTAL   = KH * KW;            // 9
-    localparam integer MP        = 4;
+    localparam integer MP        = 8;
     localparam integer MP_K      = 9;            // tap-parallel width (= K_TOTAL)
     localparam integer K_GROUPS  = K_TOTAL / MP_K; // = 1 (single-shot reduction)
     localparam integer OC_PASSES = (C + MP - 1) / MP;  // 240
@@ -172,7 +172,7 @@ module node_conv_896 #(
     // change: each byte is bit-identical to the corresponding window_flat byte.
     wire [KH*KW*8-1:0]                chan_window_flat;
     wire                              mac_busy;
-    (* max_fanout = 256 *) reg [1:0] lane_counter;
+    (* max_fanout = 256 *) reg [2:0] lane_counter;
     reg [7:0] oc_group;            // OC_PASSES=240 needs 8 bits (0..239)
     (* max_fanout = 256 *) wire [10:0] current_global_oc = oc_group * MP + lane_counter;
     wire [15:0] weight_base_addr  = current_global_oc * K_TOTAL;  // contiguous K_TOTAL taps for this channel
@@ -320,12 +320,12 @@ module node_conv_896 #(
     (* use_dsp = "yes" *) reg signed [PROD_W-1:0] prod_q [0:MP_K-1];
 
     reg                  mac_valid_q1;
-    reg [1:0]            mac_lane_q1;
+    reg [2:0]            mac_lane_q1;
     reg [10:0]           mac_global_oc_q1;
     reg                  mac_done_issuing;
 
     reg                  mac_valid_q2;
-    reg [1:0]            mac_lane_q2;
+    reg [2:0]            mac_lane_q2;
     reg [10:0]           mac_global_oc_q2;
 
     integer pp;
@@ -365,13 +365,13 @@ module node_conv_896 #(
             dp_valid         <= 1'b0;
             dp_data          <= {BEAT_W{1'b0}};
             emit_hi          <= 1'b0;
-            lane_counter     <= 2'd0;
+            lane_counter     <= 3'd0;
             oc_group         <= 8'd0;
             mac_valid_q1     <= 1'b0;
-            mac_lane_q1      <= 2'd0;
+            mac_lane_q1      <= 3'd0;
             mac_global_oc_q1 <= 11'd0;
             mac_valid_q2     <= 1'b0;
-            mac_lane_q2      <= 2'd0;
+            mac_lane_q2      <= 3'd0;
             mac_global_oc_q2 <= 11'd0;
             mac_done_issuing <= 1'b0;
             v_tmp            <= {SCALED_W{1'b0}};
@@ -410,7 +410,7 @@ module node_conv_896 #(
                 ST_IDLE: begin
                     if (start_mac) begin
                         state            <= ST_MAC;
-                        lane_counter     <= 2'd0;
+                        lane_counter     <= 3'd0;
                         oc_group         <= 8'd0;
                         mac_valid_q1     <= 1'b0;
                         mac_valid_q2     <= 1'b0;
@@ -432,11 +432,11 @@ module node_conv_896 #(
                         mac_global_oc_q1 <= current_global_oc;
                         mac_valid_q1     <= 1'b1;
 
-                        if (lane_counter == 2'd3) begin
-                            lane_counter     <= 2'd0;
+                        if (lane_counter == 3'd7) begin
+                            lane_counter     <= 3'd0;
                             mac_done_issuing <= 1'b1;
                         end else begin
-                            lane_counter <= lane_counter + 2'd1;
+                            lane_counter <= lane_counter + 3'd1;
                         end
                     end
                 end
@@ -492,7 +492,7 @@ module node_conv_896 #(
                         state    <= ST_IDLE;
                     end else begin
                         oc_group     <= oc_group + 8'd1;
-                        lane_counter <= 2'd0;
+                        lane_counter <= 3'd0;
                         for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
                             acc[lane_i] <= {ACC_W{1'b0}};
                         state <= ST_MAC;
