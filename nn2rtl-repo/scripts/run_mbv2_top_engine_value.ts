@@ -196,12 +196,17 @@ async function main(): Promise<void> {
     const sources = await collectSources();
     console.log(`[setup] collected ${sources.length} RTL files (REAL engine path active); tb=${path.relative(repoRoot, tbCpp)}`);
     const verilatorArgs = [
-      // [DETERMINISM 2026-06-08] default to SINGLE-THREAD: the design has benign UNOPTFLAT
-      // (false combinational loops, e.g. wide bit-sliced buses) that Verilator's MULTITHREADED
-      // scheduler settles NON-DETERMINISTICALLY -> --threads 4 gave spurious 688-byte e2e
-      // mismatches (Vivado synth confirms NO real loop; per-module TBs + ST e2e are byte-exact).
-      // --threads 1 is deterministic + hardware-faithful = the reliable verification gate.
-      // Set MBV2_THREADS=4 only for faster (non-authoritative) iteration.
+      // [DETERMINISM 2026-06-08, #5 root-caused] default to SINGLE-THREAD. CORRECTED: there is NO
+      // false combinational loop -- a full unsuppressed Verilator lint reports 0 UNOPTFLAT / 0
+      // MULTIDRIVEN. The --threads 4 path produces WRONG VALUES (e2e mismatch_bytes = 688 on the
+      // pre-per-channel netlist, 739 on the current one; identical cycle count, so timing is fine
+      // but logits are corrupt), and the result is DETERMINISTIC-PER-NETLIST but structure-dependent
+      // (flips when the netlist changes). That signature = a Verilator MULTITHREADED-SCHEDULER data
+      // hazard (a cross-partition read/write order the MT engine gets wrong), NOT a design bug:
+      // --threads 1 is byte-exact AND Vivado synth is clean = the hardware is correct. Fixing the
+      // MT path would be a deep Verilator-internals effort with sim-speed-only payoff, so we PIN
+      // --threads 1 as the authoritative gate. Set MBV2_THREADS=4 only for throwaway speed (UNSAFE
+      // for verification -- it will report false mismatches).
       "--cc", "--exe", "-O3", "--threads", String(process.env.MBV2_THREADS ?? "1"), "--top-module", "nn2rtl_top", "--Mdir", toForwardSlash(buildDir),
       "-CFLAGS", "-O2 -std=c++17 -DNDEBUG",
       "--x-initial", "0",   // force uninitialized state to 0 (FPGA power-on), hardware-faithful
