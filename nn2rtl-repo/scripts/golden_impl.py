@@ -486,10 +486,13 @@ class Int8Gemm(nn.Module):
         acc = x_int32 @ self.weight.t()
         if self.bias is not None:
             acc = acc + self.bias.view(1, -1)
-        # Same requantize semantics as conv: round half toward +inf, clamp to
-        # INT8.
-        rescaled = round_half_up_toward_pos_inf(acc.to(torch.float32) * self.scale_factor)
-        return torch.clamp(rescaled, -128, 127)
+        # [CORRECTNESS 2026-06-08] Use the INTEGER fixed-point requant (the same path every
+        # Int8Conv2d uses), NOT the float one. The RTL (node_linear.v) requantizes in fixed point
+        # ((acc*mult + 2^(shift-1)) >>> shift, mult/shift = compute_scale_approx(scale_factor)); the
+        # prior float path (acc*scale_factor, true-scale round) left a +-1 LSB residual on near-.5-tie
+        # logits vs the RTL (the vec3/vec6 e2e diffs). requantize_tensor_with_scale == the RTL exactly,
+        # so the golden becomes byte-identical to the hardware (8/8 e2e). acc is an exact integer here.
+        return requantize_tensor_with_scale(acc, self.scale_factor)
 
 
 class ResidualStackTracer(fx.Tracer):

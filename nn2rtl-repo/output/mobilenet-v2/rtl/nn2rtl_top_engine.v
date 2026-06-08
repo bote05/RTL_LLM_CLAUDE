@@ -3648,34 +3648,54 @@ module skip_fifo #(
     endfunction
     localparam integer ADDR_W = clog2(DEPTH);
 
-    reg [WIDTH-1:0] mem [0:DEPTH-1];
-    reg [ADDR_W:0]  wr_ptr;
-    reg [ADDR_W:0]  rd_ptr;
+    // [FIT/DE-CONGEST 2026-06-08] BRAM-backed SKID FIFO (was an ASYNC-read mem -> Vivado inferred
+    // it as DISTRIBUTED RAM (LUTRAM): the residual-add skip/lhs FIFOs alone were ~112K LUTs-as-
+    // distributed-RAM and drove CLB/slice utilization to 95.78% (the real Fmax/route constraint).
+    // ram_style="block" needs a SYNCHRONOUS read, so the async `out_data = mem[rd_idx]` is replaced
+    // by a 1-deep OUTPUT SKID (mirrors the proven engine_output_fifo pattern): the head is pre-read
+    // into out_data_r and presented while valid. This adds ~1 cycle of read latency, but the
+    // residual-add consumers are ELASTIC (ENABLE_BACKPRESSURE=1: they pair operands by valid/ready,
+    // not by fixed cycle) and the skip+lhs FIFOs shift identically, so the paired operands and the
+    // add RESULT are BYTE-EXACT (the e2e value gate is the authority). Capacity is DEPTH(mem)+1(skid)
+    // >= the old DEPTH, so the right-sized residual-frame depths still hold a full frame.
+    (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:DEPTH-1];
+    reg [ADDR_W:0]   wr_ptr;
+    reg [ADDR_W:0]   rd_ptr;
+    reg              out_valid_r;
+    reg [WIDTH-1:0]  out_data_r;
 
-    wire [ADDR_W-1:0] wr_idx = wr_ptr[ADDR_W-1:0];
-    wire [ADDR_W-1:0] rd_idx = rd_ptr[ADDR_W-1:0];
-    wire empty = (wr_ptr == rd_ptr);
+    wire fifo_empty = (wr_ptr == rd_ptr);
     // full when low bits match but top bit differs (one-extra-bit pointer trick).
-    wire full  = (wr_ptr[ADDR_W] != rd_ptr[ADDR_W]) &&
-                 (wr_ptr[ADDR_W-1:0] == rd_ptr[ADDR_W-1:0]);
+    wire fifo_full  = (wr_ptr[ADDR_W] != rd_ptr[ADDR_W]) &&
+                      (wr_ptr[ADDR_W-1:0] == rd_ptr[ADDR_W-1:0]);
+    wire wr_fire    = in_valid && !fifo_full;
+    // refill the output skid when it is empty (or being consumed this cycle) and mem has data.
+    wire load_skid  = !fifo_empty && (!out_valid_r || out_ready);
 
-    assign in_ready  = ~full;
-    assign out_valid = ~empty;
-    assign out_data  = mem[rd_idx];
+    assign in_ready  = !fifo_full;
+    assign out_valid = out_valid_r;
+    assign out_data  = out_data_r;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wr_ptr <= {(ADDR_W+1){1'b0}};
-            rd_ptr <= {(ADDR_W+1){1'b0}};
+            wr_ptr      <= {(ADDR_W+1){1'b0}};
+            rd_ptr      <= {(ADDR_W+1){1'b0}};
+            out_valid_r <= 1'b0;
+            out_data_r  <= {WIDTH{1'b0}};
         end else begin
-            if (in_valid && ~full)        wr_ptr <= wr_ptr + 1'b1;
-            if (out_ready && ~empty)      rd_ptr <= rd_ptr + 1'b1;
+            if (wr_fire) wr_ptr <= wr_ptr + 1'b1;
+            if (out_valid_r && out_ready) out_valid_r <= 1'b0;
+            if (load_skid) begin
+                out_data_r  <= mem[rd_ptr[ADDR_W-1:0]];
+                out_valid_r <= 1'b1;
+                rd_ptr      <= rd_ptr + 1'b1;
+            end
         end
     end
 
     // Array-memory write split out per knowledge/patterns/protected/08_common_bugs.md.
     always @(posedge clk) begin
-        if (in_valid && ~full) mem[wr_idx] <= in_data;
+        if (wr_fire) mem[wr_ptr[ADDR_W-1:0]] <= in_data;
     end
 endmodule
 
