@@ -129,14 +129,13 @@ module node_conv_818 #(
     // selected channel.
     wire [KH*KW*8-1:0]                chan_window_flat;
     wire                              mac_busy;
-    reg [3:0] lane_counter;
+    (* max_fanout = 256 *) reg [3:0] lane_counter;
     reg [4:0] oc_group;            // OC_PASSES=24 needs 5 bits (0..23)
-    wire [6:0]  current_global_oc = oc_group * MP + lane_counter; // 0..95 -> 7 bits
+    (* max_fanout = 256 *) wire [6:0]  current_global_oc = oc_group * MP + lane_counter; // 0..95 -> 7 bits
     wire [15:0] weight_base_addr  = current_global_oc * K_TOTAL;  // contiguous K_TOTAL taps for this channel
 
     // ----------------- start_pulse generator (mirrors conv3x3 ref) -----------------
-    reg started, pending_rearm;
-    (* max_fanout = 256 *) reg start_pulse;
+    reg started, start_pulse, pending_rearm;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             started       <= 1'b0;

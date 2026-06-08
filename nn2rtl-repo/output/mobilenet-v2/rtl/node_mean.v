@@ -48,7 +48,7 @@ module node_mean #(
 
     reg [1:0] state;
     reg [6:0] cell_count;  // 0 .. HW-1
-    reg [2:0] in_tile;     // 0 .. N_TILES-1 (input tile within a spatial cell)
+    (* max_fanout = 256 *) reg [2:0] in_tile;     // 0 .. N_TILES-1 [FMAX 2026-06-08] ~12K FDCE fanout -> cap replication (byte-exact attr)
     reg [6:0] scale_idx;   // 0 .. SCALE_STEPS-1
     reg [6:0] round_idx;   // 0 .. SCALE_STEPS-1  [BRAM-FIX] serialized ROUND
     reg [6:0] pack_idx;    // 0 .. SCALE_STEPS-1  [BRAM-FIX] serialized PACK

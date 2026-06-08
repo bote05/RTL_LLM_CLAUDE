@@ -181,14 +181,13 @@ module node_conv_884 #(
     // KH*KW*C*8 window_flat to eliminate the cross-channel-mux routing congestion.
     wire [KH*KW*8-1:0]                chan_window_flat;
     wire                              mac_busy;
-    reg [1:0] lane_counter;
+    (* max_fanout = 256 *) reg [1:0] lane_counter;
     reg [$clog2(OC_PASSES)-1:0] oc_group;   // OC_PASSES=144 -> 8 bits (0..143)
     wire [$clog2(C)-1:0] current_global_oc = oc_group * MP + lane_counter; // 0..575 -> 10 bits
     wire [15:0]          weight_base_addr  = current_global_oc * K_TOTAL;  // contiguous K_TOTAL taps for this channel
 
     // ----------------- start_pulse generator (mirrors conv3x3 ref) -----------------
-    reg started, pending_rearm;
-    (* max_fanout = 256 *) reg start_pulse;
+    reg started, start_pulse, pending_rearm;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             started       <= 1'b0;

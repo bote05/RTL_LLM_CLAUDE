@@ -88,9 +88,9 @@ module node_conv_812 #(
     // ABOVE its first use. Pure reordering moved from the datapath section;
     // zero logic change. Strict elaborators (Vivado / iverilog -g2012) reject
     // the forward reference that Verilator tolerated.
-    reg [3:0] lane_counter;
+    (* max_fanout = 256 *) reg [3:0] lane_counter;
     reg [2:0] oc_group;
-    wire [5:0]  current_global_oc = oc_group * MP + lane_counter;
+    (* max_fanout = 256 *) wire [5:0]  current_global_oc = oc_group * MP + lane_counter;
     wire [15:0] weight_base_addr  = current_global_oc * K_TOTAL;  // contiguous K_TOTAL taps for this channel
 
     // ---- datapath output regs (inlined) + 1-deep output skid ----
@@ -131,8 +131,7 @@ module node_conv_812 #(
     end
 
     // ----------------- start_pulse generator (mirrors conv3x3 ref) -----------------
-    reg started, pending_rearm;
-    (* max_fanout = 256 *) reg start_pulse;
+    reg started, start_pulse, pending_rearm;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             started       <= 1'b0;

@@ -265,7 +265,10 @@ module line_buf_window #(
     // channel when consumed, mirroring the legacy 1-advance q_reg latency. VERIFIED byte-exact
     // (mismatch=0) by output/mobilenet-v2/verify_lbw_c960/tb_equiv.sv on node_conv_896 (C=960, NT=30,
     // 2 frames). The equiv-TB is the authority on this timing.
-    reg  [NT_W-1:0] tcnt;
+    // [FMAX 2026-06-08] tcnt is the TILE_STORAGE burst counter; in MBV2 depthwise it fans out
+    // ~21K (FDCE, general routing, NOT BUFG-promoted) -> cap replication to relieve congestion.
+    // Attribute-only (Verilator-invisible = byte-exact); unused/harmless for TILE_STORAGE==0 (ResNet).
+    (* max_fanout = 256 *) reg  [NT_W-1:0] tcnt;
     reg             burst_active;
     generate
         if (TILE_STORAGE == 0 || NT <= 1) begin : gen_no_burst
