@@ -75,6 +75,7 @@ module n4_11 #(
     reg  [1535:0] requant_comb;
     always @(*) begin
         requant_comb = 1536'd0;
+        in_byte   = '0;   // [LATCH-FIX 2026-06-08] unconditional default (no inferred latch)
         if (valid_in) begin
         for (i = 0; i < OC; i = i + 1) begin
             in_byte  = $signed(data_in[i*8 +: 8]);

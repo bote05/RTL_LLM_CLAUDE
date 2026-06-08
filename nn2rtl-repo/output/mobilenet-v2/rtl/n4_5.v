@@ -67,6 +67,7 @@ module n4_5 #(
     reg  [1151:0] requant_comb;
     always @(*) begin
         requant_comb = 1152'd0;
+        relu_byte = '0;   // [LATCH-FIX 2026-06-08] unconditional default (no inferred latch)
         if (valid_in) begin
         for (i = 0; i < OC; i = i + 1) begin
             // clamp to [0, max] (ReLU); domain becomes 0..127

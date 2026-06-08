@@ -65,6 +65,7 @@ module n4_22 #(
     reg  [3071:0] requant_comb;
     always @(*) begin
         requant_comb = 3072'd0;
+        relu_byte = '0;   // [LATCH-FIX 2026-06-08] unconditional default (no inferred latch)
         if (valid_in) begin
         for (i = 0; i < OC; i = i + 1) begin
             relu_byte = ($signed(data_in[i*8 +: 8]) > 0)
