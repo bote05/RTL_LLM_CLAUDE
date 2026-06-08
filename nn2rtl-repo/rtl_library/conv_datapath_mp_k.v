@@ -45,12 +45,24 @@ module conv_datapath_mp_k #(
     // Drives WIDE_W and the MAC weight slice below. The 4 spatial INT3 convs
     // (node_conv_284/288/292/298) instantiate this with WGT_BITS(3); all others
     // keep the default 4 -> backward-compatible.
-    parameter integer WGT_BITS     = 4
+    parameter integer WGT_BITS     = 4,
+    // [RESNET-CHANWINDOW] 1 => read narrow per-channel chan_window_flat (one channel/cycle via
+    // channel_select=k_group) instead of slicing wide window_flat. Byte-identical for MP_K==KH*KW
+    // (compile guard below). Eliminates the KH*KW*IC*8 combinational window mux. Default 0 = legacy.
+    parameter integer USE_CHAN_WINDOW = 0,
+    // [DSP-INPUT-PIPE] 1 => insert ONE extra register stage on the multiplier inputs
+    // (weight_word_q->q2, tap_q->q2) + a matching valid delay. Breaks the long
+    // lbw/ROM->DSP route (Fmax). +1 latency. 0 = exact current behavior + latency.
+    parameter integer DSP_INPUT_PIPE = 0
 ) (
     input  wire                               clk,
     input  wire                               rst_n,
 
     input  wire [KH*KW*IC*8-1:0]              window_flat,
+    // [RESNET-CHANWINDOW] narrow per-channel window (used iff USE_CHAN_WINDOW); wide window_flat
+    // is then constant-0 (lbw EXPOSE_FULL_WINDOW=0) and unread.
+    input  wire [KH*KW*8-1:0]                 chan_window_flat,
+    output wire [((IC>1)?$clog2(IC):1)-1:0]   channel_select,
     input  wire                               start_mac,
 
     output reg                                valid_out,
@@ -114,8 +126,14 @@ module conv_datapath_mp_k #(
     integer dbg_n; initial dbg_n = 0;
 `endif
 
-    reg [KGROUP_COUNTER_W-1:0] k_group;
-    reg [OC_GROUP_W-1:0]       oc_group;
+    // [FMAX-FANOUT] k_group drives the chan_window select mux across IC channels;
+    // on the deep IC=512 convs this is the fo~11487 / 15.9ns broadcast net (the #1
+    // Fmax limiter). max_fanout forces Vivado to replicate the driver near its loads.
+    // Synth-only attribute (Verilator ignores it) -> byte-exact + latency-neutral.
+    (* max_fanout = 64 *) reg [KGROUP_COUNTER_W-1:0] k_group;
+    // [FMAX-FANOUT] oc_group drives the weight/bias/scale ROM address decoders + the
+    // OC-bound muxes; replicate to keep its fanout local. Synth-only, byte-exact.
+    (* max_fanout = 64 *) reg [OC_GROUP_W-1:0]       oc_group;
 
     // Separate per-block loop variables. Sharing one `integer i` across
     // multiple always blocks creates a race because all blocks fire on the
@@ -135,6 +153,20 @@ module conv_datapath_mp_k #(
     assign mac_busy = (state != ST_IDLE);
 
     wire [$clog2(NUM_WIDE_WORDS+1)-1:0] weight_read_addr = oc_group * K_GROUPS + k_group;
+    // [RESNET-CHANWINDOW] drive lbw channel_select = current k_group (== input-channel index when
+    // MP_K==KH*KW); combinational fanout of the same register that feeds tap_at.
+    localparam integer CSEL_W = (IC > 1) ? $clog2(IC) : 1;
+    // channel_select is meaningful only when USE_CHAN_WINDOW=1 (then MP_K==KH*KW => K_GROUPS==IC
+    // => k_group is exactly CSEL_W bits, so the slice is in-range/exact). For all other instances
+    // (MP_K!=KH*KW, e.g. 1x1 convs where CSEL_W > k_group width) tie it 0 to avoid an out-of-range
+    // bit-select (Verilator SELRANGE); channel_select is unused there.
+    generate
+    if (USE_CHAN_WINDOW != 0) begin : g_csel
+        assign channel_select = k_group[CSEL_W-1:0];
+    end else begin : g_csel_off
+        assign channel_select = {CSEL_W{1'b0}};
+    end
+    endgenerate
 
     // Window-tap indexer: same as conv_datapath_parallel. Linear k index k_lin
     // maps to (kh, kw, ic). Function called MP_K times per cycle for k positions
@@ -154,11 +186,50 @@ module conv_datapath_mp_k #(
     // ---- Stage 1: register weight word + MP_K taps ----
     reg [WIDE_W-1:0]    weight_word_q;
     reg signed [7:0]    tap_q [0:MP_K-1];
-    always @(posedge clk) begin
-        weight_word_q <= weights_wide[weight_read_addr];
-        for (ld_i = 0; ld_i < MP_K; ld_i = ld_i + 1)
-            tap_q[ld_i] <= $signed(tap_at(k_group * MP_K + ld_i));
+    // [DSP-INPUT-PIPE] optional 2nd input-register stage. DSP_INPUT_PIPE=0 => these
+    // alias q1 combinationally (zero-cost, exact behavior + latency).
+    reg [WIDE_W-1:0]    weight_word_q2;
+    reg signed [7:0]    tap_q2 [0:MP_K-1];
+    reg                    mac_valid_q1b;
+    reg [OC_GROUP_W-1:0]   mac_oc_group_q1b;
+    integer p2_i;
+    // [RESNET-CHANWINDOW] Stage-1 tap source. USE_CHAN_WINDOW=0 (default, all other instances):
+    // unchanged tap_at(window_flat) slice. =1 (convs 284/292/298): read chan_window_flat[i] =
+    // window_flat[(i*IC+k_group)*8] (byte-identical for MP_K==KH*KW) so the wide mux is never built.
+    // Same FF stage -> zero latency change -> residual-add joins stay balanced.
+    generate
+    if (USE_CHAN_WINDOW != 0) begin : g_chan_window
+        initial if (MP_K != KH*KW) $fatal(1, "conv_datapath_mp_k: USE_CHAN_WINDOW=1 requires MP_K==KH*KW");
+        always @(posedge clk) begin
+            weight_word_q <= weights_wide[weight_read_addr];
+            for (ld_i = 0; ld_i < MP_K; ld_i = ld_i + 1)
+                tap_q[ld_i] <= $signed(chan_window_flat[ld_i*8 +: 8]);
+        end
+    end else begin : g_full_window
+        always @(posedge clk) begin
+            weight_word_q <= weights_wide[weight_read_addr];
+            for (ld_i = 0; ld_i < MP_K; ld_i = ld_i + 1)
+                tap_q[ld_i] <= $signed(tap_at(k_group * MP_K + ld_i));
+        end
     end
+    endgenerate
+    // [DSP-INPUT-PIPE] 2nd input-register stage (q2). ON: real reg (+1 latency, breaks
+    // the lbw/ROM->DSP route). OFF: combinational alias of q1 (identical behavior+latency).
+    generate
+    if (DSP_INPUT_PIPE != 0) begin : g_dsp_pipe
+        always @(posedge clk) begin
+            weight_word_q2 <= weight_word_q;
+            for (p2_i = 0; p2_i < MP_K; p2_i = p2_i + 1)
+                tap_q2[p2_i] <= tap_q[p2_i];
+        end
+    end else begin : g_dsp_pipe_off
+        always @* begin
+            weight_word_q2 = weight_word_q;
+            for (p2_i = 0; p2_i < MP_K; p2_i = p2_i + 1)
+                tap_q2[p2_i] = tap_q[p2_i];
+        end
+    end
+    endgenerate
 
     // ---- Stage 2: MP × MP_K parallel multipliers, tree-sum per lane ----
     // partial_q[lane] = sum over kpos of (weight_word_q[lane,kpos] * tap_q[kpos]).
@@ -187,8 +258,8 @@ module conv_datapath_mp_k #(
         for (cs_lane_i = 0; cs_lane_i < MP; cs_lane_i = cs_lane_i + 1) begin
             sum_lane_w[cs_lane_i] = {TREE_W{1'b0}};
             for (cs_kpos = 0; cs_kpos < MP_K; cs_kpos = cs_kpos + 1) begin
-                prod_w = $signed(weight_word_q[(cs_lane_i * MP_K + cs_kpos) * WGT_BITS +: WGT_BITS]) *
-                         $signed(tap_q[cs_kpos]);
+                prod_w = $signed(weight_word_q2[(cs_lane_i * MP_K + cs_kpos) * WGT_BITS +: WGT_BITS]) *
+                         $signed(tap_q2[cs_kpos]);
                 sum_lane_w[cs_lane_i] = sum_lane_w[cs_lane_i] + prod_w;
             end
         end
@@ -205,6 +276,8 @@ module conv_datapath_mp_k #(
             mac_valid_q2     <= 1'b0;
             mac_oc_group_q1  <= 0;
             mac_oc_group_q2  <= 0;
+            mac_valid_q1b    <= 1'b0;
+            mac_oc_group_q1b <= 0;
             mac_done_issuing <= 1'b0;
             for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1) begin
                 acc[fsm_i]      <= 0;
@@ -218,8 +291,17 @@ module conv_datapath_mp_k #(
             // Stage 2: register the MP partial sums.
             for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1)
                 partial_q[fsm_i] <= sum_lane_w[fsm_i];
-            mac_valid_q2     <= mac_valid_q1;
-            mac_oc_group_q2  <= mac_oc_group_q1;
+            // [DSP-INPUT-PIPE] extra valid/oc-group delay when piped so the accumulate
+            // gate stays aligned with the deeper q2 data path.
+            if (DSP_INPUT_PIPE != 0) begin
+                mac_valid_q1b    <= mac_valid_q1;
+                mac_oc_group_q1b <= mac_oc_group_q1;
+                mac_valid_q2     <= mac_valid_q1b;
+                mac_oc_group_q2  <= mac_oc_group_q1b;
+            end else begin
+                mac_valid_q2     <= mac_valid_q1;
+                mac_oc_group_q2  <= mac_oc_group_q1;
+            end
 
             // Stage 3: accumulate partial sums into MP lanes.
             if (mac_valid_q2) begin
@@ -236,6 +318,7 @@ module conv_datapath_mp_k #(
                         k_group          <= 0;
                         oc_group         <= 0;
                         mac_valid_q1     <= 1'b0;
+                        mac_valid_q1b    <= 1'b0;
                         mac_valid_q2     <= 1'b0;
                         mac_done_issuing <= 1'b0;
                         for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
@@ -246,7 +329,7 @@ module conv_datapath_mp_k #(
                 ST_MAC: begin
                     if (mac_done_issuing) begin
                         mac_valid_q1 <= 1'b0;
-                        if (!mac_valid_q1 && !mac_valid_q2) begin
+                        if (!mac_valid_q1 && !mac_valid_q1b && !mac_valid_q2) begin
                             mac_done_issuing <= 1'b0;
                             state            <= ST_BIAS;
                         end

@@ -4,8 +4,11 @@
 Mirrors build_bias_memory_map.py EXACTLY so the engine can read it with the same
 per-oc_pass addressing as the bias ROM. One wide scale word per oc_pass per
 dispatched heavy layer = MAC_COUNT(256) lanes x 32 bits = 8192 bits = 2048 hex.
-Per-lane 32-bit slot: bits[15:0]=SCALE_MULT (15-bit), bits[21:16]=SCALE_SHIFT
-(<=23), from golden_impl.compute_scale_approx(layer.scale_factor_per_oc[ch]).
+Per-lane 32-bit slot (FIT-FIX 2026-06-07 constant-shift): bits[30:0]=SCALE_MULT'
+(= mult << (FIXED_SHIFT - shift) — the per-OC shift folded into the multiplier so the
+engine's requant_pipeline applies a single COMPILE-TIME >>> FIXED_SHIFT instead of 256
+per-lane variable barrel shifters, ~70K LUT saved). Was bits[15:0]=mult,[21:16]=shift.
+From golden_impl.compute_scale_approx(layer.scale_factor_per_oc[ch]).
 Slot 255 rendered first (MSB-first $readmemh fill), big-endian per slot — same
 convention as the bias word so `scale_in[lane*32 +: 32]` recovers the slot.
 
@@ -25,6 +28,15 @@ from build_bias_memory_map import (  # noqa: E402
 from golden_impl import compute_scale_approx  # noqa: E402
 
 DEFAULT_HEAVY = "docs/agent_tasks/06_phase1_compression_candidates_HEAVY.txt"
+
+# [FIT-FIX 2026-06-07] Constant-shift requant. The engine's requant_pipeline.v no longer
+# applies a per-OC VARIABLE arithmetic shift (256 barrel shifters = ~70K LUT). The per-OC
+# shift is folded OFFLINE into a pre-widened multiplier mult' = mult << (FIXED_SHIFT - shift)
+# and the RTL applies a single COMPILE-TIME constant >>> FIXED_SHIFT. FIXED_SHIFT MUST equal
+# the localparam FIXED_SHIFT in output/rtl/engine/requant_pipeline.v and must be >= every
+# shift compute_scale_approx can emit (its range is [0,23]). Byte-exact identity:
+#   floor((biased*mult*2^(FS-shift) + 2^(FS-1)) / 2^FS) == floor((biased*mult + 2^(shift-1)) / 2^shift).
+FIXED_SHIFT = 23
 
 
 def pack_scale_word(packed32: list[int]) -> str:
@@ -87,8 +99,16 @@ def main(argv=None) -> int:
         packed = []
         for ch in range(oc):
             mult, shift = compute_scale_approx(float(per_oc[ch]))
-            packed.append(((shift & 0x3F) << 16) | (mult & 0xFFFF))
-        packed += [(0 << 16) | 1] * (oc_passes * MAC_COUNT - len(packed))  # pad: mult=1,shift=0
+            if shift > FIXED_SHIFT:
+                raise SystemExit(f"{mid} ch{ch}: shift {shift} > FIXED_SHIFT {FIXED_SHIFT} (identity needs FS>=shift)")
+            multp = mult << (FIXED_SHIFT - shift)             # fold per-OC shift into the multiplier
+            if not (0 <= multp < (1 << 31)):
+                raise SystemExit(
+                    f"{mid} ch{ch}: mult'={multp} overflows the 31-bit scale slot "
+                    f"(mult={mult}, shift={shift}, FIXED_SHIFT={FIXED_SHIFT}) -- lower FIXED_SHIFT or widen the slot")
+            packed.append(multp & 0xFFFFFFFF)
+        # pad replicates the OLD passthrough lane (mult=1, shift=0): multp = 1 << FIXED_SHIFT
+        packed += [(1 << FIXED_SHIFT)] * (oc_passes * MAC_COUNT - len(packed))
         for op in range(oc_passes):
             lines.append(pack_scale_word(packed[op * MAC_COUNT:(op + 1) * MAC_COUNT]))
         layers_out.append({"module_id": mid, "oc": oc, "oc_passes": oc_passes,

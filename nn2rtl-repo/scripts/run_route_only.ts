@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import os from "node:os";
 
 import {
   parseVivadoReport,
@@ -55,7 +56,10 @@ function flag(name: string, fallback?: string): string | undefined {
 const part = flag("part") ?? "xcu250-figd2104-2L-e";
 const clockNs = Number(flag("clock-ns") ?? "20");
 const threads = Number(flag("threads") ?? "8");
-const checkpointInput = flag("checkpoint") ?? path.join(repoRoot, "output", "reports_integrated", "checkpoints", "first_light_placed.dcp");
+const checkpointRaw = flag("checkpoint") ?? path.join(repoRoot, "output", "reports_integrated", "checkpoints", "first_light_placed.dcp");
+const checkpointInput = path.isAbsolute(checkpointRaw) ? checkpointRaw : path.resolve(repoRoot, checkpointRaw);
+const routeDirective = flag("route-directive") ?? "AggressiveExplore"; // higher router effort, quality-preserving (no fmax reduction)
+const tag = flag("tag") ?? "";
 
 const reportsDir = path.join(repoRoot, "output", "reports_integrated");
 const safeCheckpointDir = path.join(reportsDir, "checkpoints");
@@ -79,11 +83,14 @@ function buildRouteTcl(input: {
   return [
     `set_param general.maxThreads ${threads}`,
     `puts "NN2RTL_INFO: requested general.maxThreads=${threads}, effective=[get_param general.maxThreads]"`,
-    `puts "NN2RTL_INFO: opening placed checkpoint"`,
+    `puts "NN2RTL_INFO: opening placed/physopt checkpoint"`,
     `open_checkpoint ${tclQuote(input.placedCheckpointPath)}`,
-    `puts "NN2RTL_INFO: starting route_design"`,
-    `route_design`,
+    `puts "NN2RTL_INFO: starting route_design (directive=${routeDirective})"`,
+    `route_design -directive ${routeDirective}`,
     `puts "NN2RTL_INFO: write routed checkpoint"`,
+    `write_checkpoint -force ${tclQuote(input.routedCheckpointPath)}`,
+    `puts "NN2RTL_INFO: post-route phys_opt_design (final timing closure; quality-preserving)"`,
+    `catch { phys_opt_design }`,
     `write_checkpoint -force ${tclQuote(input.routedCheckpointPath)}`,
     `puts "NN2RTL_INFO: post-route utilization"`,
     `report_utilization -file ${tclQuote(input.postRouteUtilPath)}`,
@@ -115,10 +122,10 @@ async function main(): Promise<void> {
   const report = await withTempDir("nn2rtl-routeonly-", async (tempDir) => {
     // Persist the routed checkpoint AND reports to a SAFE location (output/reports_integrated/checkpoints/)
     // so Windows Temp cleanup doesn't wipe them.
-    const routedDcpSafe = path.join(safeCheckpointDir, "first_light_routed.dcp");
-    const postRouteUtilSafe = path.join(safeCheckpointDir, "first_light_postroute_util.rpt");
-    const postRouteTimingSafe = path.join(safeCheckpointDir, "first_light_postroute_timing.rpt");
-    const postRoutePowerSafe = path.join(safeCheckpointDir, "first_light_postroute_power.rpt");
+    const routedDcpSafe = path.join(safeCheckpointDir, `first_light_routed${tag}.dcp`);
+    const postRouteUtilSafe = path.join(safeCheckpointDir, `first_light_postroute_util${tag}.rpt`);
+    const postRouteTimingSafe = path.join(safeCheckpointDir, `first_light_postroute_timing${tag}.rpt`);
+    const postRoutePowerSafe = path.join(safeCheckpointDir, `first_light_postroute_power${tag}.rpt`);
     const utilReportPath = path.join(tempDir, "route_only_util.rpt");
     const timingReportPath = path.join(tempDir, "route_only_timing.rpt");
     const tclPath = path.join(tempDir, "route_only.tcl");
@@ -148,7 +155,8 @@ async function main(): Promise<void> {
     let stdout = "";
     let stderr = "";
     let exitOk = true;
-    try {
+    let ramKillMsg = "";
+    {
       const timeoutMs = (() => {
         const envVal = process.env.NN2RTL_VIVADO_TIMEOUT_MS;
         if (envVal && Number.isFinite(Number(envVal)) && Number(envVal) > 0) {
@@ -156,22 +164,54 @@ async function main(): Promise<void> {
         }
         return VIVADO_TIMEOUT_MS;
       })();
-      const result = await execFileP(spawnFile, spawnArgs, {
-        cwd: tempDir,
-        env: process.env,
-        timeout: timeoutMs,
-        maxBuffer: VIVADO_MAX_BUFFER_BYTES,
+      // RAM watchdog (90% default; NN2RTL_RAM_KILL_PCT override): kill the Vivado tree if RAM
+      // crosses the threshold. Route is resumable from the input checkpoint, so a kill is recoverable.
+      const ramKillPct = (() => {
+        const v = Number(process.env.NN2RTL_RAM_KILL_PCT);
+        return Number.isFinite(v) && v > 0 && v < 100 ? v : 90;
+      })();
+      const totalMem = os.totalmem();
+      console.log(
+        `[route-only] RAM watchdog armed: kill at >= ${ramKillPct}% used ` +
+          `(total ${(totalMem / 1073741824).toFixed(1)}GB → ~${((totalMem * (100 - ramKillPct)) / 100 / 1073741824).toFixed(1)}GB free floor, poll 4s)`,
+      );
+      const res = await new Promise<{ stdout: string; stderr: string; ok: boolean }>((resolve) => {
+        const child = execFile(
+          spawnFile,
+          spawnArgs,
+          { cwd: tempDir, env: process.env, timeout: timeoutMs, maxBuffer: VIVADO_MAX_BUFFER_BYTES },
+          (err, soCb, seCb) => {
+            clearInterval(poll);
+            const so = typeof soCb === "string" ? soCb : (soCb?.toString() ?? "");
+            const se =
+              typeof seCb === "string" ? seCb : (seCb?.toString() ?? (err as Error | null)?.message ?? "");
+            resolve({ stdout: so, stderr: se, ok: !err && !ramKillMsg });
+          },
+        );
+        const poll = setInterval(() => {
+          const freeGB = os.freemem() / 1073741824;
+          const usedPct = (1 - os.freemem() / totalMem) * 100;
+          if (usedPct >= ramKillPct && !ramKillMsg) {
+            ramKillMsg =
+              `[route-only][WATCHDOG] RAM ${usedPct.toFixed(1)}% used >= ${ramKillPct}% ` +
+              `(free ${freeGB.toFixed(1)}GB) — KILLING Vivado tree (pid ${child.pid}); resume from input checkpoint`;
+            console.error(ramKillMsg);
+            clearInterval(poll);
+            try {
+              if (child.pid) execFileP("taskkill", ["/PID", String(child.pid), "/T", "/F"]).catch(() => {});
+            } catch { /* ignore */ }
+            try {
+              execFileP("taskkill", ["/IM", "vivado.exe", "/T", "/F"]).catch(() => {});
+            } catch { /* ignore */ }
+          }
+        }, 4000);
       });
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } catch (err: unknown) {
-      exitOk = false;
-      const e = err as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
-      stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString() ?? "");
-      stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString() ?? e.message ?? "");
+      stdout = res.stdout;
+      stderr = res.stderr;
+      exitOk = res.ok;
     }
     const elapsed = (Date.now() - t0) / 1000;
-    console.log(`[route-only] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk})`);
+    console.log(`[route-only] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk}${ramKillMsg ? ", RAM-KILLED" : ""})`);
 
     const utilReport = existsSync(utilReportPath) ? await readFile(utilReportPath, "utf8") : "";
     const timingReport = existsSync(timingReportPath) ? await readFile(timingReportPath, "utf8") : "";

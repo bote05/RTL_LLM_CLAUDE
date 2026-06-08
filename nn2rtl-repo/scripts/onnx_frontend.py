@@ -1428,7 +1428,11 @@ _A2_MP_OVERRIDE = {
     "node_conv_836": 16, "node_conv_842": 16, "node_conv_848": 16, "node_conv_854": 16,
     "node_conv_860": 16, "node_conv_866": 16, "node_conv_872": 16, "node_conv_878": 16,
     "node_conv_890": 16, "node_conv_896": 16, "node_conv_902": 16,
-    # node_conv_884, node_conv_908 (2-beat): MP=4 (default) until skid fix.
+    # STEM conv_810 (cross-channel conv_datapath_mp_k): MP=16 unlocked by a symmetric
+    # LHS skid on node_add_198 (top-wrapper patch, NOT regen-able from here; see
+    # backups/stem_mp16_lhsskid_6446k_20260603). 6,446,347 cyc byte-exact.
+    "node_conv_810": 16,
+    # node_conv_884, node_conv_908 (2-beat): MP=4 (default) -- separate beat-timing issue.
 }
 
 

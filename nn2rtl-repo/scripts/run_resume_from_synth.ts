@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import os from "node:os";
 
 import {
   parseVivadoReport,
@@ -56,6 +57,7 @@ const threads = Number(flag("threads") ?? "8");
 const safeCheckpointDir = path.join(repoRoot, "output", "reports_integrated", "checkpoints");
 const inputRaw = flag("input") ?? path.join(safeCheckpointDir, "first_light_synth_URAM.dcp");
 const inputDcp = path.isAbsolute(inputRaw) ? inputRaw : path.resolve(repoRoot, inputRaw);
+const tagFlag = flag("tag");
 
 const reportsDir = path.join(repoRoot, "output", "reports_integrated");
 const jsonReportPath = path.join(reportsDir, "resume_from_synth.json");
@@ -69,6 +71,7 @@ function buildTcl(input: {
   synthDcp: string;
   optDcp: string;
   placedDcp: string;
+  physoptDcp: string;
   routedDcp: string;
   postRouteUtil: string;
   postRouteTiming: string;
@@ -84,11 +87,20 @@ function buildTcl(input: {
     `puts "NN2RTL_INFO: starting opt_design"`,
     `opt_design`,
     `write_checkpoint -force ${tclQuote(input.optDcp)}`,
-    `puts "NN2RTL_INFO: starting place_design"`,
-    `place_design`,
+    // HIGH-QUALITY directives only (user: no flags that reduce quality/Fmax).
+    // place Explore (high-effort, timing-aware) -> phys_opt (timing closure, IMPROVES Fmax)
+    // -> route Explore (high-effort, timing-aware). No RuntimeOptimized/Quick/timing-relaxation.
+    `puts "NN2RTL_INFO: starting place_design (directive=Explore)"`,
+    `place_design -directive Explore`,
     `write_checkpoint -force ${tclQuote(input.placedDcp)}`,
-    `puts "NN2RTL_INFO: starting route_design"`,
-    `route_design`,
+    `puts "NN2RTL_INFO: starting phys_opt_design (timing closure)"`,
+    `phys_opt_design`,
+    `write_checkpoint -force ${tclQuote(input.physoptDcp)}`,
+    `puts "NN2RTL_INFO: starting route_design (directive=Explore)"`,
+    `route_design -directive Explore`,
+    `write_checkpoint -force ${tclQuote(input.routedDcp)}`,
+    `puts "NN2RTL_INFO: post-route phys_opt_design (final timing closure)"`,
+    `catch { phys_opt_design }`,
     `write_checkpoint -force ${tclQuote(input.routedDcp)}`,
     `puts "NN2RTL_INFO: post-route utilization"`,
     `report_utilization -file ${tclQuote(input.postRouteUtil)}`,
@@ -113,10 +125,11 @@ async function main(): Promise<void> {
   console.log(`[resume] input synth dcp: ${inputDcp}`);
   console.log(`[resume] part=${part} clock_ns=${clockNs} threads=${threads}`);
 
-  // Stable destination names — append _URAM if the input was the URAM build.
-  const tag = path.basename(inputDcp).includes("_URAM") ? "_URAM" : "";
+  // Stable destination names. --tag overrides; else _URAM if the input was the URAM build.
+  const tag = tagFlag !== undefined ? tagFlag : (path.basename(inputDcp).includes("_URAM") ? "_URAM" : "");
   const optDcpSafe = path.join(safeCheckpointDir, `first_light_opt${tag}.dcp`);
   const placedDcpSafe = path.join(safeCheckpointDir, `first_light_placed${tag}.dcp`);
+  const physoptDcpSafe = path.join(safeCheckpointDir, `first_light_physopt${tag}.dcp`);
   const routedDcpSafe = path.join(safeCheckpointDir, `first_light_routed${tag}.dcp`);
   const postRouteUtilSafe = path.join(safeCheckpointDir, `first_light_postroute_util${tag}.rpt`);
   const postRouteTimingSafe = path.join(safeCheckpointDir, `first_light_postroute_timing${tag}.rpt`);
@@ -133,6 +146,7 @@ async function main(): Promise<void> {
         synthDcp: inputDcp,
         optDcp: optDcpSafe,
         placedDcp: placedDcpSafe,
+        physoptDcp: physoptDcpSafe,
         routedDcp: routedDcpSafe,
         postRouteUtil: postRouteUtilSafe,
         postRouteTiming: postRouteTimingSafe,
@@ -154,7 +168,8 @@ async function main(): Promise<void> {
     let stdout = "";
     let stderr = "";
     let exitOk = true;
-    try {
+    let ramKillMsg = "";
+    {
       const timeoutMs = (() => {
         const envVal = process.env.NN2RTL_VIVADO_TIMEOUT_MS;
         if (envVal && Number.isFinite(Number(envVal)) && Number(envVal) > 0) {
@@ -162,22 +177,55 @@ async function main(): Promise<void> {
         }
         return VIVADO_TIMEOUT_MS;
       })();
-      const res = await execFileP(spawnFile, spawnArgs, {
-        cwd: tempDir,
-        env: process.env,
-        timeout: timeoutMs,
-        maxBuffer: VIVADO_MAX_BUFFER_BYTES,
+      // RAM watchdog (same guard as run_first_light_synth.ts): kill the whole Vivado tree
+      // if physical RAM usage crosses NN2RTL_RAM_KILL_PCT (default 90%). Place+route is
+      // resumable from the placed/physopt checkpoints, so a watchdog kill is recoverable.
+      const ramKillPct = (() => {
+        const v = Number(process.env.NN2RTL_RAM_KILL_PCT);
+        return Number.isFinite(v) && v > 0 && v < 100 ? v : 90;
+      })();
+      const totalMem = os.totalmem();
+      console.log(
+        `[resume] RAM watchdog armed: kill at >= ${ramKillPct}% used ` +
+          `(total ${(totalMem / 1073741824).toFixed(1)}GB → ~${((totalMem * (100 - ramKillPct)) / 100 / 1073741824).toFixed(1)}GB free floor, poll 4s)`,
+      );
+      const res = await new Promise<{ stdout: string; stderr: string; ok: boolean }>((resolve) => {
+        const child = execFile(
+          spawnFile,
+          spawnArgs,
+          { cwd: tempDir, env: process.env, timeout: timeoutMs, maxBuffer: VIVADO_MAX_BUFFER_BYTES },
+          (err, soCb, seCb) => {
+            clearInterval(poll);
+            const so = typeof soCb === "string" ? soCb : (soCb?.toString() ?? "");
+            const se =
+              typeof seCb === "string" ? seCb : (seCb?.toString() ?? (err as Error | null)?.message ?? "");
+            resolve({ stdout: so, stderr: se, ok: !err && !ramKillMsg });
+          },
+        );
+        const poll = setInterval(() => {
+          const freeGB = os.freemem() / 1073741824;
+          const usedPct = (1 - os.freemem() / totalMem) * 100;
+          if (usedPct >= ramKillPct && !ramKillMsg) {
+            ramKillMsg =
+              `[resume][WATCHDOG] RAM ${usedPct.toFixed(1)}% used >= ${ramKillPct}% ` +
+              `(free ${freeGB.toFixed(1)}GB) — KILLING Vivado tree (pid ${child.pid}); resume from placed/physopt dcp`;
+            console.error(ramKillMsg);
+            clearInterval(poll);
+            try {
+              if (child.pid) execFileP("taskkill", ["/PID", String(child.pid), "/T", "/F"]).catch(() => {});
+            } catch { /* ignore */ }
+            try {
+              execFileP("taskkill", ["/IM", "vivado.exe", "/T", "/F"]).catch(() => {});
+            } catch { /* ignore */ }
+          }
+        }, 4000);
       });
       stdout = res.stdout;
       stderr = res.stderr;
-    } catch (err: unknown) {
-      exitOk = false;
-      const e = err as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
-      stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString() ?? "");
-      stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString() ?? e.message ?? "");
+      exitOk = res.ok;
     }
     const elapsed = (Date.now() - t0) / 1000;
-    console.log(`[resume] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk})`);
+    console.log(`[resume] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk}${ramKillMsg ? ", RAM-KILLED" : ""})`);
 
     const utilText = existsSync(utilSink) ? await readFile(utilSink, "utf8") : "";
     const timingText = existsSync(timingSink) ? await readFile(timingSink, "utf8") : "";

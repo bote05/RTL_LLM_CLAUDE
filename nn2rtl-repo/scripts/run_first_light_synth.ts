@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import os from "node:os";
 
 import {
   parseVivadoReport,
@@ -60,6 +61,7 @@ const clockNs = Number(flag("clock-ns") ?? "20");
 const threads = Number(flag("threads") ?? "8");
 const topModule = "nn2rtl_top";
 const synthOnly = rawArgs.includes("--synth-only");
+const tagFlag = flag("tag");
 
 const reportsDir = path.join(repoRoot, "output", "reports_integrated");
 const jsonReportPath = path.join(reportsDir, "first_light_synth.json");
@@ -258,7 +260,8 @@ async function main(): Promise<void> {
     let stdout = "";
     let stderr = "";
     let exitOk = true;
-    try {
+    let ramKillMsg = "";
+    {
       const timeoutMs = (() => {
         const envVal = process.env.NN2RTL_VIVADO_TIMEOUT_MS;
         if (envVal && Number.isFinite(Number(envVal)) && Number(envVal) > 0) {
@@ -266,29 +269,71 @@ async function main(): Promise<void> {
         }
         return VIVADO_TIMEOUT_MS;
       })();
-      const result = await execFileP(spawnFile, spawnArgs, {
-        cwd: tempDir,
-        env: process.env,
-        timeout: timeoutMs,
-        maxBuffer: VIVADO_MAX_BUFFER_BYTES,
+      // RAM watchdog: if physical RAM usage crosses the kill threshold (default
+      // 90% used; override via NN2RTL_RAM_KILL_PCT), terminate the whole Vivado
+      // process tree so the host never thrashes/crashes. The 2026-05 MobileNet
+      // synth OOM'd this machine — this is the guard against a repeat.
+      const ramKillPct = (() => {
+        const v = Number(process.env.NN2RTL_RAM_KILL_PCT);
+        return Number.isFinite(v) && v > 0 && v < 100 ? v : 90;
+      })();
+      const totalMem = os.totalmem();
+      console.log(
+        `[first-light] RAM watchdog armed: kill Vivado tree at >= ${ramKillPct}% used ` +
+          `(total ${(totalMem / 1073741824).toFixed(1)}GB → ~${((totalMem * (100 - ramKillPct)) / 100 / 1073741824).toFixed(1)}GB free floor, poll 4s)`,
+      );
+      const res = await new Promise<{ stdout: string; stderr: string; ok: boolean }>((resolve) => {
+        const child = execFile(
+          spawnFile,
+          spawnArgs,
+          { cwd: tempDir, env: process.env, timeout: timeoutMs, maxBuffer: VIVADO_MAX_BUFFER_BYTES },
+          (err, soCb, seCb) => {
+            clearInterval(poll);
+            const so = typeof soCb === "string" ? soCb : (soCb?.toString() ?? "");
+            const se =
+              typeof seCb === "string" ? seCb : (seCb?.toString() ?? (err as Error | null)?.message ?? "");
+            resolve({ stdout: so, stderr: se, ok: !err && !ramKillMsg });
+          },
+        );
+        const poll = setInterval(() => {
+          const freeGB = os.freemem() / 1073741824;
+          const usedPct = (1 - os.freemem() / totalMem) * 100;
+          if (usedPct >= ramKillPct && !ramKillMsg) {
+            ramKillMsg =
+              `[first-light][WATCHDOG] RAM ${usedPct.toFixed(1)}% used >= ${ramKillPct}% ` +
+              `(free ${freeGB.toFixed(1)}GB) — KILLING Vivado tree (pid ${child.pid}) to protect the host`;
+            console.error(ramKillMsg);
+            clearInterval(poll);
+            // Kill the spawned tree (cmd.exe → vivado.bat → vivado.exe + loader),
+            // then sweep any stray vivado.exe by name as belt-and-suspenders.
+            try {
+              if (child.pid) execFileP("taskkill", ["/PID", String(child.pid), "/T", "/F"]).catch(() => {});
+            } catch {
+              /* ignore */
+            }
+            try {
+              execFileP("taskkill", ["/IM", "vivado.exe", "/T", "/F"]).catch(() => {});
+            } catch {
+              /* ignore */
+            }
+          }
+        }, 4000);
       });
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } catch (err: unknown) {
-      exitOk = false;
-      const e = err as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
-      stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString() ?? "");
-      stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString() ?? e.message ?? "");
+      stdout = res.stdout;
+      stderr = res.stderr;
+      exitOk = res.ok;
     }
     const elapsed = (Date.now() - t0) / 1000;
-    console.log(`[first-light] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk})`);
+    console.log(
+      `[first-light] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk}${ramKillMsg ? ", RAM-KILLED" : ""})`,
+    );
 
     // Persist any intermediate checkpoints from the tmpdir to the safe
     // location so we can resume opt/place/route without redoing synth.
     // The tmpdir is auto-deleted on exit; checkpoints there would be lost.
     const safeCheckpointDir = path.join(reportsDir, "checkpoints");
     await mkdir(safeCheckpointDir, { recursive: true });
-    const tag = synthOnly ? "_URAM" : "";
+    const tag = tagFlag !== undefined ? tagFlag : (synthOnly ? "_URAM" : "");
     const dcpsToPersist = [
       { src: checkpointPath.replace(/\.dcp$/, "_synth.dcp"),  dst: `first_light_synth${tag}.dcp` },
       { src: checkpointPath.replace(/\.dcp$/, "_opt.dcp"),    dst: `first_light_opt${tag}.dcp` },
@@ -305,6 +350,7 @@ async function main(): Promise<void> {
     const utilReport = existsSync(utilReportPath) ? await readFile(utilReportPath, "utf8") : "";
     const timingReport = existsSync(timingReportPath) ? await readFile(timingReportPath, "utf8") : "";
     const combinedReport = [
+      ramKillMsg,
       stdout,
       stderr,
       "--- first_light_util.rpt ---",

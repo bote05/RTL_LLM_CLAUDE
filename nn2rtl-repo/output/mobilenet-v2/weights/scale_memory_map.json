@@ -1,0 +1,245 @@
+{
+  "schema": "scale_memory_map_v1",
+  "wide_word_bits": 8192,
+  "total_words": 58,
+  "layers": [
+    {
+      "module_id": "node_conv_814",
+      "oc": 16,
+      "oc_passes": 1,
+      "base_word": 0,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_816",
+      "oc": 96,
+      "oc_passes": 1,
+      "base_word": 1,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_820",
+      "oc": 24,
+      "oc_passes": 1,
+      "base_word": 2,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_822",
+      "oc": 144,
+      "oc_passes": 1,
+      "base_word": 3,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_826",
+      "oc": 24,
+      "oc_passes": 1,
+      "base_word": 4,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_828",
+      "oc": 144,
+      "oc_passes": 1,
+      "base_word": 5,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_832",
+      "oc": 32,
+      "oc_passes": 1,
+      "base_word": 6,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_834",
+      "oc": 192,
+      "oc_passes": 1,
+      "base_word": 7,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_838",
+      "oc": 32,
+      "oc_passes": 1,
+      "base_word": 8,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_840",
+      "oc": 192,
+      "oc_passes": 1,
+      "base_word": 9,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_844",
+      "oc": 32,
+      "oc_passes": 1,
+      "base_word": 10,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_846",
+      "oc": 192,
+      "oc_passes": 1,
+      "base_word": 11,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_850",
+      "oc": 64,
+      "oc_passes": 1,
+      "base_word": 12,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_852",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 13,
+      "size_words": 2
+    },
+    {
+      "module_id": "node_conv_856",
+      "oc": 64,
+      "oc_passes": 1,
+      "base_word": 15,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_858",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 16,
+      "size_words": 2
+    },
+    {
+      "module_id": "node_conv_862",
+      "oc": 64,
+      "oc_passes": 1,
+      "base_word": 18,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_864",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 19,
+      "size_words": 2
+    },
+    {
+      "module_id": "node_conv_868",
+      "oc": 64,
+      "oc_passes": 1,
+      "base_word": 21,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_870",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 22,
+      "size_words": 2
+    },
+    {
+      "module_id": "node_conv_874",
+      "oc": 96,
+      "oc_passes": 1,
+      "base_word": 24,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_876",
+      "oc": 576,
+      "oc_passes": 3,
+      "base_word": 25,
+      "size_words": 3
+    },
+    {
+      "module_id": "node_conv_880",
+      "oc": 96,
+      "oc_passes": 1,
+      "base_word": 28,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_882",
+      "oc": 576,
+      "oc_passes": 3,
+      "base_word": 29,
+      "size_words": 3
+    },
+    {
+      "module_id": "node_conv_886",
+      "oc": 96,
+      "oc_passes": 1,
+      "base_word": 32,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_888",
+      "oc": 576,
+      "oc_passes": 3,
+      "base_word": 33,
+      "size_words": 3
+    },
+    {
+      "module_id": "node_conv_892",
+      "oc": 160,
+      "oc_passes": 1,
+      "base_word": 36,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_894",
+      "oc": 960,
+      "oc_passes": 4,
+      "base_word": 37,
+      "size_words": 4
+    },
+    {
+      "module_id": "node_conv_898",
+      "oc": 160,
+      "oc_passes": 1,
+      "base_word": 41,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_900",
+      "oc": 960,
+      "oc_passes": 4,
+      "base_word": 42,
+      "size_words": 4
+    },
+    {
+      "module_id": "node_conv_904",
+      "oc": 160,
+      "oc_passes": 1,
+      "base_word": 46,
+      "size_words": 1
+    },
+    {
+      "module_id": "node_conv_906",
+      "oc": 960,
+      "oc_passes": 4,
+      "base_word": 47,
+      "size_words": 4
+    },
+    {
+      "module_id": "node_conv_910",
+      "oc": 320,
+      "oc_passes": 2,
+      "base_word": 51,
+      "size_words": 2
+    },
+    {
+      "module_id": "node_conv_912",
+      "oc": 1280,
+      "oc_passes": 5,
+      "base_word": 53,
+      "size_words": 5
+    }
+  ]
+}

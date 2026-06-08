@@ -89,7 +89,18 @@ module line_buf_window #(
     //                 width-binding URAM288 (4096x72 fixed geometry => ~2394
     //                 URAM288 = 187% OVER on U250). The same 2.87 Mbit packs into
     //                 ~78 RAMB36. URAM is reserved for the engine weight banks.
-    parameter integer LINE_BUF_USE_URAM = 1
+    parameter integer LINE_BUF_USE_URAM = 1,
+
+    // [FIT-FIX 2026-06-06] TILE_STORAGE: 0 (DEFAULT) = legacy shallow-wide per-slot mem
+    // (IC*8 wide x MEM_DEPTH deep), BIT/CYCLE-IDENTICAL to the prior design -> ResNet and any
+    // caller that omits this param elaborates UNCHANGED. >0 = deep-narrow TILED storage: each
+    // slot's (IC*8)-bit word is serialized into NT=ceil(IC/TILE_STORAGE) tiles of (TILE_STORAGE*8)
+    // bits, stored MEM_DEPTH*NT deep x (TILE_STORAGE*8) wide so Vivado packs RAMB36 by DEPTH
+    // instead of width-binding (e.g. C=960: 4 RAMB36/slot vs 107). The per-slot R/W burst is made
+    // ATOMIC by raising mem_busy -> the node ORs it into stall_in (exactly like mac_busy), so the
+    // scheduler/window/datapath freeze for the burst => byte-exact by elasticity, downstream logic
+    // (window shift / window_kwm1_wire / chan_window_flat / row_valid) UNCHANGED. Cost: +1.5-8% cyc.
+    parameter integer TILE_STORAGE = 0
 ) (
     input  wire                               clk,
     input  wire                               rst_n,
@@ -131,7 +142,12 @@ module line_buf_window #(
     //   window_flat[(kh*KW*IC + kw*IC + ic)*8 +: 8]
     // Only driven when EXPOSE_FULL_WINDOW==1 (see generate at end). When 0
     // it is held at 0 so the wide cross-channel mux is not instantiated.
-    output wire [KH*KW*IC*8-1:0]              window_flat
+    output wire [KH*KW*IC*8-1:0]              window_flat,
+
+    // [FIT-FIX 2026-06-06] High during an NT-cycle tiled-storage burst (TILE_STORAGE>0); the node
+    // ORs this into stall_in so the burst is atomic. Tied to 0 when TILE_STORAGE==0 (ResNet/legacy
+    // callers leave this output unconnected -> harmless).
+    output wire                               mem_busy
 );
 
     // ---------------- Derived constants ------------------------------
@@ -142,6 +158,13 @@ module line_buf_window #(
     localparam integer SCHED_ROW_W = $clog2(IH + PH + 1);
     // Width of channel_select (matches the port-declaration expression).
     localparam integer CSEL_W      = (IC > 1) ? $clog2(IC) : 1;
+
+    // [FIT-FIX 2026-06-06] tiled-storage derived constants (active when TILE_STORAGE>0).
+    localparam integer TILE    = (TILE_STORAGE > 0) ? TILE_STORAGE : IC;
+    localparam integer NT      = (IC + TILE - 1) / TILE;            // tiles per (IC*8) word
+    localparam integer TILE_W  = TILE * 8;
+    localparam integer NT_W    = (NT > 1) ? $clog2(NT) : 1;
+    localparam integer TADDR_W = $clog2(MEM_DEPTH * NT);            // mem_t address width
 
     // KH is a 32-bit `parameter integer`; we perform pointer arithmetic
     // and modulo-KH reductions in (SLOT_W+1)-bit space. The width
@@ -230,6 +253,37 @@ module line_buf_window #(
 
     wire [IC*8-1:0] q_array [0:KH-1];
 
+    // [FIT-FIX 2026-06-06] Tiled-storage burst sequencer (shared by all KH slots; they share the
+    // sched_advance cadence). On each sched_advance run NT clocks of per-tile R/W; mem_busy stalls
+    // the scheduler so the burst is ATOMIC (no WAW at the gap=1 row-fill). TILE_STORAGE==0 or NT<=1
+    // => mem_busy const 0, sequencer inert. mem_busy is held high for the full NT cycles after an
+    // advance (tcnt 0..NT-1). q_reg is INCREMENTALLY folded one tile per burst cycle (NOT all-at-once
+    // at the end): the depthwise MAC consumes channels sequentially, and since the burst writes a
+    // whole 32-channel tile every cycle while the MAC drains <1 channel/cycle, each tile is in q_reg
+    // long before the MAC reaches its channels -- tile 0 (the first channels) lands on burst-cycle 0
+    // (the cycle the MAC enters ST_MAC). q_reg therefore reads exactly read(col@advance) for every
+    // channel when consumed, mirroring the legacy 1-advance q_reg latency. VERIFIED byte-exact
+    // (mismatch=0) by output/mobilenet-v2/verify_lbw_c960/tb_equiv.sv on node_conv_896 (C=960, NT=30,
+    // 2 frames). The equiv-TB is the authority on this timing.
+    reg  [NT_W-1:0] tcnt;
+    reg             burst_active;
+    generate
+        if (TILE_STORAGE == 0 || NT <= 1) begin : gen_no_burst
+            assign mem_busy = 1'b0;
+        end else begin : gen_burst
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n)             begin burst_active <= 1'b0; tcnt <= {NT_W{1'b0}}; end
+                else if (frame_start)   begin burst_active <= 1'b0; tcnt <= {NT_W{1'b0}}; end
+                else if (sched_advance) begin burst_active <= 1'b1; tcnt <= {NT_W{1'b0}}; end
+                else if (burst_active) begin
+                    if (tcnt == NT-1) burst_active <= 1'b0;
+                    tcnt <= tcnt + 1'b1;
+                end
+            end
+            assign mem_busy = burst_active;   // high for NT cycles after the advance
+        end
+    endgenerate
+
     genvar g_slot;
     generate
         for (g_slot = 0; g_slot < KH; g_slot = g_slot + 1) begin : gen_slot
@@ -240,6 +294,9 @@ module line_buf_window #(
             wire write_en   =
                 handshake_real && !right_padded && !bottom_padded && is_writing;
 
+            if (TILE_STORAGE == 0) begin : gen_legacy_storage
+            // ===== legacy shallow-wide per-slot mem -- BIT/CYCLE-IDENTICAL to the prior design;
+            // ===== ResNet and any caller with TILE_STORAGE==0 (the default) elaborate this branch.
             if (LINE_BUF_USE_URAM != 0) begin : gen_mem_ultra
                 (* ram_style = "ultra" *)
                 reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
@@ -280,6 +337,45 @@ module line_buf_window #(
                     end
                     if (sched_advance) begin
                         q_reg <= right_padded ? {(IC*8){1'b0}} : mem[sched_in_col];
+                    end
+                end
+            end
+            end else begin : gen_tiled_storage
+                // [FIT-FIX 2026-06-06] deep-narrow tiled storage: split the (IC*8)-bit column into
+                // NT tiles of TILE_W bits, stored MEM_DEPTH*NT deep (depth-packed => ~4 RAMB36/slot
+                // vs ~107 width-bound). Write + read-reassembly are serialized over NT cycles under
+                // burst_active; the scheduler is stalled (mem_busy) for the burst. q_reg is folded
+                // INCREMENTALLY (one tile/cycle) so each tile reaches the channel-sequential MAC just
+                // in time -> byte-exact vs the legacy 1-advance q_reg latency (see sequencer comment
+                // above). Downstream window/chan_window logic is UNCHANGED.
+                (* ram_style = "block" *)
+                reg [TILE_W-1:0]       mem_t [0:MEM_DEPTH*NT-1];
+                reg  [SCHED_COL_W-1:0] col_l;     // latched column at the advance
+                reg                    rpad_l;    // latched right_padded at the advance
+                reg  [IC*8-1:0]        wdat_l;    // latched data_in at the advance
+                reg                    we_l;      // latched write_en at the advance
+                wire [TADDR_W-1:0]     taddr = col_l * NT + tcnt;
+                always @(posedge clk) begin
+                    if (sched_advance) begin
+                        col_l  <= sched_in_col;
+                        rpad_l <= right_padded;
+                        wdat_l <= data_in;
+                        we_l   <= write_en;
+                    end else if (burst_active) begin
+                        if (we_l) mem_t[taddr] <= wdat_l[tcnt*TILE_W +: TILE_W];   // write tile tcnt
+                        // [FIT-FIX 2026-06-06] INCREMENTAL fold: update q_reg's tile-tcnt slice the
+                        // cycle that tile is read, so each tile becomes available to the
+                        // (channel-sequential) MAC as soon as it is read -- NOT all-at-once at
+                        // tcnt==NT-1. The burst writes 1 tile/cyc (32 ch/cyc) while the MAC consumes
+                        // <1 ch/cyc, so the burst stays far ahead: tile 0 (ch 0..31) is folded by the
+                        // first burst cycle (A+1, visible A+2) exactly when the MAC enters ST_MAC and
+                        // samples channel 0; every later tile is folded long before the MAC reaches
+                        // its channels. q_reg therefore equals read(col@advance) for every channel by
+                        // the time it is consumed -> byte-exact vs the legacy 1-advance q_reg latency.
+                        // Read returns the OLD mem_t value at a written address (NBA), mirroring the
+                        // legacy read-during-write on the current-write slot (whose q_reg the window
+                        // mux never consumes -- it is the bypass row). Right-pad reads 0 (masked).
+                        q_reg[tcnt*TILE_W +: TILE_W] <= rpad_l ? {TILE_W{1'b0}} : mem_t[taddr];
                     end
                 end
             end
