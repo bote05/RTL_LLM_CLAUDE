@@ -427,7 +427,6 @@ module shared_engine #(
             ag_act_in_rd_en_d2       <= 1'b0;
             ag_act_in_ic_byte_idx_d  <= 8'd0;
             ag_act_in_ic_byte_idx_d2 <= 8'd0;
-            act_in_rd_data_d         <= {ACT_BUS_W{1'b0}};
         end else begin
             ag_weight_rd_en_d        <= ag_weight_rd_en;
             ag_weight_rd_en_d2       <= ag_weight_rd_en_d;
@@ -435,8 +434,13 @@ module shared_engine #(
             ag_act_in_rd_en_d2       <= ag_act_in_rd_en_d;
             ag_act_in_ic_byte_idx_d  <= ag_act_in_ic_byte_idx;
             ag_act_in_ic_byte_idx_d2 <= ag_act_in_ic_byte_idx_d;
-            act_in_rd_data_d         <= act_in_rd_data;  // read-N act (valid N+1) -> held at N+2
         end
+    end
+    // [K1-FDCE] act_in_rd_data_d (2048b) is a DATAPATH hold register: it only
+    // reaches the MAC when the (reset-held) ..._rd_en_d2 gates are high, and
+    // it is rewritten every cycle -> reset value dead. No-reset => FDRE.
+    always @(posedge clk) begin
+        act_in_rd_data_d         <= act_in_rd_data;  // read-N act (valid N+1) -> held at N+2
     end
 
     // mac_valid_in asserts at N+2, when the 2-cycle weight has landed and the

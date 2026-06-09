@@ -78,6 +78,29 @@ module node_add_14 (
     integer gi;
     integer bi;
 
+    // [K1-FDCE] Block A: array/data writes (sync-only) -- node_add_1
+    // precedent. lhs_buf/rhs_buf are fully rewritten during each pixel's
+    // gather before ST_COMPUTE reads them; every out_beats byte is written
+    // by the 3-stage pipe before ST_STREAM presents it under valid_out.
+    // Sync-only writes also unblock RAM inference for lhs/rhs.
+    always @(posedge clk) begin
+        if (state == ST_IDLE && valid_in) begin
+            for (gi = 0; gi < CHANNEL_TILE; gi = gi + 1) begin
+                lhs_buf[gi] <= $signed(data_in[gi*8 +: 8]);
+                rhs_buf[gi] <= $signed(data_in[256 + gi*8 +: 8]);
+            end
+        end
+        if (state == ST_GATHER && valid_in) begin
+            for (gi = 0; gi < CHANNEL_TILE; gi = gi + 1) begin
+                lhs_buf[in_beat_count*CHANNEL_TILE + gi] <= $signed(data_in[gi*8 +: 8]);
+                rhs_buf[in_beat_count*CHANNEL_TILE + gi] <= $signed(data_in[256 + gi*8 +: 8]);
+            end
+        end
+        if (stage3_valid) begin
+            out_beats[beat_idx][lane_idx*8 +: 8] <= sat_w;
+        end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state           <= ST_IDLE;
@@ -96,9 +119,6 @@ module node_add_14 (
             lhs_term        <= {PROD_W{1'b0}};
             rhs_term        <= {PROD_W{1'b0}};
             sum_term        <= {TERM_W{1'b0}};
-            for (gi = 0; gi < BEATS_PER_PIXEL; gi = gi + 1) begin
-                out_beats[gi] <= 256'd0;
-            end
         end else begin
             valid_out <= 1'b0;
 
@@ -112,29 +132,17 @@ module node_add_14 (
             ch_s3        <= ch_s2;
             stage3_valid <= stage2_valid;
 
-            if (stage3_valid) begin
-                out_beats[beat_idx][lane_idx*8 +: 8] <= sat_w;
-            end
-
             case (state)
                 ST_IDLE: begin
                     ready_in <= 1'b1;
                     if (valid_in) begin
                         in_beat_count <= 7'd1;
                         state         <= ST_GATHER;
-                        for (gi = 0; gi < CHANNEL_TILE; gi = gi + 1) begin
-                            lhs_buf[gi] <= $signed(data_in[gi*8 +: 8]);
-                            rhs_buf[gi] <= $signed(data_in[256 + gi*8 +: 8]);
-                        end
                     end
                 end
 
                 ST_GATHER: begin
                     if (valid_in) begin
-                        for (gi = 0; gi < CHANNEL_TILE; gi = gi + 1) begin
-                            lhs_buf[in_beat_count*CHANNEL_TILE + gi] <= $signed(data_in[gi*8 +: 8]);
-                            rhs_buf[in_beat_count*CHANNEL_TILE + gi] <= $signed(data_in[256 + gi*8 +: 8]);
-                        end
                         if (in_beat_count == BEATS_PER_PIXEL-1) begin
                             ready_in      <= 1'b0;
                             in_beat_count <= 7'd0;

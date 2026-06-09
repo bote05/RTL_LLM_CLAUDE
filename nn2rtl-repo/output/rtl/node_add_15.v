@@ -51,6 +51,32 @@ module node_add_15 (
 
     integer i;
 
+    // [K1-FDCE] Block A: array/data writes (sync-only) -- node_add_1
+    // precedent. lhs_buf/rhs_buf are fully rewritten during each pixel's
+    // gather before ST_COMPUTE reads them; every out_beats byte is written
+    // by the 3-stage pipe before ST_STREAM presents it under valid_out.
+    // v_tmp is a blocking temp referenced ONLY by this block after the move.
+    always @(posedge clk) begin
+        if (state == ST_IDLE && valid_in && ready_in) begin
+            for (i = 0; i < CHANNEL_TILE; i = i + 1) begin
+                lhs_buf[i] <= $signed(data_in[i*8 +: 8]);
+                rhs_buf[i] <= $signed(data_in[256 + i*8 +: 8]);
+            end
+        end
+        if (state == ST_GATHER && valid_in && ready_in) begin
+            for (i = 0; i < CHANNEL_TILE; i = i + 1) begin
+                lhs_buf[in_beat_count*CHANNEL_TILE + i] <= $signed(data_in[i*8 +: 8]);
+                rhs_buf[in_beat_count*CHANNEL_TILE + i] <= $signed(data_in[256 + i*8 +: 8]);
+            end
+        end
+        if (stage3_valid) begin
+            v_tmp = sum_term >>> FUSED_SHIFT;
+            out_beats[ch_s3 / CHANNEL_TILE][(ch_s3 % CHANNEL_TILE)*8 +: 8] <=
+                (v_tmp > SAT_HI) ? 8'sd127 :
+                (v_tmp < SAT_LO) ? 8'h80   : v_tmp[7:0];
+        end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state          <= ST_IDLE;
@@ -68,7 +94,6 @@ module node_add_15 (
             lhs_term       <= {PROD_W{1'b0}};
             rhs_term       <= {PROD_W{1'b0}};
             sum_term       <= {SUM_W{1'b0}};
-            v_tmp          <= {SUM_W{1'b0}};
         end else begin
             if (stage1_active) begin
                 lhs_term     <= $signed(lhs_buf[ch_s1]) * FUSED_LHS_MULT;
@@ -87,21 +112,10 @@ module node_add_15 (
                 stage3_valid <= 1'b0;
             end
 
-            if (stage3_valid) begin
-                v_tmp = sum_term >>> FUSED_SHIFT;
-                out_beats[ch_s3 / CHANNEL_TILE][(ch_s3 % CHANNEL_TILE)*8 +: 8] <=
-                    (v_tmp > SAT_HI) ? 8'sd127 :
-                    (v_tmp < SAT_LO) ? 8'h80   : v_tmp[7:0];
-            end
-
             case (state)
                 ST_IDLE: begin
                     valid_out <= 1'b0;
                     if (valid_in && ready_in) begin
-                        for (i = 0; i < CHANNEL_TILE; i = i + 1) begin
-                            lhs_buf[i] <= $signed(data_in[i*8 +: 8]);
-                            rhs_buf[i] <= $signed(data_in[256 + i*8 +: 8]);
-                        end
                         in_beat_count <= 7'd1;
                         state         <= ST_GATHER;
                     end
@@ -109,10 +123,6 @@ module node_add_15 (
 
                 ST_GATHER: begin
                     if (valid_in && ready_in) begin
-                        for (i = 0; i < CHANNEL_TILE; i = i + 1) begin
-                            lhs_buf[in_beat_count*CHANNEL_TILE + i] <= $signed(data_in[i*8 +: 8]);
-                            rhs_buf[in_beat_count*CHANNEL_TILE + i] <= $signed(data_in[256 + i*8 +: 8]);
-                        end
                         if (in_beat_count == 7'd63) begin
                             ready_in      <= 1'b0; // [INVARIANT:READY_IN_GATING]
                             state         <= ST_COMPUTE;

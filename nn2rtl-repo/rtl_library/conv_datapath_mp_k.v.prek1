@@ -265,94 +265,11 @@ module conv_datapath_mp_k #(
         end
     end
 
-    // [K1-FDCE] Block A: DATAPATH registers (sync-only, no reset). Moved out of
-    // the async-reset FSM block below. Safety: acc is sync-cleared on
-    // ST_IDLE&start_mac / ST_OUTPUT oc-advance BEFORE the first gated
-    // accumulate of every pass; biased/scaled/data_out are written in
-    // ST_BIAS/ST_SCALE/ST_OUTPUT strictly before their readers; data_out is
-    // only sampled downstream under valid_out (still async-reset). All write
-    // gates (state, mac_valid_q2, mac_oc_group_q2, start_mac) remain
-    // async-reset control in the FSM block, so no write fires during reset.
-    // fsm_i/fsm_lane_i/bias_oc/sc_oc/out_oc/out_shift/out_round/v_tmp are
-    // referenced ONLY by this block after the move (no shared-var race).
-    always @(posedge clk) begin
-      // Stage 2: register the MP partial sums.
-      for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1)
-        partial_q[fsm_i] <= sum_lane_w[fsm_i];
-
-      // Stage 3: accumulate partial sums into MP lanes.
-      if (mac_valid_q2) begin
-        for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1) begin
-          if (mac_oc_group_q2 * MP + fsm_i < OC)
-            acc[fsm_i] <= acc[fsm_i] + $signed(partial_q[fsm_i]);
-        end
-      end
-
-      // ST_BIAS: bias-add per lane.
-      if (state == ST_BIAS) begin
-        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
-          bias_oc = oc_group * MP + fsm_lane_i;
-          if (bias_oc < OC)
-            biased[fsm_lane_i] <= $signed(acc[fsm_lane_i]) + $signed(biases[bias_oc]);
-          else
-            biased[fsm_lane_i] <= 0;
-        end
-      end
-
-      // ST_SCALE: per-OC scale multiply.
-      if (state == ST_SCALE) begin
-        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
-          sc_oc = oc_group * MP + fsm_lane_i;
-          if (sc_oc < OC)
-            scaled[fsm_lane_i] <= $signed(biased[fsm_lane_i]) *
-                                  $signed(scale_rom[sc_oc][15:0]);
-          else
-            scaled[fsm_lane_i] <= 0;
-        end
-      end
-
-      // ST_OUTPUT: per-OC round/shift/saturate into the staged output pixel.
-      if (state == ST_OUTPUT) begin
-        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
-          out_oc = oc_group * MP + fsm_lane_i;
-          if (out_oc < OC) begin
-            out_shift = scale_rom[out_oc][21:16];
-            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
-                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
-            v_tmp = (scaled[fsm_lane_i] + out_round) >>> out_shift;
-            data_out[out_oc*8 +: 8] <=
-                (v_tmp >  127) ?  8'sd127 :
-                (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
-`ifdef DBG_SCALE
-            if ((out_oc == 0 || out_oc == 32) && dbg_n < 8) begin
-                $display("[DBG_SCALE] oc=%0d biased=%0d scale_rom=%h mult=%0d shift=%0d out_round=%0d scaled=%0d v_tmp=%0d -> out=%0d",
-                    out_oc, $signed(biased[fsm_lane_i]), scale_rom[out_oc],
-                    $signed({1'b0,scale_rom[out_oc][15:0]}), out_shift, $signed(out_round),
-                    $signed(scaled[fsm_lane_i]), $signed(v_tmp),
-                    $signed((v_tmp>127)?8'sd127:(v_tmp<-128)?-8'sd128:v_tmp[7:0]));
-                dbg_n = dbg_n + 1;
-            end
-`endif
-          end
-        end
-      end
-
-      // Accumulator clears LAST: textual-order parity with the original
-      // single block (the case-statement clears overrode the accumulate).
-      if (state == ST_IDLE && start_mac) begin
-        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
-          acc[fsm_lane_i] <= 0;
-      end
-      if (state == ST_OUTPUT && oc_group != OC_PASSES - 1) begin
-        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
-          acc[fsm_lane_i] <= 0;
-      end
-    end
-
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state            <= ST_IDLE;
             valid_out        <= 1'b0;
+            data_out         <= {OC*8{1'b0}};
             k_group          <= 0;
             oc_group         <= 0;
             mac_valid_q1     <= 1'b0;
@@ -362,8 +279,18 @@ module conv_datapath_mp_k #(
             mac_valid_q1b    <= 1'b0;
             mac_oc_group_q1b <= 0;
             mac_done_issuing <= 1'b0;
+            for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1) begin
+                acc[fsm_i]      <= 0;
+                biased[fsm_i]   <= 0;
+                scaled[fsm_i]   <= 0;
+                partial_q[fsm_i] <= 0;
+            end
         end else begin
             valid_out <= 1'b0;
+
+            // Stage 2: register the MP partial sums.
+            for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1)
+                partial_q[fsm_i] <= sum_lane_w[fsm_i];
             // [DSP-INPUT-PIPE] extra valid/oc-group delay when piped so the accumulate
             // gate stays aligned with the deeper q2 data path.
             if (DSP_INPUT_PIPE != 0) begin
@@ -376,6 +303,14 @@ module conv_datapath_mp_k #(
                 mac_oc_group_q2  <= mac_oc_group_q1;
             end
 
+            // Stage 3: accumulate partial sums into MP lanes.
+            if (mac_valid_q2) begin
+                for (fsm_i = 0; fsm_i < MP; fsm_i = fsm_i + 1) begin
+                    if (mac_oc_group_q2 * MP + fsm_i < OC)
+                        acc[fsm_i] <= acc[fsm_i] + $signed(partial_q[fsm_i]);
+                end
+            end
+
             case (state)
                 ST_IDLE: begin
                     if (start_mac) begin
@@ -386,6 +321,8 @@ module conv_datapath_mp_k #(
                         mac_valid_q1b    <= 1'b0;
                         mac_valid_q2     <= 1'b0;
                         mac_done_issuing <= 1'b0;
+                        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
+                            acc[fsm_lane_i] <= 0;
                     end
                 end
 
@@ -408,23 +345,63 @@ module conv_datapath_mp_k #(
                 end
 
                 ST_BIAS: begin
-                    // [K1-FDCE] biased[] writes moved to Block A (sync-only).
+                    for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
+                        bias_oc = oc_group * MP + fsm_lane_i;
+                        if (bias_oc < OC)
+                            biased[fsm_lane_i] <= $signed(acc[fsm_lane_i]) + $signed(biases[bias_oc]);
+                        else
+                            biased[fsm_lane_i] <= 0;
+                    end
                     state <= ST_SCALE;
                 end
 
                 ST_SCALE: begin
-                    // [K1-FDCE] scaled[] writes moved to Block A (sync-only).
+                    for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
+                        sc_oc = oc_group * MP + fsm_lane_i;
+                        // Per-OC mult (positive 15-bit in a 16-bit slot -> signed
+                        // positive). out-of-range lanes don't matter (OUTPUT guards).
+                        if (sc_oc < OC)
+                            scaled[fsm_lane_i] <= $signed(biased[fsm_lane_i]) *
+                                                  $signed(scale_rom[sc_oc][15:0]);
+                        else
+                            scaled[fsm_lane_i] <= 0;
+                    end
                     state <= ST_OUTPUT;
                 end
 
                 ST_OUTPUT: begin
-                    // [K1-FDCE] data_out[]/acc[] writes moved to Block A (sync-only).
+                    for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
+                        out_oc = oc_group * MP + fsm_lane_i;
+                        if (out_oc < OC) begin
+                            // Per-OC shift + round bias (shift==0 -> no rounding).
+                            out_shift = scale_rom[out_oc][21:16];
+                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
+                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
+                            v_tmp = (scaled[fsm_lane_i] + out_round) >>> out_shift;
+                            data_out[out_oc*8 +: 8] <=
+                                (v_tmp >  127) ?  8'sd127 :
+                                (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
+`ifdef DBG_SCALE
+                            if ((out_oc == 0 || out_oc == 32) && dbg_n < 8) begin
+                                $display("[DBG_SCALE] oc=%0d biased=%0d scale_rom=%h mult=%0d shift=%0d out_round=%0d scaled=%0d v_tmp=%0d -> out=%0d",
+                                    out_oc, $signed(biased[fsm_lane_i]), scale_rom[out_oc],
+                                    $signed({1'b0,scale_rom[out_oc][15:0]}), out_shift, $signed(out_round),
+                                    $signed(scaled[fsm_lane_i]), $signed(v_tmp),
+                                    $signed((v_tmp>127)?8'sd127:(v_tmp<-128)?-8'sd128:v_tmp[7:0]));
+                                dbg_n = dbg_n + 1;
+                            end
+`endif
+                        end
+                    end
+
                     if (oc_group == OC_PASSES - 1) begin
                         valid_out <= 1'b1;
                         state     <= ST_IDLE;
                     end else begin
                         oc_group     <= oc_group + 1'b1;
                         k_group      <= 0;
+                        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
+                            acc[fsm_lane_i] <= 0;
                         state <= ST_MAC;
                     end
                 end

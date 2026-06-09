@@ -61,10 +61,21 @@ module node_conv_222 (
     assign valid_out = out_busy;
     assign data_out  = out_pix[out_idx*TILE_BITS +: TILE_BITS];
 
+    // [K1-FDCE] Block A: gather/stream DATAPATH regs (sync-only, no reset).
+    // in_lo slices are all rewritten during each pixel's gather before the
+    // last-beat read of {data_in, in_lo}; out_pix is written before out_busy
+    // raises valid_out. Reset values dead; control stays async-reset below.
+    always @(posedge clk) begin
+        if (beat_fire && !is_last_in_beat)
+            in_lo[in_beat_idx*TILE_BITS +: TILE_BITS] <= data_in;
+        if (lib_valid_out_w && !out_busy)
+            out_pix <= lib_data_out_w;
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            frame_state<=ST_ARM; start_pulse<=1'b0; in_beat_idx<=0; in_lo<=0;
-            out_pix<=0; out_idx<=0; out_busy<=1'b0;
+            frame_state<=ST_ARM; start_pulse<=1'b0; in_beat_idx<=0;
+            out_idx<=0; out_busy<=1'b0;
         end else begin
             start_pulse <= 1'b0;
             case (frame_state)
@@ -74,13 +85,10 @@ module node_conv_222 (
                 default: frame_state<=ST_ARM;
             endcase
             if (beat_fire) begin
-                if (!is_last_in_beat)
-                    in_lo[in_beat_idx*TILE_BITS +: TILE_BITS] <= data_in;
                 in_beat_idx <= is_last_in_beat ? 0 : in_beat_idx + 1'b1;
             end
             // Output: capture new pixel when idle; stream with backpressure.
             if (lib_valid_out_w && !out_busy) begin
-                out_pix  <= lib_data_out_w;
                 out_idx  <= 0;
                 out_busy <= 1'b1;
             end else if (out_busy && ready_out) begin

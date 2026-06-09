@@ -141,16 +141,21 @@ module requant_pipeline (
             valid_q2       <= 1'b0;
             valid_q3       <= 1'b0;
             valid_out      <= 1'b0;
-            scale_q1       <= {8192{1'b0}};
-            scale_q2       <= {8192{1'b0}};
         end else begin
             valid_q1       <= valid_in;
             valid_q2       <= valid_q1;
             valid_q3       <= valid_q2;    // Lever 2: extra stage
             valid_out      <= valid_q3;    // Lever 2: shifted from valid_q2
-            scale_q1       <= scale_in;
-            scale_q2       <= scale_q1;
         end
+    end
+
+    // [K1-FDCE] scale_q1/scale_q2 are DATAPATH pipes (2 x 8192 FF): their
+    // values reach data_out only through the per-lane pipeline, which the
+    // engine samples strictly under valid_out (reset-gated above), and they
+    // are rewritten every cycle -> the reset value is dead. No-reset => FDRE.
+    always @(posedge clk) begin
+        scale_q1       <= scale_in;
+        scale_q2       <= scale_q1;
     end
 
     // ----------------------------------------------------------------------
@@ -243,15 +248,11 @@ module requant_pipeline (
             assign biased_round_sum = scaled_q2 + ROUND_CONST;
             assign v_tmp            = biased_round_sum >>> FIXED_SHIFT;
 
-            always @(posedge clk or negedge rst_n) begin
-                if (!rst_n) begin
-                    biased_q1   <= {BIASED_W{1'b0}};
-                    scaled_q2   <= {SCALED_W{1'b0}};
-                    sat_hi_q3a  <= 1'b0;
-                    sat_lo_q3a  <= 1'b0;
-                    v_low_q3a   <= 8'sd0;
-                    data_out_q4 <= 8'sd0;
-                end else begin
+            // [K1-FDCE] per-lane requant pipe (116 FF x 256 lanes): pure
+            // feed-forward datapath; data_out is sampled only under valid_out
+            // (reset-gated valid chain above). Reset clause removed -> FDRE.
+            always @(posedge clk) begin
+                begin
                     // Stage 1: bias-add (signed-signed add; BIASED_W absorbs
                     // the sign bit).
                     biased_q1 <= acc_lane + bias_lane;

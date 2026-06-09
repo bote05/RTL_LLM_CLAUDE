@@ -30,6 +30,15 @@ module node_relu_7 (
     reg signed [7:0] tmp_byte;
     reg signed [31:0] rs_in, rs_out;
 
+    // [K1-FDCE] sync-only memory write -- no reset clause (same pattern as
+    // node_relu.v): beat_buf is gather DATA, fully rewritten each pixel
+    // before the sending phase reads it. Also unblocks LUTRAM inference.
+    always @(posedge clk) begin
+        if (!sending && valid_in && ready_in) begin
+            beat_buf[in_beat_count] <= data_in;
+        end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ready_in       <= 1'b1;
@@ -38,14 +47,11 @@ module node_relu_7 (
             in_beat_count  <= {COUNT_W{1'b0}};
             out_beat_count <= {COUNT_W{1'b0}};
             sending        <= 1'b0;
-            for (i = 0; i < BEATS_PER_PIXEL; i = i + 1)
-                beat_buf[i] <= {BEAT_WIDTH_BITS{1'b0}};
         end else begin
             valid_out <= 1'b0;
             if (!sending) begin
                 ready_in <= 1'b1;  // [INVARIANT:READY_IN_GATING]
                 if (valid_in && ready_in) begin
-                    beat_buf[in_beat_count] <= data_in;
                     if (in_beat_count == BEATS_PER_PIXEL - 1) begin
                         in_beat_count <= {COUNT_W{1'b0}};
                         sending       <= 1'b1;

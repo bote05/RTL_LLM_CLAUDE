@@ -97,10 +97,13 @@ module mac_array #(
             // multiplicand is exiting stage 1. mac_clear takes priority over
             // mac_valid_q1 so the FSM can synchronously reset all lanes on
             // the same cycle it kicks the next OC pass.
-            always @(posedge clk or negedge rst_n) begin
-                if (!rst_n)
-                    acc <= 32'sd0;
-                else if (mac_clear)
+            // [K1-FDCE] acc's async reset is dead: the engine FSM pulses
+            // mac_clear on EVERY ST_RUN entry (run_entered), so acc is sync-
+            // cleared before the first gated accumulate of every dot product
+            // (incl. the first after power-on; mac_valid_q1 is reset-held 0
+            // until then). FDCE -> FDRE on 256 x 32 accumulator bits.
+            always @(posedge clk) begin
+                if (mac_clear)
                     acc <= 32'sd0;
                 else if (mac_valid_q1)
                     acc <= acc + $signed(mul_q1);

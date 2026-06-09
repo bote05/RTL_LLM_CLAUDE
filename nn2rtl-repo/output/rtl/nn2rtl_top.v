@@ -4380,17 +4380,21 @@ module skip_fifo #(
         wire do_rd = ~mem_empty && (~out_valid_r || out_ready);
         assign out_valid = out_valid_r;
         assign out_data  = out_data_r;
+        // [K1-FDCE] out_data_r is FIFO DATA: sampled downstream only under
+        // out_valid_r (kept async-reset); written only under do_rd (gated by
+        // reset-held pointers). Sync-only write, reset dropped -> FDRE.
+        always @(posedge clk) begin
+            if (do_rd) out_data_r <= mem[rd_idx];
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 wr_ptr <= {(ADDR_W+1){1'b0}};
                 rd_ptr <= {(ADDR_W+1){1'b0}};
                 peak_occ <= {(ADDR_W+1){1'b0}};
                 out_valid_r <= 1'b0;
-                out_data_r  <= {WIDTH{1'b0}};
             end else begin
                 if (in_valid && ~full) wr_ptr <= wr_ptr + 1'b1;
                 if (do_rd) begin
-                    out_data_r  <= mem[rd_idx];
                     out_valid_r <= 1'b1;
                     rd_ptr      <= rd_ptr + 1'b1;
                 end else if (out_valid_r && out_ready) begin
@@ -4518,15 +4522,21 @@ module stream_to_act_bram_bridge #(
         reg          skid_valid;
         wire         drain_skid = skid_valid && bridge_free;
         assign in_ready = !loaded && (!skid_valid || drain_skid);
+        // [K1-FDCE] Block A: stream DATA regs (sync-only, no reset). wr_data is
+        // consumed only while wr_req is pending; skid_data only while
+        // skid_valid -- both controls stay async-reset below. Reset values dead.
+        always @(posedge clk) begin
+            if (drain_skid) wr_data <= skid_data;
+            if (in_valid && !loaded && (!skid_valid || drain_skid))
+                skid_data <= in_data;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 wr_req     <= 1'b0;
                 wr_addr    <= 15'd0;
-                wr_data    <= 2048'd0;
                 word_count <= 16'd0;
                 loaded     <= 1'b0;
                 skid_valid <= 1'b0;
-                skid_data  <= 2048'd0;
             end else begin
                 // (1) Grant retires wr_req and advances count.
                 if (wr_req && wr_grant) begin
@@ -4538,12 +4548,10 @@ module stream_to_act_bram_bridge #(
                 if (drain_skid) begin
                     wr_req  <= 1'b1;
                     wr_addr <= next_wr_addr;
-                    wr_data <= skid_data;
                 end
                 // (3) Capture new beat into skid; clear skid if drained and no new.
                 if (in_valid && !loaded && (!skid_valid || drain_skid)) begin
                     skid_valid <= 1'b1;
-                    skid_data  <= in_data;
                 end else if (drain_skid) begin
                     skid_valid <= 1'b0;
                 end
@@ -4566,17 +4574,28 @@ module stream_to_act_bram_bridge #(
         wire would_complete = (beat_idx == BEATS_PER_WORD - 1);
         wire drain_skid = skid_valid && (!would_complete || bridge_free);
         assign in_ready = !loaded && (!skid_valid || drain_skid);
+        // [K1-FDCE] Block A: stream DATA regs (sync-only, no reset). The
+        // accumulator's consumed slices are all (re)written each word before
+        // wr_data is formed; wr_data/skid_data are consumed only under
+        // wr_req/skid_valid (async-reset control below). Reset values dead.
+        always @(posedge clk) begin
+            if (drain_skid) begin
+                accumulator[beat_idx*BUS_W +: BUS_W] <= skid_data;
+                if (would_complete)
+                    wr_data <= { skid_data,
+                                 accumulator[2048-BUS_W-1:0] };
+            end
+            if (in_valid && !loaded && (!skid_valid || drain_skid))
+                skid_data <= in_data;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 wr_req      <= 1'b0;
                 wr_addr     <= 15'd0;
-                wr_data     <= 2048'd0;
                 word_count  <= 16'd0;
-                accumulator <= 2048'd0;
                 beat_idx    <= {(BEAT_W+1){1'b0}};
                 loaded      <= 1'b0;
                 skid_valid  <= 1'b0;
-                skid_data   <= {BUS_W{1'b0}};
             end else begin
                 // (1) Grant retires wr_req and advances count.
                 if (wr_req && wr_grant) begin
@@ -4584,15 +4603,12 @@ module stream_to_act_bram_bridge #(
                     word_count <= next_word_count;
                     if (next_word_count == TOTAL_BRAM_WORDS) loaded <= 1'b1;
                 end
-                // (2) Drain skid into accumulator (and possibly emit word).
+                // (2) Drain skid (data writes moved to Block A above).
                 if (drain_skid) begin
-                    accumulator[beat_idx*BUS_W +: BUS_W] <= skid_data;
                     if (would_complete) begin
                         beat_idx <= {(BEAT_W+1){1'b0}};
                         wr_req   <= 1'b1;
                         wr_addr  <= next_wr_addr;
-                        wr_data  <= { skid_data,
-                                      accumulator[2048-BUS_W-1:0] };
                     end else begin
                         beat_idx <= beat_idx + 1'b1;
                     end
@@ -4600,7 +4616,6 @@ module stream_to_act_bram_bridge #(
                 // (3) Capture new beat into skid.
                 if (in_valid && !loaded && (!skid_valid || drain_skid)) begin
                     skid_valid <= 1'b1;
-                    skid_data  <= in_data;
                 end else if (drain_skid) begin
                     skid_valid <= 1'b0;
                 end
@@ -4622,18 +4637,30 @@ module stream_to_act_bram_bridge #(
         wire can_load_new  = !buf_active || beat_complete;
         wire drain_skid    = skid_valid && can_load_new;
         assign in_ready = !loaded && (!skid_valid || drain_skid);
+        // [K1-FDCE] Block A: stream DATA regs (sync-only, no reset), consumed
+        // only under wr_req/buf_active/skid_valid (async-reset control below).
+        // Textual order preserved: a drain_skid wr_data write overrides the
+        // continue-slice write, exactly as in the original single block.
+        always @(posedge clk) begin
+            if (wr_req && wr_grant && (slice_idx != WORDS_PER_BEAT - 1)
+                && (next_word_count != TOTAL_BRAM_WORDS))
+                wr_data <= beat_buf[(slice_idx+1)*2048 +: 2048];
+            if (drain_skid) begin
+                beat_buf <= skid_data;
+                wr_data  <= skid_data[2047:0];
+            end
+            if (in_valid && !loaded && (!skid_valid || drain_skid))
+                skid_data <= in_data;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 wr_req     <= 1'b0;
                 wr_addr    <= 15'd0;
-                wr_data    <= 2048'd0;
                 word_count <= 16'd0;
-                beat_buf   <= {BUS_W{1'b0}};
                 slice_idx  <= {(SLICE_W+1){1'b0}};
                 buf_active <= 1'b0;
                 loaded     <= 1'b0;
                 skid_valid <= 1'b0;
-                skid_data  <= {BUS_W{1'b0}};
             end else begin
                 // (1) Grant retires wr_req and advances count.
                 if (wr_req && wr_grant) begin
@@ -4650,22 +4677,18 @@ module stream_to_act_bram_bridge #(
                         slice_idx <= slice_idx + 1'b1;
                         wr_req    <= 1'b1;
                         wr_addr   <= BRAM_BASE_ADDR[14:0] + next_word_count[14:0];
-                        wr_data   <= beat_buf[(slice_idx+1)*2048 +: 2048];
                     end
                 end
                 // (2) Load new beat from skid when buf is free.
                 if (drain_skid) begin
-                    beat_buf   <= skid_data;
                     buf_active <= 1'b1;
                     slice_idx  <= {(SLICE_W+1){1'b0}};
                     wr_req     <= 1'b1;
                     wr_addr    <= next_wr_addr;
-                    wr_data    <= skid_data[2047:0];
                 end
                 // (3) Capture new beat into skid.
                 if (in_valid && !loaded && (!skid_valid || drain_skid)) begin
                     skid_valid <= 1'b1;
-                    skid_data  <= in_data;
                 end else if (drain_skid) begin
                     skid_valid <= 1'b0;
                 end
@@ -4724,12 +4747,16 @@ module engine_output_fifo #(
     wire load_skid = !fifo_empty && (!out_valid || (out_valid && out_ready));
     assign in_ready = !fifo_full;
 
+    // [K1-FDCE] out_data is FIFO DATA: sampled only under out_valid (kept
+    // async-reset); written only under load_skid. Sync-only write -> FDRE.
+    always @(posedge clk) begin
+        if (load_skid) out_data <= mem[rd_ptr[ADDR_W-1:0]];
+    end
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wr_ptr    <= {(ADDR_W+1){1'b0}};
             rd_ptr    <= {(ADDR_W+1){1'b0}};
             out_valid <= 1'b0;
-            out_data  <= {DATA_W{1'b0}};
         end else begin
             if (wr_fire) wr_ptr <= wr_ptr + 1'b1;
             // Output handshake: drop valid when consumer accepts.
@@ -4740,7 +4767,6 @@ module engine_output_fifo #(
             // this cycle) and the FIFO has data. rd_ptr advances on the
             // same edge so the next refill reads the next entry.
             if (load_skid) begin
-                out_data  <= mem[rd_ptr[ADDR_W-1:0]];
                 out_valid <= 1'b1;
                 rd_ptr    <= rd_ptr + 1'b1;
             end
@@ -4844,11 +4870,17 @@ module engine_output_bridge #(
     assign fifo_out_ready = active_slot && fifo_out_valid
                           && need_new_beat && !drain_complete;
 
+    // [K1-FDCE] Block A: beat_buf/data_out are stream DATA (sync-only, no
+    // reset): beat_buf is consumed (current_tile) only while buf_valid;
+    // data_out is sampled downstream only under valid_out -- both controls
+    // stay async-reset below. Reset values dead.
+    always @(posedge clk) begin
+        if (emit_ready) data_out <= current_tile;
+        if (fifo_out_ready && fifo_out_valid) beat_buf <= fifo_out_data;
+    end
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             valid_out      <= 1'b0;
-            data_out       <= {DATA_W{1'b0}};
-            beat_buf       <= {ACT_W{1'b0}};
             buf_valid      <= 1'b0;
             tile_idx       <= {(TILE_IDX_W+1){1'b0}};
             tiles_emitted  <= 32'd0;
@@ -4859,7 +4891,6 @@ module engine_output_bridge #(
             // (2) Emit a tile this cycle.
             if (emit_ready) begin
                 valid_out     <= 1'b1;
-                data_out      <= current_tile;
                 tiles_emitted <= tiles_emitted + 32'd1;
                 if (tiles_emitted + 32'd1 == EXPECTED_TILES[31:0]) begin
                     drain_complete <= 1'b1;
@@ -4875,8 +4906,8 @@ module engine_output_bridge #(
             // (3) Pull next beat from FIFO. Placed AFTER the emit block so
             // a simultaneous "emit last tile + load new beat" lands with
             // buf_valid=1 (FIFO load wins the NBA race) and tile_idx=0.
+            // ([K1-FDCE] beat_buf data write moved to Block A above.)
             if (fifo_out_ready && fifo_out_valid) begin
-                beat_buf  <= fifo_out_data;
                 buf_valid <= 1'b1;
                 tile_idx  <= {(TILE_IDX_W+1){1'b0}};
             end

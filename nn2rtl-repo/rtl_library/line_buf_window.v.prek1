@@ -445,14 +445,15 @@ module line_buf_window #(
 
     integer i, j, c_ch;
 
-    // [K1-FDCE] window/bypass_reg are DATAPATH-only: the node wrapper pulses
-    // frame_start (start_pulse) on the first post-reset cycle (ST_ARM), which
-    // sync-clears them below before any pixel is shifted in, and during reset
-    // both enables (frame_start, sched_advance) are held 0 by the still-async-
-    // reset wrapper FSM + coord_scheduler -> the dropped reset clause is dead.
-    // FDCE -> FDRE: removes the largest per-conv rst_n fanout + control sets.
-    always @(posedge clk) begin
-        if (frame_start) begin
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (i = 0; i < KH; i = i + 1)
+                for (j = 0; j < KW - 1; j = j + 1)
+                    for (c_ch = 0; c_ch < IC; c_ch = c_ch + 1)
+                        window[i][j][c_ch] <= 8'sd0;
+            for (c_ch = 0; c_ch < IC; c_ch = c_ch + 1)
+                bypass_reg[c_ch] <= 8'sd0;
+        end else if (frame_start) begin
             for (i = 0; i < KH; i = i + 1)
                 for (j = 0; j < KW - 1; j = j + 1)
                     for (c_ch = 0; c_ch < IC; c_ch = c_ch + 1)
