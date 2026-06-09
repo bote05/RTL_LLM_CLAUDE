@@ -179,6 +179,10 @@ async function main(): Promise<void> {
   // does not collide with the running clean all-spatial e2e.
   const buildDir = path.join(outDir, "obj_dir_engine_value");
   const env = { ...process.env, PATH: `C:/Users/User/oss-cad-suite/bin;C:/Users/User/w64devkit/bin;${process.env.PATH ?? ""}` };
+  // [THREADS 2026-06-09] MBV2_MAKE_JOBS>1 parallelizes the g++ compile (the 10-30 min sink). The
+  // Windows PCH race that forced -j1 is avoided by adding --no-pch to verilator (no precompiled
+  // header => nothing to race on); per-TU header recompile is slower but -jN parallelism wins big.
+  const makeJobs = process.env.MBV2_MAKE_JOBS ?? "1";
 
   if (process.env.NN2RTL_VALUE_RUNONLY !== "1") {
     if (existsSync(buildDir)) {
@@ -227,10 +231,14 @@ async function main(): Promise<void> {
     const verilateRes = await runCmd(verilatorBin, verilatorArgs, repoRoot, env, "verilate");
     await writeFile(buildLog, "--- verilator ---\n" + verilateRes.stdout + "\n" + verilateRes.stderr, "utf8");
     if (!verilateRes.ok) { console.error("[verilate] FAILED — see " + buildLog); process.exit(2); }
-    console.log("[make] compiling generated C++ (serialized -j to avoid Windows PCH race; 10-30 min)");
-    // Serialize -j (=1) to avoid the Windows precompiled-header race some
-    // builds hit when multiple cc invocations touch the same PCH.
-    const makeRes = await runCmd(makeBin, ["-j", "1", "-f", "Vnn2rtl_top.mk", "Vnn2rtl_top"], buildDir, env, "make");
+    // [THREADS 2026-06-09] parallel make with PCH: the PCH .gch is a SHARED prerequisite that make
+    // builds once before the dependent objects, so -jN is safe (no race). CXX is PINNED to the
+    // modern w64devkit g++ (GCC 15) so it can never fall back to the ancient C:\MinGW g++ 6.3.0 on
+    // PATH, which rejects -faligned-new/-fcf-protection and breaks the PCH compile.
+    const CXX_PIN = "CXX=C:/Users/User/w64devkit/bin/g++";
+    const makeArgs = ["-j", makeJobs, CXX_PIN, "-f", "Vnn2rtl_top.mk", "Vnn2rtl_top"];
+    console.log(`[make] compiling generated C++ (-j ${makeJobs}, CXX=w64devkit g++15)`);
+    const makeRes = await runCmd(makeBin, makeArgs, buildDir, env, "make");
     await writeFile(buildLog, await readFile(buildLog, "utf8") + "\n--- make ---\n" + makeRes.stdout + "\n" + makeRes.stderr, "utf8");
     if (!makeRes.ok) { console.error("[make] FAILED — see " + buildLog); process.exit(3); }
   } else {
