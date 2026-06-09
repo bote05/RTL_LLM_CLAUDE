@@ -26,7 +26,7 @@
 //   npx tsx scripts/run_mbv2_synth.ts [--part=xcu250-figd2104-2L-e]
 //        [--clock-ns=10] [--threads=8] [--synth-only]
 
-import { readFile, writeFile, mkdir, copyFile, readdir, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, copyFile, readdir, rm, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
@@ -257,11 +257,17 @@ async function main(): Promise<void> {
       // preserve Vivado's own logs (tempdir is auto-deleted) so synth crashes/errors are diagnosable
       "vivado.log", "vivado.jou"];
     let polling = true;
-    const persist = async () => {
+    // [DCP-CORRUPTION FIX 2026-06-09] The 30s poller can copy a dcp WHILE Vivado's write_checkpoint
+    // is still writing it -> a PARTIAL (corrupt) dst. The old `!existsSync(d)` then made the FINAL
+    // persist SKIP it (dst exists) -> the partial stuck -> open_checkpoint fails ("checkpoint not
+    // open"). Fix: (1) copy to a .tmp then atomic rename so a dst is never a half-written file;
+    // (2) the FINAL persist(force=true) ALWAYS re-copies, so the now-COMPLETE src overwrites any
+    // partial the poller left. Poller stays best-effort (force=false).
+    const persist = async (force = false) => {
       for (const { src, dst } of dcpMap) {
         const d = path.join(safeCheckpointDir, dst);
-        if (existsSync(src) && !existsSync(d)) {
-          try { await copyFile(src, d); console.log(`[mbv2-synth] persisted ${dst}`); } catch { /* mid-write */ }
+        if (existsSync(src) && (force || !existsSync(d))) {
+          try { const tmp = d + ".tmp"; await copyFile(src, tmp); await rename(tmp, d); console.log(`[mbv2-synth] persisted ${dst}${force ? " (final/forced)" : ""}`); } catch { /* mid-write */ }
         }
       }
       for (const r of reportNames) {
@@ -322,7 +328,7 @@ async function main(): Promise<void> {
       });
       stdout = res.stdout; stderr = res.stderr; exitOk = res.ok;
     }
-    polling = false; await poller; await persist();
+    polling = false; await poller; await persist(true);   // FINAL persist FORCES re-copy of the complete dcps
     const elapsed = (Date.now() - t0) / 1000;
     console.log(`[mbv2-synth] vivado returned in ${elapsed.toFixed(1)}s (ok=${exitOk}${ramKillMsg ? ", RAM-KILLED" : ""})`);
 
