@@ -84,6 +84,11 @@ function buildTcl(input: {
     `puts "NN2RTL_INFO: requested general.maxThreads=${threads}, effective=[get_param general.maxThreads]"`,
     `puts "NN2RTL_INFO: opening synth checkpoint"`,
     `open_checkpoint ${tclQuote(input.synthDcp)}`,
+    // [FMAX-SWEEP 2026-06-09] re-apply the clock at the resume target so a clock SWEEP from one
+    // synth dcp actually re-times (open_checkpoint inherits the synth-baked period otherwise).
+    // Constraint-only -> byte-exact. Clock is named "clk" (run_first_light_synth.ts create_clock).
+    `puts "NN2RTL_INFO: re-applying clock at resume target ${clockNs}ns"`,
+    `if {[llength [get_clocks -quiet clk]]} { set_property -quiet PERIOD ${clockNs} [get_clocks clk] } else { create_clock -name clk -period ${clockNs} [get_ports clk] }`,
     `puts "NN2RTL_INFO: starting opt_design"`,
     `opt_design`,
     `write_checkpoint -force ${tclQuote(input.optDcp)}`,

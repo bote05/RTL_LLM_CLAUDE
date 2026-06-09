@@ -100,7 +100,7 @@ module node_conv_292 (
         .output_fires(sched_output_fires),.advance(sched_advance),
         .in_frame_done(),.out_frame_done(sched_out_frame_done),
         .outputs_emitted(sched_outputs_emitted));
-    line_buf_window #(.IC(IC),.IW(IW),.IH(IH),.KH(KH),.KW(KW),.PW(PW),.PH(PH),.EXPOSE_FULL_WINDOW(0)) lbw (
+    line_buf_window #(.IC(IC),.IW(IW),.IH(IH),.KH(KH),.KW(KW),.PW(PW),.PH(PH),.EXPOSE_FULL_WINDOW(0),.LINE_BUF_USE_URAM(2)) lbw (
         .clk(clk),.rst_n(rst_n),.frame_start(start_pulse),
         .sched_in_row(sched_in_row),.sched_in_col(sched_in_col),
         .sched_needs_real_input(sched_needs_real_input),

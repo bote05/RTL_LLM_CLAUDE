@@ -300,7 +300,25 @@ module line_buf_window #(
             if (TILE_STORAGE == 0) begin : gen_legacy_storage
             // ===== legacy shallow-wide per-slot mem -- BIT/CYCLE-IDENTICAL to the prior design;
             // ===== ResNet and any caller with TILE_STORAGE==0 (the default) elaborate this branch.
-            if (LINE_BUF_USE_URAM != 0) begin : gen_mem_ultra
+            if (LINE_BUF_USE_URAM == 2) begin : gen_mem_dist
+                // [A' FMAX-ENABLER 2026-06-09] "distributed" (LUTRAM) variant for the 3 deep
+                // ResNet convs (284/292/298): their shallow-wide line buffers width-bind BRAM at
+                // ~1.6% fill (~171 RAMB36 each, ~513 total). LUTRAM (pool ~2% used) frees that
+                // BRAM (94.6% -> ~75%) as the PBLOCK/floorplan enabler for the Fmax campaign.
+                // Identical template to gen_mem_ultra/gen_mem_block; differs ONLY in the
+                // (* ram_style *) attribute -- Verilator ignores it, so byte-exact by construction.
+                (* ram_style = "distributed" *)
+                reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
+
+                always @(posedge clk) begin
+                    if (write_en) begin
+                        mem[sched_in_col] <= data_in;
+                    end
+                    if (sched_advance) begin
+                        q_reg <= right_padded ? {(IC*8){1'b0}} : mem[sched_in_col];
+                    end
+                end
+            end else if (LINE_BUF_USE_URAM != 0) begin : gen_mem_ultra
                 (* ram_style = "ultra" *)
                 reg [IC*8-1:0] mem [0:MEM_DEPTH-1];
 

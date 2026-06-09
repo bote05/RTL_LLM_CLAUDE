@@ -68,6 +68,13 @@ const fast = rawArgs.includes("--fast");
 const placeDirective = flag("place-directive") ?? "Explore";
 const routeDirective = flag("route-directive") ?? "Explore";
 const ckptDir = path.join(repoRoot, "output", "mobilenet-v2", "reports", "synth", "checkpoints");
+// [FMAX-PBLOCK 2026-06-09] The SLR pblock floorplan (mbv2_fmax_pblock.xdc) is wired into the FULL
+// synth flow after opt_design — but a --synth-only checkpoint never saw it, and resume-route would
+// silently place WITHOUT the floorplan. Mirror the full flow here: read_xdc after opt (cells exist),
+// before place. Placement-only -> byte-exact by construction. --no-pblock opts out; --xdc overrides.
+const noPblock = rawArgs.includes("--no-pblock");
+const pblockXdcRaw = flag("xdc") ?? path.join(repoRoot, "output", "mobilenet-v2", "reports", "synth", "mbv2_fmax_pblock.xdc");
+const pblockXdc = path.isAbsolute(pblockXdcRaw) ? pblockXdcRaw : path.resolve(repoRoot, pblockXdcRaw);
 const inputRaw = flag("input") ?? path.join(ckptDir, "mbv2_post_synth.dcp");
 const inputDcp = path.isAbsolute(inputRaw) ? inputRaw : path.resolve(repoRoot, inputRaw);
 const tag = flag("tag") ?? `_c${String(clockNs).replace(".", "p")}`;
@@ -98,6 +105,12 @@ function buildTcl(i: {
     `puts "NN2RTL_INFO: opt_design"`,
     `opt_design`,
     `write_checkpoint -force ${tclQuote(i.optDcp)}`,
+    // SLR floorplan pblock: read AFTER opt (cells exist), BEFORE place — same wiring as the full
+    // synth flow (a --synth-only checkpoint never saw the XDC). catch + warn so a missing/renamed
+    // cell in the XDC degrades to no-floorplan instead of failing the route.
+    ...(noPblock
+      ? [`puts "NN2RTL_INFO: pblock skipped (--no-pblock)"`]
+      : [`if {[file exists ${tclQuote(pblockXdc)}]} { puts "NN2RTL_INFO: read_xdc pblock"; catch { read_xdc ${tclQuote(pblockXdc)} } err; if {$err ne ""} { puts "NN2RTL_WARN: pblock read: $err" } } else { puts "NN2RTL_WARN: pblock XDC missing -> placing without floorplan" }`]),
     // place/route. --fast (characterization): default directives, NO phys_opt (~half wall-clock,
     // same critical-path LOCATION). default (committed Fmax): place Explore -> phys_opt ->
     // route Explore -> post-route phys_opt (HIGH-QUALITY, no Fmax-reducing flags).

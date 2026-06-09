@@ -117,9 +117,13 @@ async function main(): Promise<void> {
     const sources = await collectSources();
     console.log(`[setup] collected ${sources.length} RTL files; tb=${path.relative(repoRoot, tbCpp)}`);
     const verilatorArgs = [
-      "--cc", "--exe", "-O3", "--threads", "4", "--top-module", "nn2rtl_top", "--Mdir", toForwardSlash(buildDir),
+      // [MT-DETERMINISM 2026-06-09] default --threads 1. Per MBV2 #5: Verilator's MULTITHREADED
+      // scheduler produces WRONG VALUES on these designs (a cross-partition read/write the MT engine
+      // orders wrong) -- a SIM-ONLY hazard, NOT an RTL bug (--threads 1 is byte-exact; hardware/Vivado
+      // is correct). The old hardcoded --threads 4 was the prime suspect for the ResNet relu_48 "2.7%".
+      "--cc", "--exe", "-O3", "--threads", String(process.env.NN2RTL_VALUE_THREADS ?? "1"), "--top-module", "nn2rtl_top", "--Mdir", toForwardSlash(buildDir),
       "-CFLAGS", "-O2 -std=c++17 -DNDEBUG",
-      "--x-initial", "0",   // [BANK-INIT FIX] force uninitialized state to 0 (FPGA power-on), not random
+      "--x-initial", String(process.env.NN2RTL_VALUE_XINIT ?? "0"),   // [BANK-INIT FIX] default 0 (FPGA power-on, HW-faithful); set NN2RTL_VALUE_XINIT=unique to probe uninitialized-read sensitivity
 
       "-Wno-WIDTH", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC", "-Wno-UNUSED", "-Wno-UNOPTFLAT", "-Wno-CASEINCOMPLETE",
       "-Wno-CASEX", "-Wno-COMBDLY", "-Wno-INITIALDLY", "-Wno-IMPLICIT", "-Wno-STMTDLY", "-Wno-MULTIDRIVEN",

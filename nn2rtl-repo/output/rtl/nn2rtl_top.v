@@ -343,7 +343,6 @@ module nn2rtl_top (
     wire node_relu_40_ready_in;
     wire node_conv_284_valid_out;
     wire [255:0] node_conv_284_data_out;
-    wire node_conv_284_ready_in;
     wire node_relu_41_valid_out;
     wire [255:0] node_relu_41_data_out;
     wire node_relu_41_ready_in;
@@ -365,7 +364,6 @@ module nn2rtl_top (
     wire node_relu_43_ready_in;
     wire node_conv_292_valid_out;
     wire [255:0] node_conv_292_data_out;
-    wire node_conv_292_ready_in;
     wire node_relu_44_valid_out;
     wire [255:0] node_relu_44_data_out;
     wire node_relu_44_ready_in;
@@ -384,7 +382,6 @@ module nn2rtl_top (
     wire node_relu_46_ready_in;
     wire node_conv_298_valid_out;
     wire [255:0] node_conv_298_data_out;
-    wire node_conv_298_ready_in;
     wire node_relu_47_valid_out;
     wire [255:0] node_relu_47_data_out;
     wire node_relu_47_ready_in;
@@ -480,7 +477,7 @@ module nn2rtl_top (
     wire        sched_spatial_stall;
     wire        sched_engine_output_ready;
     wire        sched_done;
-    wire [3:0] sched_dispatch_idx;
+    wire [4:0] sched_dispatch_idx;
     wire current_loaded;
     wire current_drain_complete;
 
@@ -2517,31 +2514,12 @@ node_relu_40 u_node_relu_40 (
         .ready_in(node_relu_40_ready_in),
         .data_in(skid_node_relu_40_data),
         .valid_out(node_relu_40_valid_out),
-        .ready_out(skid_node_conv_284_in_ready & spatial_run),
+        .ready_out(ldr_node_conv_284_in_ready & spatial_run),
         .data_out(node_relu_40_data_out)
     );
 
     // [input skid] standard skip_fifo boundary buffer relu_40 -> conv_284
-    wire skid_node_conv_284_in_ready, skid_node_conv_284_valid;
-    wire [255:0] skid_node_conv_284_data;
-    skip_fifo #(.WIDTH(256), .DEPTH(4096)) u_skid_node_conv_284 (
-        .clk(clk), .rst_n(rst_n),
-        .in_valid(node_relu_40_valid_out & spatial_run & skid_node_conv_284_in_ready),
-        .in_data(node_relu_40_data_out),
-        .in_ready(skid_node_conv_284_in_ready),
-        .out_valid(skid_node_conv_284_valid),
-        .out_data(skid_node_conv_284_data),
-        .out_ready(node_conv_284_ready_in & spatial_run)
-    );
-    node_conv_284 u_node_conv_284 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(skid_node_conv_284_valid & spatial_run),
-        .ready_in(node_conv_284_ready_in),
-        .data_in(skid_node_conv_284_data),
-        .valid_out(node_conv_284_valid_out),
-        .data_out(node_conv_284_data_out),
-        .ready_out(skid_node_relu_41_ready & spatial_run)
-    );
+    // [K5-ENGINE-DISPATCH] node_conv_284: engine-dispatched (slot 9); data_out driven by u_engine_out_node_conv_284; input loaded by u_ldr_node_conv_284
 
 
         // [skid_fifo inserted by apply_skid_fifo_handshake.py]
@@ -2663,31 +2641,12 @@ node_relu_43 u_node_relu_43 (
         .ready_in(node_relu_43_ready_in),
         .data_in(skid_node_relu_43_data),
         .valid_out(node_relu_43_valid_out),
-        .ready_out(skid_node_conv_292_in_ready & spatial_run),
+        .ready_out(ldr_node_conv_292_in_ready & spatial_run),
         .data_out(node_relu_43_data_out)
     );
 
     // [input skid] standard skip_fifo boundary buffer relu_43 -> conv_292
-    wire skid_node_conv_292_in_ready, skid_node_conv_292_valid;
-    wire [255:0] skid_node_conv_292_data;
-    skip_fifo #(.WIDTH(256), .DEPTH(1024)) u_skid_node_conv_292 (
-        .clk(clk), .rst_n(rst_n),
-        .in_valid(node_relu_43_valid_out & spatial_run & skid_node_conv_292_in_ready),
-        .in_data(node_relu_43_data_out),
-        .in_ready(skid_node_conv_292_in_ready),
-        .out_valid(skid_node_conv_292_valid),
-        .out_data(skid_node_conv_292_data),
-        .out_ready(node_conv_292_ready_in & spatial_run)
-    );
-    node_conv_292 u_node_conv_292 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(skid_node_conv_292_valid & spatial_run),
-        .ready_in(node_conv_292_ready_in),
-        .data_in(skid_node_conv_292_data),
-        .valid_out(node_conv_292_valid_out),
-        .data_out(node_conv_292_data_out),
-        .ready_out(skid_node_relu_44_ready & spatial_run)
-    );
+    // [K5-ENGINE-DISPATCH] node_conv_292: engine-dispatched (slot 12); data_out driven by u_engine_out_node_conv_292; input loaded by u_ldr_node_conv_292
 
 
         // [skid_fifo inserted by apply_skid_fifo_handshake.py]
@@ -2785,31 +2744,12 @@ node_relu_46 u_node_relu_46 (
         .ready_in(node_relu_46_ready_in),
         .data_in(skid_node_relu_46_data),
         .valid_out(node_relu_46_valid_out),
-        .ready_out(skid_node_conv_298_in_ready & spatial_run),
+        .ready_out(ldr_node_conv_298_in_ready & spatial_run),
         .data_out(node_relu_46_data_out)
     );
 
     // [input skid] standard skip_fifo boundary buffer relu_46 -> conv_298
-    wire skid_node_conv_298_in_ready, skid_node_conv_298_valid;
-    wire [255:0] skid_node_conv_298_data;
-    skip_fifo #(.WIDTH(256), .DEPTH(1024)) u_skid_node_conv_298 (
-        .clk(clk), .rst_n(rst_n),
-        .in_valid(node_relu_46_valid_out & spatial_run & skid_node_conv_298_in_ready),
-        .in_data(node_relu_46_data_out),
-        .in_ready(skid_node_conv_298_in_ready),
-        .out_valid(skid_node_conv_298_valid),
-        .out_data(skid_node_conv_298_data),
-        .out_ready(node_conv_298_ready_in & spatial_run)
-    );
-    node_conv_298 u_node_conv_298 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in(skid_node_conv_298_valid & spatial_run),
-        .ready_in(node_conv_298_ready_in),
-        .data_in(skid_node_conv_298_data),
-        .valid_out(node_conv_298_valid_out),
-        .data_out(node_conv_298_data_out),
-        .ready_out(skid_node_relu_47_ready & spatial_run)
-    );
+    // [K5-ENGINE-DISPATCH] node_conv_298: engine-dispatched (slot 15); data_out driven by u_engine_out_node_conv_298; input loaded by u_ldr_node_conv_298
 
 
         // [skid_fifo inserted by apply_skid_fifo_handshake.py]
@@ -3091,7 +3031,7 @@ node_relu_48 u_node_relu_48 (
         uram_bank0_rd_data[ENGINE_LANE_B-1:0]};
 
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank0.mem")
@@ -3102,7 +3042,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank1.mem")
@@ -3113,7 +3053,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank2.mem")
@@ -3124,7 +3064,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank3.mem")
@@ -3135,7 +3075,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank4.mem")
@@ -3146,7 +3086,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank5.mem")
@@ -3157,7 +3097,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank6.mem")
@@ -3168,7 +3108,7 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(39424),
+        .DEPTH(67072),
         .ADDR_W(17),
         .WORD_W(ENGINE_BANK_W),
         .MEM_INIT_FILE("output/weights/uram_weights_bank7.mem")
@@ -3518,6 +3458,78 @@ node_relu_48 u_node_relu_48 (
         .loaded(ldr13_loaded)
     );
 
+    // [K5-ENGINE-DISPATCH] loader for node_conv_284 (dispatch 9, input bank 2)
+    wire        ldr14_wr_req;
+    wire        ldr14_wr_grant;
+    wire [14:0] ldr14_wr_addr;
+    wire [2047:0] ldr14_wr_data;
+    wire        ldr14_loaded;
+    wire ldr_node_conv_284_in_ready;
+    stream_to_act_bram_bridge #(
+        .BUS_W(256),
+        .BRAM_BASE_ADDR(8192),
+        .TOTAL_BRAM_WORDS(392)
+    ) u_ldr_node_conv_284 (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_relu_40_valid_out & spatial_run & ldr_node_conv_284_in_ready),
+        .in_data(node_relu_40_data_out),
+        .in_ready(ldr_node_conv_284_in_ready),
+        .wr_req(ldr14_wr_req),
+        .wr_grant(ldr14_wr_grant),
+        .wr_addr(ldr14_wr_addr),
+        .wr_data(ldr14_wr_data),
+        .loaded(ldr14_loaded)
+    );
+
+
+    // [K5-ENGINE-DISPATCH] loader for node_conv_292 (dispatch 12, input bank 2)
+    wire        ldr15_wr_req;
+    wire        ldr15_wr_grant;
+    wire [14:0] ldr15_wr_addr;
+    wire [2047:0] ldr15_wr_data;
+    wire        ldr15_loaded;
+    wire ldr_node_conv_292_in_ready;
+    stream_to_act_bram_bridge #(
+        .BUS_W(256),
+        .BRAM_BASE_ADDR(8192),
+        .TOTAL_BRAM_WORDS(98)
+    ) u_ldr_node_conv_292 (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_relu_43_valid_out & spatial_run & ldr_node_conv_292_in_ready),
+        .in_data(node_relu_43_data_out),
+        .in_ready(ldr_node_conv_292_in_ready),
+        .wr_req(ldr15_wr_req),
+        .wr_grant(ldr15_wr_grant),
+        .wr_addr(ldr15_wr_addr),
+        .wr_data(ldr15_wr_data),
+        .loaded(ldr15_loaded)
+    );
+
+
+    // [K5-ENGINE-DISPATCH] loader for node_conv_298 (dispatch 15, input bank 2)
+    wire        ldr16_wr_req;
+    wire        ldr16_wr_grant;
+    wire [14:0] ldr16_wr_addr;
+    wire [2047:0] ldr16_wr_data;
+    wire        ldr16_loaded;
+    wire ldr_node_conv_298_in_ready;
+    stream_to_act_bram_bridge #(
+        .BUS_W(256),
+        .BRAM_BASE_ADDR(8192),
+        .TOTAL_BRAM_WORDS(98)
+    ) u_ldr_node_conv_298 (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_relu_46_valid_out & spatial_run & ldr_node_conv_298_in_ready),
+        .in_data(node_relu_46_data_out),
+        .in_ready(ldr_node_conv_298_in_ready),
+        .wr_req(ldr16_wr_req),
+        .wr_grant(ldr16_wr_grant),
+        .wr_addr(ldr16_wr_addr),
+        .wr_data(ldr16_wr_data),
+        .loaded(ldr16_loaded)
+    );
+
+
     // ----- act BRAM write arbiter: engine priority, then bridges -----
     wire        act_wr_en_final;
     wire [14:0] act_wr_addr_final;
@@ -3537,9 +3549,12 @@ node_relu_48 u_node_relu_48 (
     assign ldr11_wr_grant = ldr11_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req);
     assign ldr12_wr_grant = ldr12_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req);
     assign ldr13_wr_grant = ldr13_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req);
-    assign act_wr_en_final   = engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req;
-    assign act_wr_addr_final = engine_act_out_wr_en ? engine_act_out_wr_addr[14:0] : ldr0_wr_req ? ldr0_wr_addr : ldr1_wr_req ? ldr1_wr_addr : ldr2_wr_req ? ldr2_wr_addr : ldr3_wr_req ? ldr3_wr_addr : ldr4_wr_req ? ldr4_wr_addr : ldr5_wr_req ? ldr5_wr_addr : ldr6_wr_req ? ldr6_wr_addr : ldr7_wr_req ? ldr7_wr_addr : ldr8_wr_req ? ldr8_wr_addr : ldr9_wr_req ? ldr9_wr_addr : ldr10_wr_req ? ldr10_wr_addr : ldr11_wr_req ? ldr11_wr_addr : ldr12_wr_req ? ldr12_wr_addr : ldr13_wr_req ? ldr13_wr_addr : 15'd0;
-    assign act_wr_data_final = engine_act_out_wr_en ? engine_act_out_wr_data : ldr0_wr_req ? ldr0_wr_data : ldr1_wr_req ? ldr1_wr_data : ldr2_wr_req ? ldr2_wr_data : ldr3_wr_req ? ldr3_wr_data : ldr4_wr_req ? ldr4_wr_data : ldr5_wr_req ? ldr5_wr_data : ldr6_wr_req ? ldr6_wr_data : ldr7_wr_req ? ldr7_wr_data : ldr8_wr_req ? ldr8_wr_data : ldr9_wr_req ? ldr9_wr_data : ldr10_wr_req ? ldr10_wr_data : ldr11_wr_req ? ldr11_wr_data : ldr12_wr_req ? ldr12_wr_data : ldr13_wr_req ? ldr13_wr_data : 2048'd0;
+    assign ldr14_wr_grant = ldr14_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req);
+    assign ldr15_wr_grant = ldr15_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req);
+    assign ldr16_wr_grant = ldr16_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req);
+    assign act_wr_en_final   = engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req;
+    assign act_wr_addr_final = engine_act_out_wr_en ? engine_act_out_wr_addr[14:0] : ldr0_wr_req ? ldr0_wr_addr : ldr1_wr_req ? ldr1_wr_addr : ldr2_wr_req ? ldr2_wr_addr : ldr3_wr_req ? ldr3_wr_addr : ldr4_wr_req ? ldr4_wr_addr : ldr5_wr_req ? ldr5_wr_addr : ldr6_wr_req ? ldr6_wr_addr : ldr7_wr_req ? ldr7_wr_addr : ldr8_wr_req ? ldr8_wr_addr : ldr9_wr_req ? ldr9_wr_addr : ldr10_wr_req ? ldr10_wr_addr : ldr11_wr_req ? ldr11_wr_addr : ldr12_wr_req ? ldr12_wr_addr : ldr13_wr_req ? ldr13_wr_addr : ldr14_wr_req ? ldr14_wr_addr : ldr15_wr_req ? ldr15_wr_addr : ldr16_wr_req ? ldr16_wr_addr : 15'd0;
+    assign act_wr_data_final = engine_act_out_wr_en ? engine_act_out_wr_data : ldr0_wr_req ? ldr0_wr_data : ldr1_wr_req ? ldr1_wr_data : ldr2_wr_req ? ldr2_wr_data : ldr3_wr_req ? ldr3_wr_data : ldr4_wr_req ? ldr4_wr_data : ldr5_wr_req ? ldr5_wr_data : ldr6_wr_req ? ldr6_wr_data : ldr7_wr_req ? ldr7_wr_data : ldr8_wr_req ? ldr8_wr_data : ldr9_wr_req ? ldr9_wr_data : ldr10_wr_req ? ldr10_wr_data : ldr11_wr_req ? ldr11_wr_data : ldr12_wr_req ? ldr12_wr_data : ldr13_wr_req ? ldr13_wr_data : ldr14_wr_req ? ldr14_wr_data : ldr15_wr_req ? ldr15_wr_data : ldr16_wr_req ? ldr16_wr_data : 2048'd0;
 
     // ----- activation BRAM (Fix 8 + Fix 11: unified 6-bank URAM, 24576 × 2048b) -----
     act_unified_mem #(
@@ -3565,7 +3580,7 @@ node_relu_48 u_node_relu_48 (
     // The scheduler samples current_loaded in S_WAIT_LOAD to ensure the
     // input_loader bridge for the current dispatch has finished filling
     // the BRAM before pulsing engine_start.
-    wire [15:0] all_loaded;
+    wire [16:0] all_loaded;
     assign all_loaded[0] = ldr0_loaded;
     assign all_loaded[1] = ldr1_loaded;
     assign all_loaded[2] = ldr2_loaded;
@@ -3575,14 +3590,15 @@ node_relu_48 u_node_relu_48 (
     assign all_loaded[6] = ldr6_loaded;
     assign all_loaded[7] = ldr7_loaded;
     assign all_loaded[8] = ldr8_loaded;
-    assign all_loaded[9] = ldr9_loaded;
-    assign all_loaded[10] = ldr10_loaded;
-    assign all_loaded[11] = ldr11_loaded;
-    assign all_loaded[12] = ldr12_loaded;
-    assign all_loaded[13] = ldr13_loaded;
-    assign all_loaded[14] = 1'b1;
-    assign all_loaded[15] = 1'b1;
-    assign current_loaded = all_loaded[sched_dispatch_idx[3:0]];
+    assign all_loaded[9] = ldr14_loaded;
+    assign all_loaded[10] = ldr9_loaded;
+    assign all_loaded[11] = ldr10_loaded;
+    assign all_loaded[12] = ldr15_loaded;
+    assign all_loaded[13] = ldr11_loaded;
+    assign all_loaded[14] = ldr12_loaded;
+    assign all_loaded[15] = ldr16_loaded;
+    assign all_loaded[16] = ldr13_loaded;
+    assign current_loaded = all_loaded[sched_dispatch_idx[4:0]];
 
     // ----- shared compute engine (handles 14 heavy modules) -----
     // Fix 6: AXI4-Lite slave is driven by u_scheduler, not by the host
@@ -3649,7 +3665,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_246 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3669,7 +3685,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_250 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3689,7 +3705,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_254 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3709,7 +3725,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_260 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3729,7 +3745,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_264 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3749,7 +3765,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_266 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3769,7 +3785,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_272 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3789,7 +3805,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_278 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3809,7 +3825,7 @@ node_relu_48 u_node_relu_48 (
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_282 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3825,11 +3841,11 @@ node_relu_48 u_node_relu_48 (
     wire u_engine_out_node_conv_286_fifo_ready;
     wire u_engine_out_node_conv_286_drain_complete;
     engine_output_bridge #(
-        .SLOT(9),
+        .SLOT(10),
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_286 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3845,11 +3861,11 @@ node_relu_48 u_node_relu_48 (
     wire u_engine_out_node_conv_290_fifo_ready;
     wire u_engine_out_node_conv_290_drain_complete;
     engine_output_bridge #(
-        .SLOT(10),
+        .SLOT(11),
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(98),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_290 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3865,11 +3881,11 @@ node_relu_48 u_node_relu_48 (
     wire u_engine_out_node_conv_294_fifo_ready;
     wire u_engine_out_node_conv_294_drain_complete;
     engine_output_bridge #(
-        .SLOT(11),
+        .SLOT(13),
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_294 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3885,11 +3901,11 @@ node_relu_48 u_node_relu_48 (
     wire u_engine_out_node_conv_296_fifo_ready;
     wire u_engine_out_node_conv_296_drain_complete;
     engine_output_bridge #(
-        .SLOT(12),
+        .SLOT(14),
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(98),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_296 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3905,11 +3921,11 @@ node_relu_48 u_node_relu_48 (
     wire u_engine_out_node_conv_300_fifo_ready;
     wire u_engine_out_node_conv_300_drain_complete;
     engine_output_bridge #(
-        .SLOT(13),
+        .SLOT(16),
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(14)
+        .NUM_DISPATCHES(17)
     ) u_engine_out_node_conv_300 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3922,10 +3938,76 @@ node_relu_48 u_node_relu_48 (
         .drain_complete(u_engine_out_node_conv_300_drain_complete)
     );
 
-    assign eofifo_out_ready = u_engine_out_node_conv_246_fifo_ready | u_engine_out_node_conv_250_fifo_ready | u_engine_out_node_conv_254_fifo_ready | u_engine_out_node_conv_260_fifo_ready | u_engine_out_node_conv_264_fifo_ready | u_engine_out_node_conv_266_fifo_ready | u_engine_out_node_conv_272_fifo_ready | u_engine_out_node_conv_278_fifo_ready | u_engine_out_node_conv_282_fifo_ready | u_engine_out_node_conv_286_fifo_ready | u_engine_out_node_conv_290_fifo_ready | u_engine_out_node_conv_294_fifo_ready | u_engine_out_node_conv_296_fifo_ready | u_engine_out_node_conv_300_fifo_ready;
+    // [K5-ENGINE-DISPATCH] output bridge for node_conv_284 (dispatch 9)
+    wire u_engine_out_node_conv_284_fifo_ready;
+    wire u_engine_out_node_conv_284_drain_complete;
+    engine_output_bridge #(
+        .SLOT(9),
+        .ACT_W(2048),
+        .DATA_W(256),
+        .EXPECTED_BEATS(98),
+        .NUM_DISPATCHES(17)
+    ) u_engine_out_node_conv_284 (
+        .clk(clk), .rst_n(rst_n),
+        .start(sched_engine_output_ready),
+        .fifo_out_valid(eofifo_out_valid),
+        .fifo_out_data(eofifo_out_data),
+        .fifo_out_ready(u_engine_out_node_conv_284_fifo_ready),
+        .ready_out((skid_node_relu_41_ready & spatial_run)),
+        .valid_out(node_conv_284_valid_out),
+        .data_out(node_conv_284_data_out),
+        .drain_complete(u_engine_out_node_conv_284_drain_complete)
+    );
+
+
+    // [K5-ENGINE-DISPATCH] output bridge for node_conv_292 (dispatch 12)
+    wire u_engine_out_node_conv_292_fifo_ready;
+    wire u_engine_out_node_conv_292_drain_complete;
+    engine_output_bridge #(
+        .SLOT(12),
+        .ACT_W(2048),
+        .DATA_W(256),
+        .EXPECTED_BEATS(98),
+        .NUM_DISPATCHES(17)
+    ) u_engine_out_node_conv_292 (
+        .clk(clk), .rst_n(rst_n),
+        .start(sched_engine_output_ready),
+        .fifo_out_valid(eofifo_out_valid),
+        .fifo_out_data(eofifo_out_data),
+        .fifo_out_ready(u_engine_out_node_conv_292_fifo_ready),
+        .ready_out((skid_node_relu_44_ready & spatial_run)),
+        .valid_out(node_conv_292_valid_out),
+        .data_out(node_conv_292_data_out),
+        .drain_complete(u_engine_out_node_conv_292_drain_complete)
+    );
+
+
+    // [K5-ENGINE-DISPATCH] output bridge for node_conv_298 (dispatch 15)
+    wire u_engine_out_node_conv_298_fifo_ready;
+    wire u_engine_out_node_conv_298_drain_complete;
+    engine_output_bridge #(
+        .SLOT(15),
+        .ACT_W(2048),
+        .DATA_W(256),
+        .EXPECTED_BEATS(98),
+        .NUM_DISPATCHES(17)
+    ) u_engine_out_node_conv_298 (
+        .clk(clk), .rst_n(rst_n),
+        .start(sched_engine_output_ready),
+        .fifo_out_valid(eofifo_out_valid),
+        .fifo_out_data(eofifo_out_data),
+        .fifo_out_ready(u_engine_out_node_conv_298_fifo_ready),
+        .ready_out((skid_node_relu_47_ready & spatial_run)),
+        .valid_out(node_conv_298_valid_out),
+        .data_out(node_conv_298_data_out),
+        .drain_complete(u_engine_out_node_conv_298_drain_complete)
+    );
+
+
+    assign eofifo_out_ready = u_engine_out_node_conv_246_fifo_ready | u_engine_out_node_conv_250_fifo_ready | u_engine_out_node_conv_254_fifo_ready | u_engine_out_node_conv_260_fifo_ready | u_engine_out_node_conv_264_fifo_ready | u_engine_out_node_conv_266_fifo_ready | u_engine_out_node_conv_272_fifo_ready | u_engine_out_node_conv_278_fifo_ready | u_engine_out_node_conv_282_fifo_ready | u_engine_out_node_conv_286_fifo_ready | u_engine_out_node_conv_290_fifo_ready | u_engine_out_node_conv_294_fifo_ready | u_engine_out_node_conv_296_fifo_ready | u_engine_out_node_conv_300_fifo_ready | u_engine_out_node_conv_284_fifo_ready | u_engine_out_node_conv_292_fifo_ready | u_engine_out_node_conv_298_fifo_ready;
 
     // ----- per-dispatch drain_complete mux (Fix 14) -----
-    wire [15:0] all_drain;
+    wire [16:0] all_drain;
     assign all_drain[0] = u_engine_out_node_conv_246_drain_complete;
     assign all_drain[1] = u_engine_out_node_conv_250_drain_complete;
     assign all_drain[2] = u_engine_out_node_conv_254_drain_complete;
@@ -3935,14 +4017,15 @@ node_relu_48 u_node_relu_48 (
     assign all_drain[6] = u_engine_out_node_conv_272_drain_complete;
     assign all_drain[7] = u_engine_out_node_conv_278_drain_complete;
     assign all_drain[8] = u_engine_out_node_conv_282_drain_complete;
-    assign all_drain[9] = u_engine_out_node_conv_286_drain_complete;
-    assign all_drain[10] = u_engine_out_node_conv_290_drain_complete;
-    assign all_drain[11] = u_engine_out_node_conv_294_drain_complete;
-    assign all_drain[12] = u_engine_out_node_conv_296_drain_complete;
-    assign all_drain[13] = u_engine_out_node_conv_300_drain_complete;
-    assign all_drain[14] = 1'b1;
-    assign all_drain[15] = 1'b1;
-    assign current_drain_complete = all_drain[sched_dispatch_idx[3:0]];
+    assign all_drain[10] = u_engine_out_node_conv_286_drain_complete;
+    assign all_drain[11] = u_engine_out_node_conv_290_drain_complete;
+    assign all_drain[13] = u_engine_out_node_conv_294_drain_complete;
+    assign all_drain[14] = u_engine_out_node_conv_296_drain_complete;
+    assign all_drain[16] = u_engine_out_node_conv_300_drain_complete;
+    assign all_drain[9] = u_engine_out_node_conv_284_drain_complete;
+    assign all_drain[12] = u_engine_out_node_conv_292_drain_complete;
+    assign all_drain[15] = u_engine_out_node_conv_298_drain_complete;
+    assign current_drain_complete = all_drain[sched_dispatch_idx[4:0]];
 
     // ----- DEBUG INSTRUMENTATION (DEBUG_E2E) -----
     // Print events at key chain milestones so we can localize hangs.
@@ -3952,8 +4035,8 @@ node_relu_48 u_node_relu_48 (
     reg engine_done_d;
     reg engine_start_d;
     reg sched_done_d;
-    reg [15:0] all_loaded_d;
-    reg [15:0] all_drain_d;
+    reg [16:0] all_loaded_d;
+    reg [16:0] all_drain_d;
     reg conv196_valid_d;
     always @(posedge clk) begin
         dispatch_idx_d           <= sched_dispatch_idx;
@@ -4041,7 +4124,7 @@ node_relu_48 u_node_relu_48 (
             if (node_relu_31_valid_out & spatial_run & node_relu_31_ready_out_combined & ldr_node_conv_266_in_ready) cnt_ldr5_cap <= cnt_ldr5_cap + 1;
             // block-14 reduce path: conv_282(eng,d8) -> relu_40 -> conv_284(3x3) -> relu_41 -> ldr9 -> conv_286(eng,d9)
             if (node_conv_282_valid_out & spatial_run & skid_node_relu_40_ready)                                cnt_c282drain <= cnt_c282drain + 1;
-            if (node_relu_40_valid_out & node_conv_284_ready_in & spatial_run)                                  cnt_c284in    <= cnt_c284in + 1;
+            if (node_relu_40_valid_out & ldr_node_conv_284_in_ready & spatial_run)                                  cnt_c284in    <= cnt_c284in + 1;  // [K5] loader accept
             if (node_conv_284_valid_out & skid_node_relu_41_ready & spatial_run)                                cnt_c284out   <= cnt_c284out + 1;
             if (node_relu_41_valid_out & spatial_run & node_relu_41_ready_out_combined & ldr_node_conv_286_in_ready) cnt_ldr9cap <= cnt_ldr9cap + 1;
             // block-14 add_13 merge: conv_288->skip enqueue, add_13 fire (main+skip), add_13 out
@@ -4138,11 +4221,7 @@ node_relu_48 u_node_relu_48 (
                          u_node_conv_288.out_busy, u_node_conv_288.mac_busy, u_node_conv_288.frame_state,
                          u_node_conv_288.in_beat_idx, u_node_conv_288.irow, u_node_conv_288.icol,
                          sched_dispatch_idx);
-                $display("[dbg-blk14cnt @cyc=%0d] c282drain=%0d(of3136) c284in=%0d c284out=%0d(of784) ldr9cap=%0d ldr9_loaded=%b | c284[fst=%0d mac=%b outbusy=%b ibeat=%0d emit=%0d] c284_rdyin=%b r40_vo=%b skidR40_v=%b",
-                         log_cycle, cnt_c282drain, cnt_c284in, cnt_c284out, cnt_ldr9cap, ldr9_loaded,
-                         u_node_conv_284.frame_state, u_node_conv_284.mac_busy, u_node_conv_284.out_busy,
-                         u_node_conv_284.in_beat_idx, u_node_conv_284.sched_outputs_emitted,
-                         node_conv_284_ready_in, node_relu_40_valid_out, skid_node_relu_40_valid);
+                // [K5] dbg-blk14cnt display removed (referenced deleted spatial u_node_conv_284)
                 $display("[dbg-add13 @cyc=%0d] c288skip_in=%0d(of3136) add13_fire=%0d(of3136) add13_out=%0d skip_v=%b skip_inrdy=%b c286_vo=%b add13_rdyin=%b",
                          log_cycle, cnt_c288skip_in, cnt_add13_fire, cnt_add13_out,
                          node_add_13_skip_valid, node_add_13_skip_in_ready, node_conv_286_valid_out, node_add_13_ready_in);
@@ -4154,7 +4233,7 @@ node_relu_48 u_node_relu_48 (
                 $display("[dbg-r40 @cyc=%0d] skidR40_deq=%0d r40_cap=%0d (c282drain=%0d c284in=%0d) | r40[sending=%b in_cnt=%0d out_cnt=%0d ready_in=%b] r40_rdyout(c284rdy&sr)=%b",
                          log_cycle, cnt_skidR40_deq, cnt_r40_cap, cnt_c282drain, cnt_c284in,
                          u_node_relu_40.sending, u_node_relu_40.in_beat_count, u_node_relu_40.out_beat_count,
-                         u_node_relu_40.ready_in, (node_conv_284_ready_in & spatial_run));
+                         u_node_relu_40.ready_in, (ldr_node_conv_284_in_ready & spatial_run));  // [K5]
             end
             // [DBG-BLK1-CYCLE] per-cycle block-1 add handshake at the freeze window.
             if (log_cycle >= 27000000 && log_cycle < 27000050) begin
@@ -4723,12 +4802,14 @@ module engine_output_bridge #(
     // Width is sized to log2(NUM_DISPATCHES) + 1 headroom bit (max 16 supported
     // here; Fix 14's "+1" cushion catches the final S_NEXT_DISP increment past
     // LAST_DISPATCH).
-    reg [3:0] dispatch_count;
+    // [K5] widened 4->5 bits: 17 dispatches, SLOT up to 16 must not truncate
+    // (SLOT[3:0] would alias slot 16 onto slot 0 and corrupt the drain order).
+    reg [4:0] dispatch_count;
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) dispatch_count <= 4'd0;
-        else if (start) dispatch_count <= dispatch_count + 4'd1;
+        if (!rst_n) dispatch_count <= 5'd0;
+        else if (start) dispatch_count <= dispatch_count + 5'd1;
     end
-    wire active_slot = (dispatch_count == SLOT[3:0]);
+    wire active_slot = (dispatch_count == SLOT[4:0]);
 
     // Beat buffer + tile index. beat_buf holds the current engine beat;
     // tile_idx walks 0..TILES_PER_BEAT-1, emitting one slice per ready cycle.
