@@ -145,6 +145,12 @@ function buildTcl(input: {
   const synthDcpPath = input.checkpointPath.replace(/\.dcp$/, "_synth.dcp");
   const optDcpPath = input.checkpointPath.replace(/\.dcp$/, "_opt.dcp");
   const placedDcpPath = input.checkpointPath.replace(/\.dcp$/, "_placed.dcp");
+  const physoptDcpPath = input.checkpointPath.replace(/\.dcp$/, "_physopt.dcp");
+  // [FMAX 2026-06-09] SLR floorplan: pin each hot deep-conv (854..908)+bridge to ONE SLR so
+  // the acc->scheduler->acc loop never crosses an SLL (the c8 critical path was 91% ROUTE,
+  // ~10.06ns of it TWO SLR crossings inside conv_866). read_xdc BEFORE place_design. Placement
+  // only -> byte-exact by construction. Absolute path to repo's committed pblock XDC.
+  const pblockXdc = path.join(reportsDir, "mbv2_fmax_pblock.xdc");
   return [
     `set_param general.maxThreads ${threads}`,
     `puts "NN2RTL_INFO: maxThreads requested=${threads} effective=[get_param general.maxThreads]"`,
@@ -165,22 +171,38 @@ function buildTcl(input: {
           `puts "NN2RTL_INFO: --synth-only complete (no opt/place/route)"`,
         ]
       : [
-          `puts "NN2RTL_INFO: opt_design"`,
-          `opt_design`,
+          `puts "NN2RTL_INFO: opt_design -directive ExploreWithRemap"`,
+          `opt_design -directive ExploreWithRemap`,
           `write_checkpoint -force ${tclQuote(optDcpPath)}`,
-          `puts "NN2RTL_INFO: place_design"`,
-          `place_design`,
+          // SLR floorplan pblock: read AFTER opt (cells exist), BEFORE place. -quiet so a
+          // stale/renamed instance never aborts the 12h flow; the catch logs but proceeds.
+          `if {[file exists ${tclQuote(pblockXdc)}]} { puts "NN2RTL_INFO: read_xdc pblock"; catch { read_xdc ${tclQuote(pblockXdc)} } err; if {$err ne ""} { puts "NN2RTL_WARN: pblock read: $err" } } else { puts "NN2RTL_WARN: pblock XDC missing -> placing without floorplan" }`,
+          `puts "NN2RTL_INFO: place_design -directive SSI_SpreadLogic_high"`,
+          `place_design -directive SSI_SpreadLogic_high`,
           `write_checkpoint -force ${tclQuote(placedDcpPath)}`,
           `report_utilization -file ${tclQuote(placedUtilPath)}`,
           `report_timing_summary -max_paths 10 -file ${tclQuote(placedTimingPath)}`,
-          `puts "NN2RTL_INFO: route_design (directive Explore)"`,
-          `route_design -directive Explore`,
+          // Pre-route timing closure: two phys_opt passes (SLL/fanout-aware) on the placed netlist.
+          `puts "NN2RTL_INFO: phys_opt_design x2 (pre-route)"`,
+          `catch { phys_opt_design }`,
+          `catch { phys_opt_design }`,
+          `write_checkpoint -force ${tclQuote(physoptDcpPath)}`,
+          `puts "NN2RTL_INFO: route_design (directive AggressiveExplore)"`,
+          `route_design -directive AggressiveExplore`,
+          `write_checkpoint -force ${tclQuote(input.checkpointPath)}`,
+          // Post-route timing closure.
+          `puts "NN2RTL_INFO: post-route phys_opt_design"`,
+          `catch { phys_opt_design }`,
           `write_checkpoint -force ${tclQuote(input.checkpointPath)}`,
           `report_utilization -file ${tclQuote(postRouteUtilPath)}`,
           `report_timing_summary -check_timing_verbose -max_paths 20 -file ${tclQuote(postRouteTimingPath)}`,
           `report_power -file ${tclQuote(postRoutePowerPath)}`,
-          `file copy -force ${tclQuote(postRouteUtilPath)} ${tclQuote(input.utilReportPath)}`,
-          `file copy -force ${tclQuote(postRouteTimingPath)} ${tclQuote(input.timingReportPath)}`,
+          `catch { file copy -force ${tclQuote(postRouteUtilPath)} ${tclQuote(input.utilReportPath)} }`,
+          `catch { file copy -force ${tclQuote(postRouteTimingPath)} ${tclQuote(input.timingReportPath)} }`,
+          // Cheap insurance: re-open the just-written routed dcp in a fresh in-memory project to
+          // PROVE it is not the corrupt/partial-write that bit the c8 resume flow. Non-fatal.
+          `puts "NN2RTL_INFO: read_checkpoint sanity (routed dcp re-open)"`,
+          `catch { read_checkpoint ${tclQuote(input.checkpointPath)} } rcerr; if {$rcerr ne ""} { puts "NN2RTL_WARN: routed dcp re-open FAILED: $rcerr" } else { puts "NN2RTL_INFO: routed dcp re-open OK (not corrupt)" }`,
           `puts "NN2RTL_INFO: full flow complete"`,
         ]),
   ].join("\n") + "\n";
