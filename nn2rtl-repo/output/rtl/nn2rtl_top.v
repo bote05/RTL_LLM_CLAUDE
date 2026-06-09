@@ -1103,7 +1103,13 @@ node_relu_9 u_node_relu_9 (
     wire skid_node_conv_218_valid;
     wire [255:0] skid_node_conv_218_data;
     wire skid_node_conv_218_ready;
-    skip_fifo #(.WIDTH(256), .DEPTH(128)) u_skid_node_conv_218 (
+    // [TAIL-PIPE2-FIFO] 128->1024: relu_9's dual-ready fork {skid218, skid224} must
+    // never be un-ready on a cycle relu_9 presents a pixel's LAST beat (the narrow-
+    // relu streamer offers it for exactly ONE cycle -- a not-ready fork silently
+    // LOSES it; e2e forensics 2026-06-10 caught beat 25088/25088 vanish here).
+    // The end-of-frame burst through add_2 is bounded by skip_node_add_2's depth
+    // (512) + in-flight, so 1024 makes skid218 always-ready by construction.
+    skip_fifo #(.WIDTH(256), .DEPTH(1024)) u_skid_node_conv_218 (
         .clk(clk), .rst_n(rst_n),
         // OPTION A: capture only on broadcast handshake (both consumers ready).
         .in_valid(node_relu_9_valid_out & spatial_run & relu_9_dual_ready),
@@ -1219,7 +1225,9 @@ node_conv_222 u_node_conv_222 (
     wire skid_node_conv_224_valid;
     wire [255:0] skid_node_conv_224_data;
     // skid_node_conv_224_ready forward-declared above for relu_9 broadcast handshake.
-    skip_fifo #(.WIDTH(256), .DEPTH(512)) u_skid_node_conv_224 (
+    // [TAIL-PIPE2-FIFO] 512->1024: fork-receiver margin for relu_9's one-cycle
+    // last-beat offers (B20-class loss; see TAIL_PIPE2_ANALYSIS.md #1/#5).
+    skip_fifo #(.WIDTH(256), .DEPTH(1024)) u_skid_node_conv_224 (
         .clk(clk), .rst_n(rst_n),
         // BLOCK-4 RE-ROUTE (2026-05-26): conv_224 is the 1x1 256->512 skip
         // PROJECTION; takes block 4 input (relu_9 = end of stage 1), not

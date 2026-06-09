@@ -53,7 +53,14 @@ module conv_datapath_mp_k #(
     // [DSP-INPUT-PIPE] 1 => insert ONE extra register stage on the multiplier inputs
     // (weight_word_q->q2, tap_q->q2) + a matching valid delay. Breaks the long
     // lbw/ROM->DSP route (Fmax). +1 latency. 0 = exact current behavior + latency.
-    parameter integer DSP_INPUT_PIPE = 0
+    parameter integer DSP_INPUT_PIPE = 0,
+    // [TAIL-PIPE2] 1 => pipeline the requant tail: prefetch/register the per-OC
+    // scale word during ST_BIAS (ST_SCALE then multiplies a REGISTER, not a
+    // ROM read) and split ST_OUTPUT's round+add+barrel-shift+clip into three
+    // register-bounded states ST_OUT_ROUND/ST_OUT_SHIFT/ST_OUT_SAT. +2 cycles
+    // per oc_pass, byte-identical values. 0 = legacy: byte- AND latency-
+    // identical elaboration (MobileNetV2 + unpatched instantiations unaffected).
+    parameter integer TAIL_PIPE = 0
 ) (
     input  wire                               clk,
     input  wire                               rst_n,
@@ -97,6 +104,11 @@ module conv_datapath_mp_k #(
     localparam ST_BIAS   = 3'd2;
     localparam ST_SCALE  = 3'd3;
     localparam ST_OUTPUT = 3'd4;
+    // [TAIL-PIPE2] requant-tail sub-states (reachable only when TAIL_PIPE!=0;
+    // for TAIL_PIPE==0 their FSM arms recover to ST_IDLE = old default: arm).
+    localparam ST_OUT_ROUND = 3'd5;
+    localparam ST_OUT_SHIFT = 3'd6;
+    localparam ST_OUT_SAT   = 3'd7;
 
     reg [2:0] state;
 
@@ -122,6 +134,15 @@ module conv_datapath_mp_k #(
     reg signed [SCALED_W-1:0] v_tmp;
     reg        [5:0]          out_shift;   // per-OC shift (OUTPUT stage)
     reg signed [SCALED_W-1:0] out_round;   // per-OC round bias (OUTPUT stage)
+    // [TAIL-PIPE2] requant-tail pipeline registers (read iff TAIL_PIPE!=0).
+    // Sync-only Block A writes, no reset (K1/FDRE rule): sc_*_q are written in
+    // ST_BIAS before any ST_SCALE/ST_OUT_* read of the same oc_pass;
+    // out_round_q in ST_OUT_ROUND before its ST_OUT_SHIFT read; v_tmp_q in
+    // ST_OUT_SHIFT before its ST_OUT_SAT read.
+    reg        [15:0]         sc_mult_q   [0:MP-1];
+    reg        [5:0]          sc_shift_q  [0:MP-1];
+    reg signed [SCALED_W-1:0] out_round_q [0:MP-1];
+    reg signed [SCALED_W-1:0] v_tmp_q     [0:MP-1];
 `ifdef DBG_SCALE
     integer dbg_n; initial dbg_n = 0;
 `endif
@@ -296,6 +317,14 @@ module conv_datapath_mp_k #(
             biased[fsm_lane_i] <= $signed(acc[fsm_lane_i]) + $signed(biases[bias_oc]);
           else
             biased[fsm_lane_i] <= 0;
+          // [TAIL-PIPE2] prefetch+register the per-OC scale word so ST_SCALE
+          // multiplies a REGISTER (kills the scale_rom-read->multiply path) and
+          // the tail states shift by a REGISTER. Same scale_rom word the legacy
+          // path reads in ST_SCALE/ST_OUTPUT (ROM is read-only after init).
+          if (TAIL_PIPE != 0 && bias_oc < OC) begin
+            sc_mult_q[fsm_lane_i]  <= scale_rom[bias_oc][15:0];
+            sc_shift_q[fsm_lane_i] <= scale_rom[bias_oc][21:16];
+          end
         end
       end
 
@@ -304,8 +333,13 @@ module conv_datapath_mp_k #(
         for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
           sc_oc = oc_group * MP + fsm_lane_i;
           if (sc_oc < OC)
+            // [TAIL-PIPE2] ON: registered operand (identical VALUE -- sc_mult_q
+            // was loaded from scale_rom[bias_oc==sc_oc][15:0] in ST_BIAS); both
+            // branches are 16-bit $signed, so the multiply context is unchanged.
+            // The (TAIL_PIPE != 0) select is an elaboration constant (no mux).
             scaled[fsm_lane_i] <= $signed(biased[fsm_lane_i]) *
-                                  $signed(scale_rom[sc_oc][15:0]);
+                                  ((TAIL_PIPE != 0) ? $signed(sc_mult_q[fsm_lane_i])
+                                                    : $signed(scale_rom[sc_oc][15:0]));
           else
             scaled[fsm_lane_i] <= 0;
         end
@@ -337,6 +371,43 @@ module conv_datapath_mp_k #(
         end
       end
 
+      // [TAIL-PIPE2] ST_OUT_ROUND: per-OC round bias from the REGISTERED shift.
+      // Identical expression to the legacy ST_OUTPUT out_round computation.
+      if (TAIL_PIPE != 0 && state == ST_OUT_ROUND) begin
+        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
+          out_oc = oc_group * MP + fsm_lane_i;
+          if (out_oc < OC)
+            out_round_q[fsm_lane_i] <=
+                (sc_shift_q[fsm_lane_i] == 6'd0) ? {SCALED_W{1'b0}}
+              : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (sc_shift_q[fsm_lane_i] - 6'd1));
+        end
+      end
+
+      // [TAIL-PIPE2] ST_OUT_SHIFT: add + arithmetic right barrel shift.
+      // Identical expression to legacy v_tmp, on identical operand values.
+      if (TAIL_PIPE != 0 && state == ST_OUT_SHIFT) begin
+        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
+          out_oc = oc_group * MP + fsm_lane_i;
+          if (out_oc < OC)
+            v_tmp_q[fsm_lane_i] <= (scaled[fsm_lane_i] + out_round_q[fsm_lane_i])
+                                   >>> sc_shift_q[fsm_lane_i];
+        end
+      end
+
+      // [TAIL-PIPE2] ST_OUT_SAT: saturate into the staged output pixel.
+      // Identical clip to legacy ST_OUTPUT; data_out is only sampled
+      // downstream under valid_out, which ST_OUT_SAT raises the same edge
+      // the last bytes land (exact ST_OUTPUT contract).
+      if (TAIL_PIPE != 0 && state == ST_OUT_SAT) begin
+        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1) begin
+          out_oc = oc_group * MP + fsm_lane_i;
+          if (out_oc < OC)
+            data_out[out_oc*8 +: 8] <=
+                (v_tmp_q[fsm_lane_i] >  127) ?  8'sd127 :
+                (v_tmp_q[fsm_lane_i] < -128) ? -8'sd128 : v_tmp_q[fsm_lane_i][7:0];
+        end
+      end
+
       // Accumulator clears LAST: textual-order parity with the original
       // single block (the case-statement clears overrode the accumulate).
       if (state == ST_IDLE && start_mac) begin
@@ -344,6 +415,13 @@ module conv_datapath_mp_k #(
           acc[fsm_lane_i] <= 0;
       end
       if (state == ST_OUTPUT && oc_group != OC_PASSES - 1) begin
+        for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
+          acc[fsm_lane_i] <= 0;
+      end
+      // [TAIL-PIPE2] same per-oc_pass clear, fired from ST_OUT_SAT when the
+      // tail is ON (ST_OUTPUT is unreachable then). Mutually exclusive with
+      // the arm above; stays textually after the gated accumulate.
+      if (TAIL_PIPE != 0 && state == ST_OUT_SAT && oc_group != OC_PASSES - 1) begin
         for (fsm_lane_i = 0; fsm_lane_i < MP; fsm_lane_i = fsm_lane_i + 1)
           acc[fsm_lane_i] <= 0;
       end
@@ -414,7 +492,8 @@ module conv_datapath_mp_k #(
 
                 ST_SCALE: begin
                     // [K1-FDCE] scaled[] writes moved to Block A (sync-only).
-                    state <= ST_OUTPUT;
+                    // [TAIL-PIPE2] elaboration-constant select: ON -> split tail.
+                    state <= (TAIL_PIPE != 0) ? ST_OUT_ROUND : ST_OUTPUT;
                 end
 
                 ST_OUTPUT: begin
@@ -426,6 +505,28 @@ module conv_datapath_mp_k #(
                         oc_group     <= oc_group + 1'b1;
                         k_group      <= 0;
                         state <= ST_MAC;
+                    end
+                end
+
+                // [TAIL-PIPE2] split requant tail -- control only (all data
+                // writes live in Block A, gated on these same states).
+                // ST_OUT_SAT carries the EXACT advance/finish control the
+                // legacy ST_OUTPUT arm performs (oc_group/k_group/valid_out);
+                // acc clears are Block A's (sync), as in K1 ST_OUTPUT.
+                ST_OUT_ROUND: state <= (TAIL_PIPE != 0) ? ST_OUT_SHIFT : ST_IDLE;
+
+                ST_OUT_SHIFT: state <= (TAIL_PIPE != 0) ? ST_OUT_SAT : ST_IDLE;
+
+                ST_OUT_SAT: begin
+                    if (TAIL_PIPE == 0) begin
+                        state <= ST_IDLE;   // unreachable; old default: parity
+                    end else if (oc_group == OC_PASSES - 1) begin
+                        valid_out <= 1'b1;
+                        state     <= ST_IDLE;
+                    end else begin
+                        oc_group <= oc_group + 1'b1;
+                        k_group  <= 0;
+                        state    <= ST_MAC;
                     end
                 end
 

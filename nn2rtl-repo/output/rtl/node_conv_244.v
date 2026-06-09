@@ -115,7 +115,7 @@ module node_conv_244 (
         .sched_needs_real_input(sched_needs_real_input),
         .sched_advance(sched_advance),.sched_output_fires(sched_output_fires),
         .valid_in(lib_valid_in_w),.data_in(lib_data_in_w),.window_flat(window_flat));
-    conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.IC(IC),.OC(OC),.KH(KH),.KW(KW),.K_TOTAL(K_TOTAL),.MP(MP),
+    conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.TAIL_PIPE(1),.IC(IC),.OC(OC),.KH(KH),.KW(KW),.K_TOTAL(K_TOTAL),.MP(MP),
         .MP_K(MP_K),.SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.SCALE_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_scale.mem"),
         .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_weights_mp_k_8.hex"),
         .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_bias.hex")) dp (
