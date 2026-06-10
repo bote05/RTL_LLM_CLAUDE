@@ -49,7 +49,11 @@ _backed_up: set[Path] = set()
 
 def patch(path: Path, old: str, new: str, tag: str, count: int = 1) -> None:
     text = path.read_text(encoding="utf-8")
-    if new in text and old not in text:
+    # Idempotency: `new` always carries [KPAR4] marker text that the
+    # pre-change files cannot contain, so its presence == already applied.
+    # (Do NOT also require `old not in text`: additive hunks keep `old` as a
+    # substring of `new`, which would re-apply and duplicate lines.)
+    if new in text:
         print(f"  [skip] {path.name}: {tag} already applied")
         return
     n = text.count(old)
