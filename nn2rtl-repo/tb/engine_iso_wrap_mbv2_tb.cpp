@@ -8,6 +8,7 @@
 // We compare vector CFG_VEC: input = samples_per_vec * IN_BYTES, output likewise.
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -134,6 +135,15 @@ int main(int argc, char** argv) {
   NN2VHdr gh; read_hdr(gf, gh);
   gf.seekg(20 + static_cast<std::streamoff>(CFG_VEC) * gh.samples * gh.bps, std::ios::beg);
 
+  // [KPAR4-RN] optional raw-output dump (env NN2RTL_ISO_DUMP=path): writes the
+  // gathered engine bytes so two builds (e.g. K_PAR=4 vs legacy K_PAR=1) can be
+  // byte-diffed INDEPENDENTLY of the golden. Needed because the ResNet
+  // intermediate CONTRACT goldens are stale (pre FIT-FIX scale.mem, 2026-05-30)
+  // while the deployed e2e compares only the FRESH final relu_48 golden. No
+  // env var -> no dump -> behavior identical (MBV2 gate unaffected).
+  std::ofstream dumpf;
+  if (const char* dp = getenv("NN2RTL_ISO_DUMP")) dumpf.open(dp, std::ios::binary);
+
   long total = 0, mism = 0, maxe = 0, firstbad = -1;
   std::vector<unsigned char> g(OUT_BPS);
   for (uint32_t p = 0; p < CFG_N_OUT_PIXELS; p++) {
@@ -150,6 +160,8 @@ int main(int argc, char** argv) {
         got[ocstart + by] = (word >> ((by % 4) * 8)) & 0xFF;
       }
     }
+    if (dumpf.is_open())
+      dumpf.write(reinterpret_cast<const char*>(got.data()), OUT_BPS);
     if (p == 0) {
       std::printf("[dbg] pixel0 got vs gold (first 24 OC):\n  got:");
       for (int by = 0; by < 24 && by < (int)OUT_BPS; by++) std::printf("%4d", (int8_t)got[by]);

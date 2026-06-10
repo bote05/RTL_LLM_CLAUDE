@@ -403,8 +403,15 @@ module address_generator #(
     // 4-aligned IC and a 4-aligned weight base (and IC>=4). Every MBV2
     // pointwise dispatch qualifies; depthwise (cfg_depthwise=1) and the FC
     // dispatch (base 13413 % 4 == 1) fall back to the SERIAL walk below.
+    // [KPAR4-RN 2026-06-10] eligibility EXTENDED to dense KxK (was 1x1-
+    // only). For KH*KW>1 the fast walk REQUIRES that layer's weight region
+    // be POS-MAJOR transposed in the repacked banks (word at (kh*KW+kw)*IC
+    // + ic; scripts/repack_resnet_kpar4_banks.py) because the walk issues 4
+    // consecutive ic of ONE (kh,kw) per cycle. For 1x1 the transposed and
+    // legacy layouts are IDENTICAL (pos==0), so MBV2 (whose dense dispatches
+    // are ALL 1x1 — its 12 non-1x1 dispatches are depthwise and stay
+    // excluded by cfg_depthwise) is bit- and cycle-identical.
     wire        kpar_fast = (!cfg_depthwise)
-                          && (cfg_kh == 3'd1) && (cfg_kw == 3'd1)
                           && (cfg_ic[1:0] == 2'b00) && (cfg_ic[11:2] != 10'd0)
                           && (cfg_weight_uram_base[1:0] == 2'b00);
     // Last GROUP: fast mode issues k_cnt..k_cnt+3 per cycle, so the final
@@ -421,6 +428,17 @@ module address_generator #(
                                1'b1 };
     reg  [3:0]  k_tap_mask_r;
     assign k_tap_mask = k_tap_mask_r;
+
+    // [KPAR4-RN] FAST weight address: POS-MAJOR transposed layout, offset =
+    // pass_offset + (kh*KW + kw)*IC + ic. Equals the legacy ic-major offset
+    // when KH==KW==1 (kpos9==0). The fast 4-group's old address is 4-aligned
+    // (base, pass_offset, pos*IC and ic are all %4==0), so the skeleton's
+    // group export (addr>>2) lands on one repacked line, subword select 0.
+    wire [8:0]  kpos9            = kh_offset + {6'b0, kw_cnt};        // kh*KW + kw <= 48
+    wire [20:0] kpos_ic          = {12'b0, kpos9} * {9'b0, cfg_ic};   // <= 48*2048
+    wire [21:0] weight_offset_fast =
+        {2'b0, pass_offset} + {1'b0, kpos_ic} + {10'b0, ic_cnt};
+    wire [21:0] weight_addr_next_fast = cfg_weight_uram_base + weight_offset_fast;
 
     // ----------------------------------------------------------------------
     // Sequential body. Single always block keeps the reset state and the
@@ -471,7 +489,9 @@ module address_generator #(
             // ---- per-cycle walk ----
             if (run_active) begin
                 // Emit URAM weight read every active cycle.
-                weight_rd_addr      <= weight_addr_next;
+                // [KPAR4-RN] fast layers use the pos-major transposed layout.
+                weight_rd_addr      <= kpar_fast ? weight_addr_next_fast
+                                                 : weight_addr_next;
                 // 2026-05-24 fix: gating must allow the LAST legitimate
                 // weight read while still suppressing the stray read that
                 // would otherwise leak into the cycle after k_at_last.
@@ -542,7 +562,21 @@ module address_generator #(
                         if (last_pixel && last_oc_pass) begin
                             pixel_done_latch <= 1'b1;
                         end
-                    end else if (!kpar_fast && (ic_cnt == (loop_ic - 12'd1))) begin   // [DW-ENGINE P1] loop_ic==1 in DW mode; [KPAR4] unreachable in fast walk (1x1: k_at_last fires first)
+                    end else if (kpar_fast && (ic_cnt == (loop_ic - 12'd4))) begin
+                        // [KPAR4-RN] FAST ic-wrap: last 4-group of this
+                        // (kh,kw) position -> advance kw/kh, k_cnt += 4.
+                        // UNREACHABLE for 1x1 (there k_at_last fires on the
+                        // same cycle and wins above) -> MBV2 fast walks are
+                        // cycle-identical; only dense KxK (ResNet) takes it.
+                        ic_cnt <= 12'd0;
+                        if (kw_cnt == (cfg_kw - 3'd1)) begin
+                            kw_cnt <= 3'd0;
+                            kh_cnt <= kh_cnt + 3'd1;
+                        end else begin
+                            kw_cnt <= kw_cnt + 3'd1;
+                        end
+                        k_cnt <= k_cnt + 16'd4;
+                    end else if (!kpar_fast && (ic_cnt == (loop_ic - 12'd1))) begin   // [DW-ENGINE P1] loop_ic==1 in DW mode
                         ic_cnt <= 12'd0;
                         if (kw_cnt == (cfg_kw - 3'd1)) begin
                             kw_cnt <= 3'd0;

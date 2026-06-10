@@ -447,7 +447,13 @@ module nn2rtl_top (
     localparam integer ENGINE_WGT_W  = 3;
     localparam integer ENGINE_BANK_W = (ENGINE_WGT_W == 4) ? 144 : (32 * ENGINE_WGT_W);
     localparam integer ENGINE_LANE_B = 32 * ENGINE_WGT_W;    // real bits/bank (128|96)
-    localparam integer ENGINE_WBUS_W = 8 * ENGINE_LANE_B;    // weight bus width (1024|768)
+    // [KPAR4-RN 2026-06-10] ENGINE K-PARALLEL P=4: the weight bus carries
+    // ENGINE_K_PAR tap-major 768b words per (group-addressed) repacked bank
+    // line (scripts/repack_resnet_kpar4_banks.py: 96b->384b lines, depth /4
+    // = 16768, dense-3x3 regions transposed pos-major). All 17 dispatches
+    // are fast-eligible (every base and IC %4==0 — proof P0 in the repack).
+    localparam integer ENGINE_K_PAR  = 4;
+    localparam integer ENGINE_WBUS_W = ENGINE_K_PAR * 8 * ENGINE_LANE_B;  // weight bus width (4 taps x 768)
     wire [ENGINE_WBUS_W-1:0]   engine_weight_rd_data;   // WGT-packed: 256 lanes * ENGINE_WGT_W b
     wire [21:0]                engine_bias_rd_addr;
     wire                       engine_bias_rd_en;
@@ -3020,32 +3026,38 @@ node_relu_48 u_node_relu_48 (
     // ----- URAM-resident weight memory subsystem (Path D: 8 parallel banks) -----
     // Total MAC cycles = 96659; per-bank depth = 96659.
     // Address path: engine_weight_rd_addr[16:0] -> each bank's rd_addr.
-    wire [16:0] weight_bank_rd_addr = engine_weight_rd_addr[16:0];
-    wire [ENGINE_BANK_W-1:0] uram_bank0_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank1_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank2_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank3_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank4_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank5_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank6_rd_data;
-    wire [ENGINE_BANK_W-1:0] uram_bank7_rd_data;
+    wire [14:0] weight_bank_rd_addr = engine_weight_rd_addr[14:0];  // [KPAR4-RN] GROUP address (engine exports old>>2; 16768 wide lines)
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank0_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank1_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank2_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank3_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank4_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank5_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank6_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
+    wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank7_rd_data;  // [KPAR4-RN] 4 x 96b tap-major
 
-    // MAC bus = concat of the low ENGINE_LANE_B real bits of each bank (bank 0
-    // lowest). INT4: low 128 of the 144-bit word; INT3: all 96.
-    assign engine_weight_rd_data = {uram_bank7_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank6_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank5_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank4_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank3_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank2_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank1_rd_data[ENGINE_LANE_B-1:0],
-        uram_bank0_rd_data[ENGINE_LANE_B-1:0]};
+    // [KPAR4-RN] MAC bus = ENGINE_K_PAR tap-major words. Each repacked bank
+    // line carries 4 old words (tap j at [j*ENGINE_BANK_W +: ENGINE_BANK_W]);
+    // engine tap-j word = concat of the low ENGINE_LANE_B real bits of each
+    // bank's tap-j slice (bank 0 lowest — IDENTICAL lane order per tap).
+    genvar kp_tap;
+    generate for (kp_tap = 0; kp_tap < ENGINE_K_PAR; kp_tap = kp_tap + 1) begin : g_kpar_wbus
+        assign engine_weight_rd_data[kp_tap*(8*ENGINE_LANE_B) +: 8*ENGINE_LANE_B] = {
+            uram_bank7_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank6_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank5_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank4_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank3_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank2_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank1_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B],
+            uram_bank0_rd_data[kp_tap*ENGINE_BANK_W +: ENGINE_LANE_B]};
+    end endgenerate
 
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank0.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank0_kp4.mem")
     ) u_uram_weight_bank0 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3053,10 +3065,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank1.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank1_kp4.mem")
     ) u_uram_weight_bank1 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3064,10 +3076,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank2.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank2_kp4.mem")
     ) u_uram_weight_bank2 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3075,10 +3087,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank3.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank3_kp4.mem")
     ) u_uram_weight_bank3 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3086,10 +3098,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank4.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank4_kp4.mem")
     ) u_uram_weight_bank4 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3097,10 +3109,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank5.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank5_kp4.mem")
     ) u_uram_weight_bank5 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3108,10 +3120,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank6.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank6_kp4.mem")
     ) u_uram_weight_bank6 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3119,10 +3131,10 @@ node_relu_48 u_node_relu_48 (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(67072),
-        .ADDR_W(17),
-        .WORD_W(ENGINE_BANK_W),
-        .MEM_INIT_FILE("output/weights/uram_weights_bank7.mem")
+        .DEPTH(16768),          // [KPAR4-RN] 67072/4 wide lines
+        .ADDR_W(15),
+        .WORD_W(ENGINE_K_PAR*ENGINE_BANK_W),   // [KPAR4-RN] 4 x 96b tap-major
+        .MEM_INIT_FILE("output/weights/uram_weights_bank7_kp4.mem")
     ) u_uram_weight_bank7 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -3625,7 +3637,10 @@ node_relu_48 u_node_relu_48 (
         // datapath (weight bus, mac_array slice) matches the bank word width.
         // ENGINE_WGT_W=4 -> URAM_DATA_W=1024 = the verified INT4 default.
         .WGT_W(ENGINE_WGT_W),
-        .URAM_DATA_W(ENGINE_WBUS_W)
+        .URAM_DATA_W(ENGINE_WBUS_W),
+        // [KPAR4-RN] 4 taps/cycle/lane on ALL 17 dispatches (8 dense 1x1 +
+        // 9 dense 3x3 via the pos-major transposed _kp4 banks).
+        .K_PAR(ENGINE_K_PAR)
     ) u_shared_engine (
         .clk(clk), .rst_n(rst_n),
         .s_axil_awvalid(sched_axil_awvalid), .s_axil_awready(sched_axil_awready), .s_axil_awaddr(sched_axil_awaddr),
