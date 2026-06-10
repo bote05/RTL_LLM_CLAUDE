@@ -94,7 +94,19 @@ module shared_engine #(
     //   * FAST-eligible dense 1x1 layers run 4 taps/cycle; depthwise and
     //     unaligned-base layers fall back to the serial walk through a
     //     2-cycle-piped subword select (byte-exact, legacy-rate).
-    parameter integer K_PAR = 1
+    parameter integer K_PAR = 1,
+
+    // ---- Pipelined (pixel, oc_pass) issue (default OFF = verbatim legacy) ----
+    // [ENG_PIPE 2026-06-10] When 0 (DEFAULT) every ENG_PIPE generate-if in this file
+    // elaborates the ORIGINAL stop-and-wait FSM, outer counters and requant
+    // hookups VERBATIM — every ResNet instance (which never sets ENG_PIPE)
+    // is bit- and cycle-identical. When 1 (MBV2 engine top + the -DENG_PIPE
+    // iso build) the engine restarts the next (pixel, oc_pass) walk 3
+    // cycles after mac_done while the previous pass's requant/drain retires
+    // in parallel off per-pass capture registers (acc/bias/scale/wr-addr):
+    // per-pass issue bubble 12 (pixel) / 10 (intermediate) -> 3. Schedule
+    // table + hazard proofs: docs/agent_tasks/ENG_PIPE_ANALYSIS.md.
+    parameter integer ENG_PIPE = 0
 ) (
     // ---- Clock + reset ----
     input  wire                          clk,
@@ -255,7 +267,13 @@ module shared_engine #(
     assign weight_rd_en    = ag_weight_rd_en;
     assign act_in_rd_addr  = ag_act_in_rd_addr;
     assign act_in_rd_en    = ag_act_in_rd_en;
+    // [ENG_PIPE 2026-06-10] legacy: live AG write address (stable through REQUANT/DRAIN
+    // because the FSM stop-and-waits per pass). ENG_PIPE: the restarted walk
+    // overwrites the AG register long before the bridge write fires, so the
+    // port is driven from the per-beat in-flight capture instead (see g_ep).
+    generate if (ENG_PIPE == 0) begin : g_waddr_out_legacy
     assign act_out_wr_addr = ag_act_out_wr_addr;
+    end endgenerate
 
     // engine_busy / engine_done are owned by config_register_block, which
     // synthesises them from FSM-internal status (see fsm_engine_busy/done).
@@ -275,6 +293,10 @@ module shared_engine #(
     localparam ST_REQUANT      = 3'd3;
     localparam ST_DRAIN        = 3'd4;
     localparam ST_DONE         = 3'd5;
+    // [ENG_PIPE 2026-06-10] fixed 2-cycle issue gap between walks (extends while a retire
+    // backlog or the layer end holds it). Unreachable when ENG_PIPE==0 (no
+    // arc targets it in the legacy FSM).
+    localparam ST_GAP          = 3'd6;
 
     reg [2:0] state;
     reg [2:0] next_state;
@@ -302,6 +324,10 @@ module shared_engine #(
     // BEFORE starting the next oc_pass's MAC run. Only ever set when backpressure
     // is enabled AND eff_out_ready is low at the requant_valid_out cycle; with
     // the feature disabled it is permanently 0 (inert) and the FSM is unchanged.
+    // [ENG_PIPE 2026-06-10] legacy stop-and-wait FSM kept VERBATIM inside generate-if;
+    // the ENG_PIPE FSM (ST_GAP issue pipelining + end-of-layer ST_DRAIN
+    // flush) lives in g_ep at the bottom of the module.
+    generate if (ENG_PIPE == 0) begin : g_fsm_legacy
     reg req_done_pending;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -336,17 +362,27 @@ module shared_engine #(
             // backpressure disabled eff_out_ready==1'b1 and req_done_pending==0,
             // so this collapses to the original arc (byte-identical):
             //   if (requant_valid_out) next = last ? ST_DRAIN : ST_RUN;
-            ST_REQUANT:     if (requant_valid_out || req_done_pending) begin
+            ST_REQUANT:     if (requant_valid_out) begin
                                 if (oc_pass_idx == oc_pass_total_m1[2:0])
                                     next_state = ST_DRAIN;
                                 else
                                     next_state = eff_out_ready ? ST_RUN : ST_REQUANT;
+                            end else if (req_done_pending) begin
+                                // [ENG_PIPE 2026-06-10][B-fix] held INTERMEDIATE pass: oc_pass_idx
+                                // already advanced at the valid_out cycle, so the old
+                                // shared arm re-checked last-pass with the NEXT pass's
+                                // index — a hold landing on the second-to-last pass
+                                // jumped to ST_DRAIN and SKIPPED the final pass. A held
+                                // LAST pass never re-enters here (it went to ST_DRAIN
+                                // at valid_out), so resuming ST_RUN is the only arc.
+                                next_state = eff_out_ready ? ST_RUN : ST_REQUANT;
                             end
             ST_DRAIN:       if (!bridge_busy)       next_state = ag_pixel_done ? ST_DONE : ST_RUN;
             ST_DONE:        if (!engine_start)      next_state = ST_IDLE;
             default:        next_state = ST_IDLE;
         endcase
     end
+    end endgenerate   // [ENG_PIPE 2026-06-10] g_fsm_legacy
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= ST_IDLE;
@@ -398,10 +434,20 @@ module shared_engine #(
         else        state_run_d <= (state == ST_RUN);
     end
     wire run_entered = (state == ST_RUN) && !state_run_d;
+    // [ENG_PIPE 2026-06-10] legacy: clear accumulators on ST_RUN entry (the previous
+    // pass's acc was already captured by the requant pipe in ST_REQUANT).
+    // ENG_PIPE: clear 3 cycles AFTER run-entry (see g_ep) — strictly after
+    // the previous pass's acc_cap capture at mac_done_d5 and strictly
+    // before the restarted walk's first accumulate at run-entry+4.
+    generate if (ENG_PIPE == 0) begin : g_clear_legacy
     assign mac_clear = run_entered;
+    end endgenerate
 
     // Outer counters tick on the FSM transitions documented in
     // 00_engine_skeleton_spec_FSM.md.
+    // [ENG_PIPE 2026-06-10] legacy counter block kept VERBATIM inside generate-if; the
+    // ENG_PIPE counters advance at mac_done_d1 instead (see g_ep).
+    generate if (ENG_PIPE == 0) begin : g_counters_legacy
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             oc_pass_idx_r <= 3'd0;
@@ -436,6 +482,7 @@ module shared_engine #(
             end
         end
     end
+    end endgenerate   // [ENG_PIPE 2026-06-10] g_counters_legacy
 
     // ---- URAM weight read -> mac_array alignment.
     // DEPLOYMENT URAM read latency = 2 cycles (xpm READ_LATENCY_A=2 in the top
@@ -645,13 +692,24 @@ module shared_engine #(
             ag_mac_done_d5   <= ag_mac_done_d4;
         end
     end
-    assign requant_bias_in  = bias_rd_data;
     // Per-OC scale: read at bias's address/enable (base_words identical), so the
     // scale word for the current oc_pass arrives aligned with bias_rd_data.
     assign scale_rd_addr    = ag_bias_rd_addr;
     assign scale_rd_en      = ag_bias_rd_en;
-    wire [MAC_COUNT*32-1:0] requant_scale_in = scale_rd_data;
+    // [ENG_PIPE 2026-06-10] requant input sources. Legacy (VERBATIM hookups): live
+    // bias/scale buses + live MAC accumulators, captured by the pipe at
+    // mac_done_d5 while the FSM stop-and-waits. ENG_PIPE: per-pass capture
+    // registers + the retire FIRE pulse (see g_ep) — the restarted walk
+    // (and its bias read) is already in flight at capture time, so the live
+    // sources can no longer be sampled at the capture cycle.
+    wire [MAC_COUNT*32-1:0]    requant_scale_in;
+    wire [MAC_COUNT*ACC_W-1:0] requant_acc_in;
+    generate if (ENG_PIPE == 0) begin : g_requant_in_legacy
+    assign requant_bias_in  = bias_rd_data;
+    assign requant_scale_in = scale_rd_data;
+    assign requant_acc_in   = mac_acc_out;
     assign requant_valid_in = ag_mac_done_d5;
+    end endgenerate
 
     // [DBG-BSC] dump per-OC bias + scale the requant actually uses (first requant).
     reg dbg_bsc_done = 0;
@@ -892,12 +950,221 @@ module shared_engine #(
         .clk          (clk),
         .rst_n        (rst_n),
         .valid_in     (requant_valid_in),
-        .acc_in       (mac_acc_out),
+        .acc_in       (requant_acc_in),   // [ENG_PIPE 2026-06-10] == mac_acc_out verbatim when ENG_PIPE==0
         .bias_in      (requant_bias_in),
         .scale_in     (requant_scale_in),
         .valid_out    (requant_valid_out),
         .data_out     (requant_data_out)
     );
+
+    // ====================================================================
+    // [ENG_PIPE 2026-06-10] Pipelined (pixel, oc_pass) issue — ENG_PIPE != 0 only.
+    //
+    // ISSUE side: ST_RUN -> (mac_done) -> ST_GAP (2 cycles min) -> ST_RUN
+    // restarts the NEXT (pixel, oc_pass) walk 3 cycles after mac_done; the
+    // outer counters advance at mac_done_d1 so the restarted walk (weight
+    // pass_offset, DW act chunk, bias read at the run_active rising edge)
+    // sees the new pass. The per-pass ST_REQUANT/ST_DRAIN round trip is
+    // GONE; ST_DRAIN remains only as the end-of-layer flush.
+    //
+    // RETIRE side (event-driven, decoupled from the FSM): each finished
+    // pass is a "pend". Its write address / bias / scale / accumulator are
+    // captured into single-slot capture registers on the mac_done d-chain
+    // (d1 / d4 / d4 / d5) while the live sources still hold that pass's
+    // values; the requant pipe is FED FROM THE CAPTURES by a retire FIRE
+    // pulse (requant_valid_in) gated on (requant pipe empty && bridge write
+    // empty), so a downstream stall (out_ready low) can never clobber or
+    // drop a beat — the bridge holds exactly one beat, the in-flight walk
+    // completes into the (not-yet-cleared) accumulators, at most TWO passes
+    // pend, and the gap HOLDS while pend==2, freezing every live source.
+    // That freeze is what makes the single-slot captures sufficient: a pass
+    // finishing behind an unfired head skips its d-chain captures (it is
+    // not the head) and is staged from the FROZEN live sources at the
+    // head's fire (fire_recap); its own d5 then refreshes acc_cap with the
+    // final accumulator if the recapture ran before D+4 (acc-final).
+    //
+    // Schedule (D = mac_done cycle of pass P; unstalled; proofs in
+    // docs/agent_tasks/ENG_PIPE_ANALYSIS.md):
+    //   D    : last weight issue of P; FSM -> ST_GAP next cycle
+    //   D+1  : d1: oc_pass/pixel advance + addr_cap <= live AG write addr
+    //   D+2  : gap exit decision (pixel_done -> DRAIN; pend<=1 -> RUN)
+    //   D+3  : ST_RUN: AG rising edge (counter reset + bias read issue)
+    //   D+4  : first new weight issue; d4: bias_cap/scale_cap <= live bus
+    //          (the restarted walk's bias word lands one cycle LATER, D+5)
+    //   D+5  : d5: acc_cap <= acc (final since D+4); head-ready tick
+    //   D+6  : mac_clear (run_entered_d3); earliest retire FIRE
+    //   D+7  : first accumulate of the new pass (strictly after the clear)
+    //   D+10 : requant_valid_out;  D+11: bridge write presented
+    // Per-pass issue bubble: 12 (pixel) / 10 (intermediate) -> 3.
+    // ====================================================================
+    generate if (ENG_PIPE != 0) begin : g_ep
+
+        // ---- retire bookkeeping ----
+        // pend_cnt: passes finished but not yet fired into the requant pipe.
+        // Max 2 BY CONSTRUCTION: the gap only releases a new walk when
+        // pend<=1 (at most one walking + one pending behind the head).
+        reg [1:0] pend_cnt;
+        reg       rdy_head;   // head pend's acc_cap is valid (its d5 ran)
+        reg       rdy_tail;   // tail pend's d5 ran while the head was unfired
+        reg       in_pipe;    // a beat occupies the requant pipe (fire..valid_out)
+
+        // FIRE: feed the head pend into the requant pipe. Gated on the pipe
+        // AND the bridge write register being empty so a stalled (held)
+        // write can never be clobbered. Unstalled this gating costs nothing
+        // for N>=3-issue walks (the previous beat clears the bridge before
+        // this beat's earliest fire); N==2 walks retire at period 6.
+        wire fire = (pend_cnt != 2'd0) && rdy_head && !in_pipe && !act_out_wr_en;
+        // head-fire recapture: a successor pend exists (gap held, live
+        // sources frozen) -> stage its live values into the caps this fire
+        // frees. Reads of the caps at this same edge get the OLD (head's)
+        // values (non-blocking semantics).
+        wire fire_recap = fire && (pend_cnt == 2'd2);
+        // d-chain capture eligibility: the event's pass (the most recent
+        // mac_done) is the queue head <=> it is the ONLY pend.
+        wire ev_is_head = (pend_cnt == 2'd1);
+
+        // queue update: fire-shift, then ready tick (d5), then push.
+        wire       nh0 = fire ? rdy_tail : rdy_head;
+        wire       nt0 = fire ? 1'b0     : rdy_tail;
+        wire [1:0] np0 = pend_cnt - (fire ? 2'd1 : 2'd0);
+        wire       nh1 = (ag_mac_done_d5 && !nh0 && (np0 != 2'd0)) ? 1'b1 : nh0;
+        wire       nt1 = (ag_mac_done_d5 &&  nh0 && (np0 == 2'd2)) ? 1'b1 : nt0;
+        always @(posedge clk or negedge rst_n) begin
+            if (!rst_n) begin
+                pend_cnt <= 2'd0;
+                rdy_head <= 1'b0;
+                rdy_tail <= 1'b0;
+                in_pipe  <= 1'b0;
+            end else begin
+                pend_cnt <= np0 + (ag_mac_done ? 2'd1 : 2'd0);
+                rdy_head <= nh1;
+                rdy_tail <= nt1;
+                if (fire)                    in_pipe <= 1'b1;
+                else if (requant_valid_out)  in_pipe <= 1'b0;
+            end
+        end
+
+        // ---- per-pass capture registers (datapath: no reset => FDRE) ----
+        reg [ACT_BRAM_ADDR_W-1:0]  addr_cap;
+        reg [MAC_COUNT*BIAS_W-1:0] bias_cap;
+        reg [MAC_COUNT*32-1:0]     scale_cap;
+        reg [MAC_COUNT*ACC_W-1:0]  acc_cap;
+        always @(posedge clk) begin
+            // wr-addr: the live AG register holds pass P's address until the
+            // restarted walk's first cycle (D+3) overwrites it (visible D+4).
+            if ((ag_mac_done_d1 && ev_is_head) || fire_recap)
+                addr_cap <= ag_act_out_wr_addr;
+            // bias/scale: live buses hold pass P's words until the restarted
+            // walk's bias read lands at D+5; captured at D+4.
+            if ((ag_mac_done_d4 && ev_is_head) || fire_recap) begin
+                bias_cap  <= bias_rd_data;
+                scale_cap <= scale_rd_data;
+            end
+            // acc: final from D+4 (last accumulate edge ends D+3); captured
+            // at D+5, strictly before mac_clear at D+6. A fire_recap earlier
+            // than the successor's D+4 stages a not-yet-final acc — its own
+            // d5 (it is the head by then) refreshes it with the final value.
+            if ((ag_mac_done_d5 && ev_is_head) || fire_recap)
+                acc_cap <= mac_acc_out;
+        end
+
+        // beat-in-flight write address: latched at fire, stable until the
+        // NEXT fire — which is gated on this beat's bridge acceptance, so it
+        // covers the entire (possibly held) write window.
+        reg [ACT_BRAM_ADDR_W-1:0] addr_inflight;
+        always @(posedge clk) begin
+            if (fire) addr_inflight <= addr_cap;
+        end
+        assign act_out_wr_addr = addr_inflight;
+
+        // ---- FSM (replaces the per-pass REQUANT/DRAIN round trip) ----
+        reg gap_eligible;  // 0 on the first ST_GAP cycle -> minimum 2-cycle gap
+        always @(posedge clk or negedge rst_n) begin
+            if (!rst_n)               gap_eligible <= 1'b0;
+            else if (state != ST_GAP) gap_eligible <= 1'b0;
+            else                      gap_eligible <= 1'b1;
+        end
+        always @* begin
+            next_state = state;
+            case (state)
+                ST_IDLE:        if (engine_start_pulse) next_state = ST_LOAD_CONFIG;
+                ST_LOAD_CONFIG: next_state = ST_RUN;
+                ST_RUN:         if (ag_mac_done)        next_state = ST_GAP;
+                // gap exit: layer done -> final flush; else restart the next
+                // walk only when at most the just-finished pass is pending
+                // (an older unfired pend HOLDS the gap -> live sources stay
+                // frozen for its fire_recap staging).
+                ST_GAP:         if (gap_eligible) begin
+                                    if (ag_pixel_done)
+                                        next_state = ST_DRAIN;
+                                    else if (pend_cnt <= 2'd1)
+                                        next_state = ST_RUN;
+                                end
+                // end-of-layer flush: every pend fired, pipe empty, bridge
+                // write accepted (bridge_busy covers requant_valid + wr_en).
+                ST_DRAIN:       if ((pend_cnt == 2'd0) && !in_pipe && !bridge_busy)
+                                    next_state = ST_DONE;
+                ST_DONE:        if (!engine_start)      next_state = ST_IDLE;
+                default:        next_state = ST_IDLE;
+            endcase
+        end
+
+        // ---- outer counters: advance at mac_done_d1 (was REQUANT/DRAIN).
+        //      The restarted walk at D+3 then reads the new pass/pixel for
+        //      its weight pass_offset, DW act chunk and bias read address.
+        //      Gated on !ag_pixel_done so the layer's final pass parks the
+        //      counters (they reset at the next ST_LOAD_CONFIG). ----
+        always @(posedge clk or negedge rst_n) begin
+            if (!rst_n) begin
+                oc_pass_idx_r <= 3'd0;
+                pixel_h_r     <= 8'd0;
+                pixel_w_r     <= 8'd0;
+            end else begin
+                if (state == ST_LOAD_CONFIG) begin
+                    oc_pass_idx_r <= 3'd0;
+                    pixel_h_r     <= 8'd0;
+                    pixel_w_r     <= 8'd0;
+                end
+                if (ag_mac_done_d1 && !ag_pixel_done) begin
+                    if (oc_pass_idx_r == oc_pass_total_m1[2:0]) begin
+                        oc_pass_idx_r <= 3'd0;
+                        if (pixel_w_r == pixel_w_m1) begin
+                            pixel_w_r <= 8'd0;
+                            pixel_h_r <= (pixel_h_r == pixel_h_m1) ? 8'd0
+                                                                   : (pixel_h_r + 8'd1);
+                        end else begin
+                            pixel_w_r <= pixel_w_r + 8'd1;
+                        end
+                    end else begin
+                        oc_pass_idx_r <= oc_pass_idx_r + 3'd1;
+                    end
+                end
+            end
+        end
+
+        // ---- mac_clear: 3 cycles after run-entry — strictly between the
+        //      previous pass's acc_cap capture (D+5) and the restarted
+        //      walk's first accumulate (run-entry+4). ----
+        reg run_entered_d1, run_entered_d2, run_entered_d3;
+        always @(posedge clk or negedge rst_n) begin
+            if (!rst_n) begin
+                run_entered_d1 <= 1'b0;
+                run_entered_d2 <= 1'b0;
+                run_entered_d3 <= 1'b0;
+            end else begin
+                run_entered_d1 <= run_entered;
+                run_entered_d2 <= run_entered_d1;
+                run_entered_d3 <= run_entered_d2;
+            end
+        end
+        assign mac_clear = run_entered_d3;
+
+        // ---- retire FIRE feeds the requant pipe from the captures ----
+        assign requant_valid_in = fire;
+        assign requant_acc_in   = acc_cap;
+        assign requant_bias_in  = bias_cap;
+        assign requant_scale_in = scale_cap;
+    end endgenerate
 
 endmodule
 

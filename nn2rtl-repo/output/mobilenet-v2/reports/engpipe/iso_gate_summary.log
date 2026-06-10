@@ -1,0 +1,29 @@
+[engpipe-iso] === ep1 (K_PAR=8 + ENG_PIPE) ===
+  ep1/816 vec0: rc=0  [wrap] done=1 took=75275 cycles bytes=1204224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/898 vec0: rc=0  [wrap] done=1 took=6039 cycles bytes=7840 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/linear vec0: rc=0  [wrap] done=1 took=664 cycles bytes=1000 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/896 vec0: rc=0  [wrap] done=1 took=2364 cycles bytes=47040 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/816 vec1: rc=0  [wrap] done=1 took=75275 cycles bytes=1204224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/898 vec1: rc=0  [wrap] done=1 took=6039 cycles bytes=7840 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/linear vec1: rc=0  [wrap] done=1 took=664 cycles bytes=1000 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1/896 vec1: rc=0  [wrap] done=1 took=2364 cycles bytes=47040 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+[engpipe-iso] === ep0 reference (K_PAR=8 legacy, cycle baseline) ===
+  ep0/816 vec0: rc=0  [wrap] done=1 took=175618 cycles bytes=1204224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep0/898 vec0: rc=0  [wrap] done=1 took=6470 cycles bytes=7840 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep0/linear vec0: rc=0  [wrap] done=1 took=684 cycles bytes=1000 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep0/896 vec0: rc=0  [wrap] done=1 took=3824 cycles bytes=47040 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+[engpipe-iso] === throttled out_ready (LFSR ~50%): legacy vs ENG_PIPE ===
+  ep0_thr/816 vec0: rc=0  [wrap] done=1 took=188100 cycles bytes=1204224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep0_thr/898 vec0: rc=0  [wrap] done=1 took=6508 cycles bytes=7840 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep0_thr/linear vec0: rc=0  [wrap] done=1 took=689 cycles bytes=1000 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep0_thr/896 vec0: rc=0  [wrap] done=1 took=4010 cycles bytes=47040 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1_thr/816 vec0: rc=0  [wrap] done=1 took=87960 cycles bytes=1204224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1_thr/898 vec0: rc=0  [wrap] done=1 took=6039 cycles bytes=7840 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1_thr/linear vec0: rc=0  [wrap] done=1 took=664 cycles bytes=1000 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+  ep1_thr/896 vec0: rc=0  [wrap] done=1 took=2366 cycles bytes=47040 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
+[engpipe-iso] === cycle deltas (ep0 -> ep1, vec0) ===
+  816: ep0=175618 ep1=75275 delta=-100343
+  898: ep0=6470 ep1=6039 delta=-431
+  linear: ep0=684 ep1=664 delta=-20
+  896: ep0=3824 ep1=2364 delta=-1460
+[engpipe-iso] RESULT: PASS

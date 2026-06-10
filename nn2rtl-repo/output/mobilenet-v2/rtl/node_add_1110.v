@@ -28,7 +28,7 @@ module node_add_1110 #(
     input  wire                clk,
     input  wire                rst_n,
     input  wire                valid_in,
-    output reg                 ready_in,
+    output wire                 ready_in,
     input  wire [2559:0]       data_in,
     input  wire                out_ready_in,   // NEW: downstream-ready (ignored when ENABLE_BACKPRESSURE==0)
     output wire                valid_out,
@@ -144,7 +144,7 @@ module node_add_1110 #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state        <= S_IDLE;
-            ready_in     <= 1'b1;
+            ready_in_r     <= 1'b1;
             dp_valid_out <= 1'b0;
             ch_idx       <= {CH_IDX_W{1'b0}};
             stage1_idx   <= {CH_IDX_W{1'b0}};
@@ -166,11 +166,11 @@ module node_add_1110 #(
                 S_IDLE: begin
                     // Re-raise ready_in when the skid drains (==0: always 1'b1).
                     // The accept below (later in source) still wins with
-                    // ready_in<=0 on the accept cycle, so ==0 is byte/cycle-exact.
-                    ready_in <= !skid_block;
+                    // ready_in_r<=0 on the accept cycle, so ==0 is byte/cycle-exact.
+                    ready_in_r <= !skid_block;
                     if (valid_in && ready_in && !skid_block) begin
                         ch_idx    <= {CH_IDX_W{1'b0}};
-                        ready_in  <= 1'b0;  // [INVARIANT:READY_IN_GATING]
+                        ready_in_r  <= 1'b0;  // [INVARIANT:READY_IN_GATING]
                         state     <= S_RUN;
                     end
                 end
@@ -193,7 +193,7 @@ module node_add_1110 #(
                         stage3_valid <= 1'b1;
                         if (stage2_idx == OC_MINUS_1) begin
                             dp_valid_out <= 1'b1;  // [INVARIANT:VALID_OUT_LATENCY]
-                            ready_in  <= !skid_block;
+                            ready_in_r  <= !skid_block;
                             state     <= S_IDLE;
                         end
                     end
@@ -202,5 +202,19 @@ module node_add_1110 #(
             endcase
         end
     end
+
+    // [ENG_PIPE 2026-06-10][ADD-JOIN FIX] ready_in is the SAME signal the
+    // two input skid-FIFOs pop on, so it must be the COMBINATIONAL truth of
+    // the accept predicate (the old registered ready_in was 1 cycle stale
+    // vs the combinational skid_block -> accept/pop desync = duplicate or
+    // stale pair processing when the downstream ready toggled). ready_in_r
+    // keeps the legacy register writes (now shadow/dead) so every generated
+    // FSM shape is patched uniformly. Cycle-identical when
+    // ENABLE_BACKPRESSURE==0 (1 in IDLE, 0 in RUN, same edges).
+    reg ready_in_r;
+    /* verilator lint_off UNUSED */
+    wire _unused_ready_in_r = ready_in_r;
+    /* verilator lint_on UNUSED */
+    assign ready_in = (state == S_IDLE) && !skid_block;
 
 endmodule

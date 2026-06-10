@@ -1,0 +1,50 @@
+[wrap] preloaded 49 act pixels (ic_chunks=4)
+[wrap] config done at cyc=14264  (node_conv_898 IC=960 OC=160 7x7->7x7 wbase=6432 bbase=41)
+[TERM] t=0 act=21 wbus=f7ec0117
+[TERM] t=1 act=0 wbus=010606f5
+[TERM] t=2 act=0 wbus=0c0a03fb
+[TERM] t=3 act=0 wbus=fd0ef4f9
+[TERM] t=4 act=0 wbus=fbfc02fb
+[TERM] t=5 act=0 wbus=06fffff7
+[TERM] t=6 act=0 wbus=020c0307
+[TERM] t=7 act=0 wbus=050300fb
+[TERM] t=8 act=0 wbus=fc2cfab2
+[TERM] t=9 act=11 wbus=0a07fcfe
+[TERM] t=10 act=26 wbus=08f90600
+[TERM] t=11 act=0 wbus=ff0cf7f7
+[TERM] t=12 act=3 wbus=10faf600
+[TERM] t=13 act=26 wbus=010c00f8
+[TERM] t=14 act=0 wbus=0209ff17
+[TERM] t=15 act=0 wbus=0cf705ed
+[TERM] t=16 act=0 wbus=f4fd01fd
+[TERM] t=17 act=14 wbus=03f806fc
+[TERM] t=18 act=0 wbus=05f90d00
+[TERM] t=19 act=0 wbus=07f802fd
+[TERM] t=20 act=0 wbus=0118fee3
+[TERM] t=21 act=0 wbus=05f4fd03
+[TERM] t=22 act=0 wbus=f8f0fddc
+[TERM] t=23 act=0 wbus=070e0b98
+[TERM] t=24 act=26 wbus=f605f7ff
+[TERM] t=25 act=0 wbus=02f9fffc
+[TERM] t=26 act=0 wbus=0309fddb
+[TERM] t=27 act=23 wbus=000d0308
+[TERM] t=28 act=0 wbus=f70bf623
+[TERM] t=29 act=0 wbus=f411f5b1
+[TERM] t=30 act=0 wbus=ed030849
+[TERM] t=31 act=0 wbus=f3fdf9f9
+[PULSE] pix=0 pulses=119 acc_lane0=7231
+[ACC8] pix0 lanes0..7: 7231 4926 9583 162 4420 2985 -959 2470
+[BSC] bias0_3=-2357 -4132 -6587 -340  scale0_3=00010bf0 00010bf0 00010bf0 00010bf0
+[PULSE] pix=1 pulses=119 acc_lane0=5929
+[PULSE] pix=2 pulses=119 acc_lane0=6760
+[PULSE] pix=3 pulses=119 acc_lane0=6779
+[PULSE] pix=4 pulses=119 acc_lane0=6417
+[PULSE] pix=5 pulses=119 acc_lane0=5617
+[wrap] done=1 took=6039 cycles
+[dbg] pixel0 got vs gold (first 24 OC):
+  got:  40   6  24  -1  27 -11 -31   7  27 -22  35   8 -32 -28  33  12   1  -5   7   9  21   3   2  36
+  gld:  40   6  24  -1  27 -11 -31   7  27 -22  35   8 -32 -28  33  12   1  -5   7   9  21   3   2  36
+
+=== WRAP engine-ISOLATION (node_conv_898, REAL mbv2 mems) vs goldout vec0 ===
+bytes=7840 mismatch=0 max|err|=0 firstbad_pixel=-1
+PASS: byte-exact

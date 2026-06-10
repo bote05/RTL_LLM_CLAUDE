@@ -139,6 +139,14 @@ module engine_iso_wrap_mbv2 (
         .wr_addr(act_wr_addr), .wr_en(act_wr_en), .wr_data(act_wr_data),
         .tb_rd_addr(tb_act_rd_addr), .tb_rd_data(tb_act_rd_data));
 
+`ifdef THROTTLE
+    // [ENG_PIPE 2026-06-10] deterministic ~50% duty out_ready throttle (16b Fibonacci
+    // LFSR, taps 16/14/13/11). Runs of 0s up to ~10 cycles exercise the
+    // bridge hold + gap-hold (pend==2) + fire_recap paths.
+    reg [15:0] thr_lfsr = 16'hACE1;
+    always @(posedge clk) thr_lfsr <= {thr_lfsr[14:0], thr_lfsr[15] ^ thr_lfsr[13] ^ thr_lfsr[12] ^ thr_lfsr[10]};
+    wire thr_out_ready = thr_lfsr[0];
+`endif
     // ---- the REAL engine, parameterised for mbv2 INT8 weight slots ----
     shared_engine #(
         .WGT_W(8),
@@ -159,8 +167,22 @@ module engine_iso_wrap_mbv2 (
         .MAX_OW(112),
         // [DW-ENGINE P1] mirror the MBV2 engine top: depthwise mode armed
         // (inert for dense dispatches — cfg 0x3C resets to 0).
-        .ENABLE_DEPTHWISE(1)
+        .ENABLE_DEPTHWISE(1),
+`ifdef ENG_PIPE
+        // [ENG_PIPE 2026-06-10] pipelined (pixel, oc_pass) issue under test (-DENG_PIPE).
+        .ENG_PIPE(1),
+`endif
+`ifdef THROTTLE
+        // [ENG_PIPE 2026-06-10] engine-output backpressure armed so the LFSR throttle below
+        // exercises the stall/hold path (-DTHROTTLE; mirrors the MBV2 top's
+        // ENABLE_OUTPUT_BACKPRESSURE(1) + eofifo_in_ready wiring).
+        .ENABLE_OUTPUT_BACKPRESSURE(1),
+`endif
+        .MAC_COUNT(256)
     ) u_engine(
+`ifdef THROTTLE
+        .out_ready(thr_out_ready),
+`endif
         .clk(clk), .rst_n(rst_n),
         .s_axil_awvalid(s_axil_awvalid), .s_axil_awready(s_axil_awready), .s_axil_awaddr(s_axil_awaddr),
         .s_axil_wvalid(s_axil_wvalid), .s_axil_wready(s_axil_wready), .s_axil_wdata(s_axil_wdata), .s_axil_wstrb(s_axil_wstrb),

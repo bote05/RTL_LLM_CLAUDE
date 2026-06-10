@@ -1,0 +1,213 @@
+[tb][mbv2] goldin  : vectors=8 samples=50176 bytes/sample=3 words/sample=1
+[tb][mbv2] goldout : vectors=8 samples=1 bytes/sample=1000 words/sample=250
+[tb][mbv2] max_cycles=12000000 input_beats=50176 all_vecs=0
+[tb][mbv2][vec0] reset deasserted at cycle 17
+[dbg-in] beat 0 rgb=0x78C359
+[dbg-in] beat 1 rgb=0xD32A23
+[dbg-in] beat 2 rgb=0xFAC902
+[RGN] disp=0 region0_csum=18323d6e7d3f25e4
+[TERM] t=0 act=0 wbus=fe03f6ff
+[TERM] t=1 act=0 wbus=e902ca2d
+[TERM] t=2 act=77 wbus=b1fe1703
+[PULSE] pix=0 pulses=3 acc_lane0=-10658
+[ACC8] pix0 lanes0..7: -10658 -11768 7514 2746 1831 35226 5132 -3185
+[BSC] bias0_3=1181 8770 -899 -3324  scale0_3=000079e4 000079e4 000079e4 000079e4
+[PULSE] pix=1 pulses=3 acc_lane0=-1098
+[PULSE] pix=2 pulses=3 acc_lane0=2381
+[PULSE] pix=3 pulses=3 acc_lane0=-83
+[PULSE] pix=4 pulses=3 acc_lane0=-3209
+[PULSE] pix=5 pulses=3 acc_lane0=-7281
+[CSUM] disp=0 beats=12544 csum=7afe762d86a86c30
+[VIOL] disp=0 total=0
+[A198] disp=0 lhs=0/0000000000000000 miss=0 skip=0/0000000000000000 smiss=0 out=0/0000000000000000
+[RGN] disp=1 region0_csum=18323d6e7d3f25e4
+[CSUM] disp=1 beats=12544 csum=5f6cd91bafeb5ad0
+[VIOL] disp=1 total=0
+[A198] disp=1 lhs=0/0000000000000000 miss=0 skip=0/0000000000000000 smiss=0 out=0/0000000000000000
+[tb][mbv2][vec0] cycle=1048576 in=50176/50176 out=0/1 tready=1 tvalid=0
+[RGN] disp=2 region0_csum=18323d6e7d3f25e4
+[CSUM] disp=2 beats=3136 csum=0259535f7ceb534d
+[VIOL] disp=2 total=0
+[A198] disp=2 lhs=0/0000000000000000 miss=0 skip=3135/0be5d7a0b668d851 smiss=0 out=0/0000000000000000
+[RGN] disp=3 region0_csum=b1f703ffb48c8466
+[CSUM] disp=3 beats=3136 csum=b0af80ade0815913
+[VIOL] disp=3 total=0
+[A198] disp=3 lhs=0/0000000000000000 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=0/0000000000000000
+[RGN] disp=4 region0_csum=b1f703ffb48c8466
+[CSUM] disp=4 beats=3136 csum=3270e624569a563b
+[VIOL] disp=4 total=0
+[A198] disp=4 lhs=0/0000000000000000 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=0/0000000000000000
+[RGN] disp=5 region0_csum=4137236029600233
+[CSUM] disp=5 beats=3136 csum=ba2c14fd475b5532
+[VIOL] disp=5 total=0
+[A198] disp=5 lhs=3135/a8148d01b0a9a09c miss=0 skip=3136/0259535f7ceb534d smiss=0 out=2438/3e9065931946e657
+[RGN] disp=6 region0_csum=fa2c0302044e5e0b
+[CSUM] disp=6 beats=3136 csum=37c70dda435d0604
+[VIOL] disp=6 total=0
+[A198] disp=6 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=7 region0_csum=3bb6c5995d2a1ba7
+[CSUM] disp=7 beats=784 csum=8fd94f4d3a398855
+[VIOL] disp=7 total=0
+[A198] disp=7 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=8 region0_csum=3bb6c5995d2a1ba7
+[CSUM] disp=8 beats=784 csum=1701a7714ea3705c
+[VIOL] disp=8 total=0
+[A198] disp=8 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=9 region0_csum=bd7a388b09fa82a4
+[CSUM] disp=9 beats=784 csum=3f9f39fbae5694c8
+[VIOL] disp=9 total=0
+[A198] disp=9 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=10 region0_csum=bd7a388b09fa82a4
+[CSUM] disp=10 beats=784 csum=ddf5fefc2e76cfc1
+[VIOL] disp=10 total=0
+[A198] disp=10 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=11 region0_csum=702b7bb9d1ce01a0
+[CSUM] disp=11 beats=784 csum=93822da2a1f7c9c1
+[VIOL] disp=11 total=0
+[A198] disp=11 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=12 region0_csum=2381a287f55c063f
+[CSUM] disp=12 beats=784 csum=56bcc4f0fe6e9d51
+[VIOL] disp=12 total=0
+[A198] disp=12 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=13 region0_csum=2381a287f55c063f
+[CSUM] disp=13 beats=784 csum=9556527cdcd74237
+[VIOL] disp=13 total=0
+[A198] disp=13 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=14 region0_csum=6d4a7f6ef68b3108
+[CSUM] disp=14 beats=784 csum=62598a9ce02169e0
+[VIOL] disp=14 total=0
+[A198] disp=14 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=15 region0_csum=ad9863547fd01413
+[CSUM] disp=15 beats=196 csum=69edece68ff3c8cf
+[VIOL] disp=15 total=0
+[A198] disp=15 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=16 region0_csum=88e2fab6abc9caf2
+[CSUM] disp=16 beats=392 csum=d32d58edd3661d79
+[VIOL] disp=16 total=0
+[A198] disp=16 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=17 region0_csum=88e2fab6abc9caf2
+[CSUM] disp=17 beats=392 csum=64330deefd001288
+[VIOL] disp=17 total=0
+[A198] disp=17 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=18 region0_csum=a0e64fcc58afb974
+[CSUM] disp=18 beats=196 csum=8bb0e46e796830d3
+[VIOL] disp=18 total=0
+[A198] disp=18 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=19 region0_csum=7a840192a0aec6e2
+[CSUM] disp=19 beats=392 csum=230ccf9aab263503
+[VIOL] disp=19 total=0
+[A198] disp=19 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=20 region0_csum=7a840192a0aec6e2
+[CSUM] disp=20 beats=392 csum=a325286cc431b330
+[VIOL] disp=20 total=0
+[A198] disp=20 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=21 region0_csum=f5a107da39ac91aa
+[CSUM] disp=21 beats=196 csum=aa13346ce323301e
+[VIOL] disp=21 total=0
+[A198] disp=21 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=22 region0_csum=fee646527c89c0ca
+[CSUM] disp=22 beats=392 csum=0846b1bac3e54d09
+[VIOL] disp=22 total=0
+[A198] disp=22 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=23 region0_csum=fee646527c89c0ca
+[CSUM] disp=23 beats=392 csum=41a43b032aaa61d7
+[VIOL] disp=23 total=0
+[A198] disp=23 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=24 region0_csum=f3ed5fc6739fde04
+[CSUM] disp=24 beats=196 csum=c7161a3aa1dfe1b7
+[VIOL] disp=24 total=0
+[A198] disp=24 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=25 region0_csum=3c3eeab68a394265
+[CSUM] disp=25 beats=392 csum=bc277c98982c3f4a
+[VIOL] disp=25 total=0
+[A198] disp=25 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=26 region0_csum=3c3eeab68a394265
+[CSUM] disp=26 beats=392 csum=0fd9d2e11472992b
+[VIOL] disp=26 total=0
+[A198] disp=26 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=27 region0_csum=e5c07fb869bfe6b5
+[CSUM] disp=27 beats=196 csum=919b43d3ec917c58
+[VIOL] disp=27 total=0
+[A198] disp=27 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=28 region0_csum=e5c07fb869bfe6b5
+[CSUM] disp=28 beats=588 csum=155615c7ef3ddcda
+[VIOL] disp=28 total=0
+[A198] disp=28 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=29 region0_csum=d09316bbde7de275
+[CSUM] disp=29 beats=588 csum=398d5c4bdb793cac
+[VIOL] disp=29 total=0
+[A198] disp=29 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=30 region0_csum=d09316bbde7de275
+[CSUM] disp=30 beats=196 csum=43f2980b4d6ad511
+[VIOL] disp=30 total=0
+[A198] disp=30 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=31 region0_csum=65d1825981f4f8b0
+[CSUM] disp=31 beats=588 csum=c5f896c91efc13e0
+[VIOL] disp=31 total=0
+[A198] disp=31 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=32 region0_csum=dc1c9c40cf40ad97
+[CSUM] disp=32 beats=588 csum=a694dd2729b550ea
+[VIOL] disp=32 total=0
+[A198] disp=32 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=33 region0_csum=dc1c9c40cf40ad97
+[CSUM] disp=33 beats=196 csum=7ac293da494a16be
+[VIOL] disp=33 total=0
+[A198] disp=33 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=34 region0_csum=fed088fd43dd9bdb
+[CSUM] disp=34 beats=588 csum=b876daab79e4ab8c
+[VIOL] disp=34 total=0
+[A198] disp=34 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=35 region0_csum=372a465047d43f30
+[CSUM] disp=35 beats=49 csum=a0d313967b36ed08
+[VIOL] disp=35 total=0
+[A198] disp=35 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=36 region0_csum=db9ca098083778b7
+[CSUM] disp=36 beats=196 csum=d1c40044ad499ac6
+[VIOL] disp=36 total=0
+[A198] disp=36 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=37 region0_csum=db9ca098083778b7
+[CSUM] disp=37 beats=196 csum=21bdd6756da19415
+[VIOL] disp=37 total=0
+[A198] disp=37 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=38 region0_csum=138b43f9fa1d5865
+[CSUM] disp=38 beats=49 csum=0c139340ee1a3da2
+[VIOL] disp=38 total=0
+[A198] disp=38 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=39 region0_csum=91b19e0cdb379f99
+[CSUM] disp=39 beats=196 csum=c6e41cf2b0502c16
+[VIOL] disp=39 total=0
+[A198] disp=39 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=40 region0_csum=91b19e0cdb379f99
+[CSUM] disp=40 beats=196 csum=03b5de7a7d6157ed
+[VIOL] disp=40 total=0
+[A198] disp=40 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=41 region0_csum=47bd6dcaa2307794
+[CSUM] disp=41 beats=49 csum=c59d2b78410d57b0
+[VIOL] disp=41 total=0
+[A198] disp=41 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=42 region0_csum=b1adaafd77d8905b
+[CSUM] disp=42 beats=196 csum=f5e410ac5d1fafa4
+[VIOL] disp=42 total=0
+[A198] disp=42 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=43 region0_csum=b1adaafd77d8905b
+[CSUM] disp=43 beats=196 csum=030a277c1d0cbda5
+[VIOL] disp=43 total=0
+[A198] disp=43 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=44 region0_csum=34e505998f4950f4
+[CSUM] disp=44 beats=98 csum=5298dbeaf292bc04
+[VIOL] disp=44 total=0
+[A198] disp=44 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=45 region0_csum=34e505998f4950f4
+[CSUM] disp=45 beats=245 csum=bc382401463a1b10
+[VIOL] disp=45 total=0
+[A198] disp=45 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[RGN] disp=46 region0_csum=f2c9cf34e93c7dee
+[CSUM] disp=46 beats=4 csum=dfd712f475063525
+[VIOL] disp=46 total=0
+[A198] disp=46 lhs=3136/ba2c14fd475b5532 miss=0 skip=3136/0259535f7ceb534d smiss=0 out=3136/2d0bf168ee300394
+[dbg-out] beat 0 logit[0..7]=-28 15 34 26 54 2 22 -7
+[dbg-out] beat 1 logit[0..7]=-6 2 2 -22 34 -11 -10 5
+[tb][mbv2][vec0] frame done: first_input_cycle=18 last_output_cycle=1957409 e2e_cycles=1957391 out_beats=32
+[tb][mbv2][vec0] result=PASS mismatch_bytes=0 out_beats=32/1
+[tb][mbv2] total mismatching bytes = 0 / 32000
+[tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
