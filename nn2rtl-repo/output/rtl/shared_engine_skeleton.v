@@ -215,7 +215,7 @@ module shared_engine #(
     wire [15:0]                ag_k_index;
     wire                       ag_mac_done;
     wire                       ag_pixel_done;
-    wire [3:0]                 ag_k_tap_mask;   // [KPAR4] per-tap valid of the issued group
+    wire [((K_PAR > 4) ? K_PAR : 4)-1:0] ag_k_tap_mask;   // [KPAR4] per-tap valid of the issued group ([KPAR8 2026-06-10] max(K_PAR,4) wide)
 
     // -- bram_to_stream_bridge wires (act_in side) --
     wire [ACT_W-1:0]           mac_act_byte;
@@ -247,6 +247,8 @@ module shared_engine #(
     // K_PAR==1 is the verbatim legacy passthrough.
     generate if (K_PAR == 1) begin : g_waddr_legacy
         assign weight_rd_addr  = ag_weight_rd_addr;
+    end else if (K_PAR == 8) begin : g_waddr_kpar8
+        assign weight_rd_addr  = {3'b000, ag_weight_rd_addr[21:3]};   // [KPAR8 2026-06-10] GROUP addr = old>>3
     end else begin : g_waddr_kpar
         assign weight_rd_addr  = {2'b00, ag_weight_rd_addr[21:2]};
     end endgenerate
@@ -491,8 +493,8 @@ module shared_engine #(
     // slice0; SERIAL dispatches (depthwise, FC base 13413%4==1) walk one
     // old word/cycle with mask 4'b0001, so tap0 tracks the subword and
     // taps 1..3 are masked dead inside mac_array.
-    wire [3:0]  mac_tap_mask;
-    wire [23:0] mac_act_bytes_ext;
+    wire [((K_PAR > 4) ? K_PAR : 4)-1:0] mac_tap_mask;        // [KPAR8 2026-06-10] max(K_PAR,4) wide
+    wire [(((K_PAR > 4) ? K_PAR : 4)-1)*8-1:0] mac_act_bytes_ext;  // [KPAR8 2026-06-10] (max(K_PAR,4)-1) bytes
     generate if (K_PAR == 1) begin : g_ktap_legacy
         // mac_weight_bus is the full URAM-wide weight read; at N+2 it carries the
         // weights requested at read N (one URAM word = MAC_COUNT INT8 weights = 2048b).
@@ -502,6 +504,60 @@ module shared_engine #(
         /* verilator lint_off UNUSED */
         wire _unused_kpar_skel = &{1'b0, ag_k_tap_mask};
         /* verilator lint_on UNUSED */
+    end else if (K_PAR == 8) begin : g_ktap_kpar8
+        // [KPAR8 2026-06-10] 3-bit subword + 8-bit mask pipes (2-cycle, mirroring
+        // ag_weight_rd_en_d/_d2 = the WLAT=2 URAM alignment). FAST dense
+        // groups are 8-aligned so the subsel is 0 and tap0 == slice0;
+        // SERIAL dispatches (the 12 depthwise) walk one old word/cycle with
+        // mask bit0-only, tap0 tracking the 3-bit subword; taps 1..7 are
+        // masked dead inside mac_array.
+        reg [2:0] wsub_d1, wsub_d2;
+        reg [7:0] ktap_d1, ktap_d2;
+        always @(posedge clk or negedge rst_n) begin
+            if (!rst_n) begin
+                wsub_d1 <= 3'd0;         wsub_d2 <= 3'd0;
+                ktap_d1 <= 8'b0000_0001; ktap_d2 <= 8'b0000_0001;
+            end else begin
+                wsub_d1 <= ag_weight_rd_addr[2:0]; wsub_d2 <= wsub_d1;
+                ktap_d1 <= ag_k_tap_mask;          ktap_d2 <= ktap_d1;
+            end
+        end
+        // tap0 = subword-selected old word (slice 0 for aligned fast groups).
+        assign mac_weight_bus[MAC_COUNT*WGT_W-1:0] =
+            weight_rd_data[wsub_d2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[1*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[1*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[3*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[3*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[4*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[4*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[5*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[5*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[6*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[6*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[7*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[7*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_tap_mask = ktap_d2;
+        // dense taps 1..7 act bytes: consecutive ic bytes of the HELD act
+        // word. Fast groups are 8-aligned (idx%8==0 and 256%8==0) so idx+7
+        // never crosses the word; the +j adds use 8-bit WRAP intermediates
+        // so a serial-mode idx near 255 stays an in-range masked-dead select.
+        wire [7:0] kidx1 = ag_act_in_ic_byte_idx_d2 + 8'd1;
+        wire [7:0] kidx2 = ag_act_in_ic_byte_idx_d2 + 8'd2;
+        wire [7:0] kidx3 = ag_act_in_ic_byte_idx_d2 + 8'd3;
+        wire [7:0] kidx4 = ag_act_in_ic_byte_idx_d2 + 8'd4;
+        wire [7:0] kidx5 = ag_act_in_ic_byte_idx_d2 + 8'd5;
+        wire [7:0] kidx6 = ag_act_in_ic_byte_idx_d2 + 8'd6;
+        wire [7:0] kidx7 = ag_act_in_ic_byte_idx_d2 + 8'd7;
+        assign mac_act_bytes_ext[7:0]   = act_in_rd_data_d[kidx1*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[15:8]   = act_in_rd_data_d[kidx2*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[23:16]   = act_in_rd_data_d[kidx3*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[31:24]   = act_in_rd_data_d[kidx4*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[39:32]   = act_in_rd_data_d[kidx5*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[47:40]   = act_in_rd_data_d[kidx6*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[55:48]   = act_in_rd_data_d[kidx7*ACT_W +: ACT_W];
     end else begin : g_ktap_kpar
         // subword + mask pipes (2-cycle, mirroring ag_weight_rd_en_d/_d2).
         reg [1:0] wsub_d1, wsub_d2;
@@ -882,8 +938,8 @@ module mac_array #(
     input  wire         mac_valid_in,
     input  wire [7:0]   act_byte,
     input  wire [K_PAR*256*WGT_W-1:0] weight_bus,
-    input  wire [23:0]  act_bytes_ext, // [KPAR4]
-    input  wire [3:0]   tap_mask,      // [KPAR4]
+    input  wire [(((K_PAR > 4) ? K_PAR : 4)-1)*8-1:0] act_bytes_ext, // [KPAR4] ([KPAR8 2026-06-10] max(K_PAR,4)-1 bytes)
+    input  wire [((K_PAR > 4) ? K_PAR : 4)-1:0] tap_mask,      // [KPAR4] ([KPAR8 2026-06-10] max(K_PAR,4) wide)
     input  wire         dw_mode,      // [DW-ENGINE P1]
     input  wire [2047:0] act_word,    // [DW-ENGINE P1]
     output wire [8191:0] acc_out,
@@ -954,7 +1010,7 @@ module address_generator #(
     output wire [15:0]  k_index,
     output wire         mac_done,
     output wire         pixel_done,
-    output wire [3:0]   k_tap_mask     // [KPAR4]
+    output wire [((K_PAR > 4) ? K_PAR : 4)-1:0] k_tap_mask  // [KPAR4] ([KPAR8 2026-06-10] max(K_PAR,4) wide)
 );
     assign weight_rd_addr     = 22'd0;
     assign weight_rd_en       = 1'b0;
@@ -967,7 +1023,7 @@ module address_generator #(
     assign k_index            = 16'd0;
     assign mac_done           = 1'b1;
     assign pixel_done         = 1'b1;
-    assign k_tap_mask         = 4'b0001;   // [KPAR4]
+    assign k_tap_mask         = {{(((K_PAR > 4) ? K_PAR : 4)-1){1'b0}}, 1'b1};   // [KPAR4]/[KPAR8 2026-06-10]
 endmodule
 
 

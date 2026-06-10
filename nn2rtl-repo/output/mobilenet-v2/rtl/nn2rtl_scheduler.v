@@ -768,7 +768,7 @@ module nn2rtl_scheduler (
             6'd43: weight_base_word_rom = 20'd13224;
             6'd44: weight_base_word_rom = 20'd9632;
             6'd45: weight_base_word_rom = 20'd11552;
-            6'd46: weight_base_word_rom = 20'd13413;  // [FC-ENGINE] node_linear
+            6'd46: weight_base_word_rom = 20'd13416;  // [FC-ENGINE] node_linear ([KPAR8 2026-06-10] FC-PAD: %8 -> FAST walk; banks relocated by repack_mbv2_kpar8_banks.py)
             default: weight_base_word_rom = 20'd0;
         endcase
     end

@@ -134,8 +134,9 @@ module address_generator #(
 
     // [KPAR4] per-tap valid mask of the group issued THIS cycle (tap j =
     // old K-word k_cnt+j), registered in lockstep with weight_rd_addr/en.
-    // Constant 4'b0001 when K_PAR==1 (legacy single-tap issue).
-    output wire [3:0]  k_tap_mask
+    // Constant bit0-only when K_PAR==1 (legacy single-tap issue).
+    // [KPAR8 2026-06-10] width = max(K_PAR,4): [3:0] at K_PAR<=4 (unchanged), [7:0] at 8.
+    output wire [((K_PAR > 4) ? K_PAR : 4)-1:0]  k_tap_mask
 );
 
     // ----------------------------------------------------------------------
@@ -379,6 +380,220 @@ module address_generator #(
                     end else begin
                         ic_cnt <= ic_cnt + 12'd1;
                         k_cnt  <= k_cnt + 16'd1;
+                    end
+                end
+            end else begin
+                // run_active deasserted — drop the per-cycle read enables.
+                // weight_rd_addr, act_in_rd_addr, act_in_ic_byte_idx, k_index
+                // and act_out_wr_addr keep their last value; the engine FSM
+                // is in ST_REQUANT / ST_DRAIN and does not need them.
+                weight_rd_en       <= 1'b0;
+                act_in_rd_en       <= 1'b0;
+            end
+
+            // pixel_done mirrors the latch so the FSM sees it stable from
+            // the cycle mac_done fires for the final pixel through to the
+            // next layer dispatch.
+            pixel_done <= pixel_done_latch;
+        end
+    end
+
+
+    end else if (K_PAR == 8) begin : g_walk_kpar8
+    // [KPAR8 2026-06-10] FAST eligibility (all per-layer constants): dense with
+    // 8-aligned IC and an 8-aligned weight base (and IC>=8). Every MBV2
+    // pointwise dispatch qualifies AND (post [FC-PAD]) the FC dispatch
+    // (base 13416 % 8 == 0); depthwise (cfg_depthwise=1) falls back to the
+    // SERIAL walk below (any alignment, 3-bit subword select).
+    // [KPAR4-RN 2026-06-10] eligibility EXTENDED to dense KxK (was 1x1-
+    // only). For KH*KW>1 the fast walk REQUIRES that layer's weight region
+    // be POS-MAJOR transposed in the repacked banks (word at (kh*KW+kw)*IC
+    // + ic; scripts/repack_resnet_kpar4_banks.py) because the walk issues 4
+    // consecutive ic of ONE (kh,kw) per cycle. For 1x1 the transposed and
+    // legacy layouts are IDENTICAL (pos==0), so MBV2 (whose dense dispatches
+    // are ALL 1x1 — its 12 non-1x1 dispatches are depthwise and stay
+    // excluded by cfg_depthwise) is bit- and cycle-identical.
+    wire        kpar_fast = (!cfg_depthwise)
+                          && (cfg_ic[2:0] == 3'b000) && (cfg_ic[11:3] != 9'd0)
+                          && (cfg_weight_uram_base[2:0] == 3'b000);
+    // Last GROUP: fast mode issues k_cnt..k_cnt+7 per cycle, so the final
+    // issue is at k_cnt == K_TOTAL-8 (fast layers have K_TOTAL%8==0 by the
+    // eligibility gate: K_TOTAL = IC for 1x1). Serial keeps the m1 compare.
+    wire        k_at_last  = kpar_fast ? (k_cnt == (k_total[15:0] - 16'd8))
+                                       : (k_cnt == k_total_m1);
+    // Per-tap valid of the group issued this cycle (general partial-group
+    // form kept for safety; always 4'b1111 on MBV2 fast layers).
+    wire [16:0] k_cnt_w    = {1'b0, k_cnt};
+    wire [7:0]  fast_mask  = { (k_cnt_w + 17'd7) < k_total,
+                               (k_cnt_w + 17'd6) < k_total,
+                               (k_cnt_w + 17'd5) < k_total,
+                               (k_cnt_w + 17'd4) < k_total,
+                               (k_cnt_w + 17'd3) < k_total,
+                               (k_cnt_w + 17'd2) < k_total,
+                               (k_cnt_w + 17'd1) < k_total,
+                               1'b1 };
+    reg  [7:0]  k_tap_mask_r;
+    assign k_tap_mask = k_tap_mask_r;
+
+    // [KPAR4-RN] FAST weight address: POS-MAJOR transposed layout, offset =
+    // pass_offset + (kh*KW + kw)*IC + ic. Equals the legacy ic-major offset
+    // when KH==KW==1 (kpos9==0). The fast 4-group's old address is 4-aligned
+    // (base, pass_offset, pos*IC and ic are all %4==0), so the skeleton's
+    // group export (addr>>2) lands on one repacked line, subword select 0.
+    wire [8:0]  kpos9            = kh_offset + {6'b0, kw_cnt};        // kh*KW + kw <= 48
+    wire [20:0] kpos_ic          = {12'b0, kpos9} * {9'b0, cfg_ic};   // <= 48*2048
+    wire [21:0] weight_offset_fast =
+        {2'b0, pass_offset} + {1'b0, kpos_ic} + {10'b0, ic_cnt};
+    wire [21:0] weight_addr_next_fast = cfg_weight_uram_base + weight_offset_fast;
+
+    // ----------------------------------------------------------------------
+    // Sequential body. Single always block keeps the reset state and the
+    // per-cycle walk in one place.
+    // ----------------------------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ic_cnt              <= 12'd0;
+            kw_cnt              <= 3'd0;
+            kh_cnt              <= 3'd0;
+            k_cnt               <= 16'd0;
+            run_active_d        <= 1'b0;
+            pixel_done_latch    <= 1'b0;
+
+            weight_rd_addr      <= 22'd0;
+            weight_rd_en        <= 1'b0;
+            bias_rd_addr        <= 22'd0;
+            bias_rd_en          <= 1'b0;
+            act_in_rd_addr      <= 16'd0;
+            act_in_rd_en        <= 1'b0;
+            act_in_ic_byte_idx  <= 8'd0;
+            act_out_wr_addr     <= 16'd0;
+            k_index             <= 16'd0;
+            mac_done            <= 1'b0;
+            pixel_done          <= 1'b0;
+            k_tap_mask_r        <= 8'b0000_0001;   // [KPAR8]
+        end else begin
+            // ---- one-cycle defaults ----
+            mac_done    <= 1'b0;
+            bias_rd_en  <= 1'b0;
+
+            run_active_d <= run_active;
+
+            // ---- rising-edge actions: reset inner counters, issue bias read ----
+            if (run_active && !run_active_d) begin
+                ic_cnt           <= 12'd0;
+                kw_cnt           <= 3'd0;
+                kh_cnt           <= 3'd0;
+                k_cnt            <= 16'd0;
+                bias_rd_addr     <= cfg_bias_uram_base + {19'd0, oc_pass_idx};
+                bias_rd_en       <= 1'b1;
+                // First k=0 of the new layer: clear the layer-done latch.
+                if (oc_pass_idx == 3'd0 && pixel_h == 8'd0 && pixel_w == 8'd0) begin
+                    pixel_done_latch <= 1'b0;
+                end
+            end
+
+            // ---- per-cycle walk ----
+            if (run_active) begin
+                // Emit URAM weight read every active cycle.
+                // [KPAR4-RN] fast layers use the pos-major transposed layout.
+                weight_rd_addr      <= kpar_fast ? weight_addr_next_fast
+                                                 : weight_addr_next;
+                // 2026-05-24 fix: gating must allow the LAST legitimate
+                // weight read while still suppressing the stray read that
+                // would otherwise leak into the cycle after k_at_last.
+                //
+                // The stale `~k_at_last` gating dropped the read at cycle
+                // T(k_at_last)+1, but T(k_at_last)+1 is exactly where the
+                // address generator's address line carries the FINAL legit
+                // weight (the BASE+K_TOTAL-1 address was computed during
+                // T(k_at_last) inside the same `if (run_active)` branch
+                // and registered into weight_rd_addr). Suppressing it
+                // dropped the very last MAC of every output pixel, which
+                // shows up as 2 off-by-one mismatches on node_conv_246
+                // (pixel[1,4] ch124 and ch238) where the accumulator
+                // landed exactly on the requant rounding boundary.
+                //
+                // Gating on `~mac_done` (the REGISTERED output that fires
+                // exactly ONE cycle after k_at_last) preserves the last
+                // legit read AND suppresses the stray cleanly:
+                //   T(k_at_last):    mac_done=0 -> weight_rd_en<=1
+                //                    (last legit read fires next cycle)
+                //   T(k_at_last)+1:  mac_done=1 -> weight_rd_en<=0
+                //                    (stray suppressed)
+                //   T(k_at_last)+2:  state == ST_REQUANT, run_active=0;
+                //                    else branch enforces weight_rd_en=0.
+                weight_rd_en        <= ~mac_done;
+
+                // Activation read — gated by receptive-field bounds AND
+                // by ~mac_done for the same reason as weight_rd_en above.
+                act_in_rd_addr      <= act_in_addr_n;
+                act_in_rd_en        <= in_bounds & ~mac_done;
+                act_in_ic_byte_idx  <= ic_cnt[7:0];
+
+                // Output BRAM write address (constant within an OC pass).
+                act_out_wr_addr     <= act_out_addr_n;
+
+                // k_index mirrors the running k_cnt counter.
+                k_index             <= k_cnt;
+
+                // [KPAR4] mask registered in lockstep with weight_rd_addr.
+                k_tap_mask_r        <= kpar_fast ? fast_mask : 8'b0000_0001;
+
+                // ---- advance (ic, kw, kh) — ic innermost ----
+                //
+                // 2026-05-24 fix (conv_290 cluster): gate the advance block
+                // on `~mac_done`. The cycle AFTER k_at_last fires keeps
+                // `run_active=1` because the FSM transitions ST_RUN ->
+                // ST_REQUANT one cycle later. Without this gate the walk's
+                // else branch runs in that cycle and bumps ic_cnt from 0
+                // (just reset by k_at_last) to 1. The leftover ic_cnt=1
+                // persists through ST_REQUANT/ST_DRAIN and into the next
+                // OC pass's ST_RUN rising edge, where the walk overrides
+                // the rising-edge reset (later non-blocking assigns win) —
+                // making every pass after the first one skip ic=0. The
+                // fix preserves the LAST legitimate MAC (which fires from
+                // weight_rd_addr / act_in_rd_addr LATCHED in cycle T(k_at_last))
+                // because the address/enable updates above remain ungated.
+                if (!mac_done) begin
+                    if (k_at_last) begin
+                        // End of inner loop for this (oc_pass, pixel). Pulse
+                        // mac_done; reset counters in case the FSM keeps
+                        // run_active high (it does not in the locked FSM, but
+                        // resetting here makes the module robust to either).
+                        mac_done <= 1'b1;
+                        ic_cnt   <= 12'd0;
+                        kw_cnt   <= 3'd0;
+                        kh_cnt   <= 3'd0;
+                        k_cnt    <= 16'd0;
+                        if (last_pixel && last_oc_pass) begin
+                            pixel_done_latch <= 1'b1;
+                        end
+                    end else if (kpar_fast && (ic_cnt == (loop_ic - 12'd8))) begin
+                        // [KPAR4-RN] FAST ic-wrap: last 4-group of this
+                        // (kh,kw) position -> advance kw/kh, k_cnt += 4.
+                        // UNREACHABLE for 1x1 (there k_at_last fires on the
+                        // same cycle and wins above) -> MBV2 fast walks are
+                        // cycle-identical; only dense KxK (ResNet) takes it.
+                        ic_cnt <= 12'd0;
+                        if (kw_cnt == (cfg_kw - 3'd1)) begin
+                            kw_cnt <= 3'd0;
+                            kh_cnt <= kh_cnt + 3'd1;
+                        end else begin
+                            kw_cnt <= kw_cnt + 3'd1;
+                        end
+                        k_cnt <= k_cnt + 16'd8;
+                    end else if (!kpar_fast && (ic_cnt == (loop_ic - 12'd1))) begin   // [DW-ENGINE P1] loop_ic==1 in DW mode
+                        ic_cnt <= 12'd0;
+                        if (kw_cnt == (cfg_kw - 3'd1)) begin
+                            kw_cnt <= 3'd0;
+                            kh_cnt <= kh_cnt + 3'd1;
+                        end else begin
+                            kw_cnt <= kw_cnt + 3'd1;
+                        end
+                        k_cnt <= k_cnt + 16'd1;
+                    end else begin
+                        ic_cnt <= ic_cnt + (kpar_fast ? 12'd8 : 12'd1);   // [KPAR8]
+                        k_cnt  <= k_cnt  + (kpar_fast ? 16'd8 : 16'd1);   // [KPAR8]
                     end
                 end
             end else begin

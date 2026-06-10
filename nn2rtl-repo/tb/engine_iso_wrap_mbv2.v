@@ -53,7 +53,9 @@ module engine_iso_wrap_mbv2 (
     wire [2047:0] eng_act_out_wr_data;
     wire [21:0]   eng_weight_rd_addr;
     wire          eng_weight_rd_en;
-`ifdef KPAR4
+`ifdef KPAR8
+    wire [16383:0] eng_weight_rd_data;    // [KPAR8 2026-06-10] 8 tap-major 2048b words
+`elsif KPAR4
     wire [8191:0] eng_weight_rd_data;     // [KPAR4] 4 tap-major 2048b words
 `else
     wire [2047:0] eng_weight_rd_data;     // 2048b = 256 INT8 weights (mbv2)
@@ -69,7 +71,27 @@ module engine_iso_wrap_mbv2 (
     // Mirrors nn2rtl_top.v: weight bus = concat of low 256 bits of each bank,
     // bank0 lowest. The engine consumes the full 2048-bit bus (WGT_W=8).
     wire [16:0]  wbank_addr = eng_weight_rd_addr[16:0];
-`ifdef KPAR4
+`ifdef KPAR8
+    // [KPAR8 2026-06-10] repacked 8-taps-per-line banks (group-addressed by the engine;
+    // FC-PAD relocated image — pair with the patched scheduler/cfg base 13416).
+    wire [2303:0] b0,b1,b2,b3,b4,b5,b6,b7;
+    genvar kp_tap8;
+    generate for (kp_tap8 = 0; kp_tap8 < 8; kp_tap8 = kp_tap8 + 1) begin : g_kpar8_wbus
+        assign eng_weight_rd_data[kp_tap8*2048 +: 2048] = {
+            b7[kp_tap8*288 +: 256], b6[kp_tap8*288 +: 256],
+            b5[kp_tap8*288 +: 256], b4[kp_tap8*288 +: 256],
+            b3[kp_tap8*288 +: 256], b2[kp_tap8*288 +: 256],
+            b1[kp_tap8*288 +: 256], b0[kp_tap8*288 +: 256]};
+    end endgenerate
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank0_kp8.mem")) u0(.clk(clk),.rd_addr(wbank_addr),.rd_data(b0),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank1_kp8.mem")) u1(.clk(clk),.rd_addr(wbank_addr),.rd_data(b1),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank2_kp8.mem")) u2(.clk(clk),.rd_addr(wbank_addr),.rd_data(b2),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank3_kp8.mem")) u3(.clk(clk),.rd_addr(wbank_addr),.rd_data(b3),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank4_kp8.mem")) u4(.clk(clk),.rd_addr(wbank_addr),.rd_data(b4),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank5_kp8.mem")) u5(.clk(clk),.rd_addr(wbank_addr),.rd_data(b5),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank6_kp8.mem")) u6(.clk(clk),.rd_addr(wbank_addr),.rd_data(b6),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(2304), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank7_kp8.mem")) u7(.clk(clk),.rd_addr(wbank_addr),.rd_data(b7),.rd_en(eng_weight_rd_en));
+`elsif KPAR4
     // [KPAR4] repacked 4-taps-per-line banks (group-addressed by the engine).
     wire [1151:0] b0,b1,b2,b3,b4,b5,b6,b7;
     genvar kp_tap;
@@ -120,7 +142,10 @@ module engine_iso_wrap_mbv2 (
     // ---- the REAL engine, parameterised for mbv2 INT8 weight slots ----
     shared_engine #(
         .WGT_W(8),
-`ifdef KPAR4
+`ifdef KPAR8
+        .URAM_DATA_W(16384),    // [KPAR8 2026-06-10] 8 tap-major words per line
+        .K_PAR(8),
+`elsif KPAR4
         .URAM_DATA_W(8192),     // [KPAR4] 4 tap-major words per line
         .K_PAR(4),
 `else

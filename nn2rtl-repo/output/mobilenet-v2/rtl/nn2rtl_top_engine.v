@@ -338,7 +338,7 @@ module nn2rtl_top (
     wire                       engine_act_out_wr_en;
     wire [21:0]                engine_weight_rd_addr;
     wire                       engine_weight_rd_en;
-    wire [8191:0]              engine_weight_rd_data;  // [KPAR4] 4 tap-major 2048b words per (group) line
+    wire [16383:0]             engine_weight_rd_data;  // [KPAR8 2026-06-10] 8 tap-major 2048b words per (group) line
     wire [21:0]                engine_bias_rd_addr;
     wire                       engine_bias_rd_en;
     wire [8191:0]              engine_bias_rd_data;
@@ -1428,23 +1428,26 @@ module nn2rtl_top (
     // words appended after the DW-EXT set: node_linear@13413 = 4 oc_passes x 1280 taps.
     // Depth now exceeds 2^14 -> bank ADDR_W 14->15 and the rd_addr slice [13:0]->[14:0].)
     // Address path: engine_weight_rd_addr[14:0] -> each bank's rd_addr.
-    wire [12:0] weight_bank_rd_addr = engine_weight_rd_addr[12:0];  // [KPAR4] GROUP-addressed: 4634 wide lines (engine exports old>>2)
-    wire [1151:0] uram_bank0_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank1_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank2_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank3_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank4_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank5_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank6_rd_data;  // [KPAR4] 4 x 288b tap-major
-    wire [1151:0] uram_bank7_rd_data;  // [KPAR4] 4 x 288b tap-major
+    wire [11:0] weight_bank_rd_addr = engine_weight_rd_addr[11:0];  // [KPAR8 2026-06-10] GROUP-addressed: 2317 wide lines (engine exports old>>3)
+    wire [2303:0] uram_bank0_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank1_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank2_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank3_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank4_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank5_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank6_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
+    wire [2303:0] uram_bank7_rd_data;  // [KPAR8 2026-06-10] 8 x 288b tap-major
 
     // [KPAR4] MAC bus = 4 tap-major 2048b words. Each repacked bank line
     // (1152b) packs the 4 old 288b words tap-major (old word 4g+j at bits
     // [j*288 +: 288] of line g — proof: scripts/repack_mbv2_kpar4_banks.py
     // P1/P2/P3). Within a tap, lanes keep the original bank-major order
     // (bank b = lanes 32b..32b+31, low 256 of the 288b word, bank0 lowest).
+    // [KPAR8 2026-06-10] 8 tap-major 2048b words per repacked 2304b bank line (old word
+    // 8g+j at bits [j*288 +: 288] of line g — proof: repack_mbv2_kpar8_banks.py
+    // P1..P4, incl. the FC-PAD relocation 13413->13416).
     genvar kp_tap;
-    generate for (kp_tap = 0; kp_tap < 4; kp_tap = kp_tap + 1) begin : g_kpar_wbus
+    generate for (kp_tap = 0; kp_tap < 8; kp_tap = kp_tap + 1) begin : g_kpar_wbus
         assign engine_weight_rd_data[kp_tap*2048 +: 2048] = {
             uram_bank7_rd_data[kp_tap*288 +: 256],
             uram_bank6_rd_data[kp_tap*288 +: 256],
@@ -1457,10 +1460,10 @@ module nn2rtl_top (
     end endgenerate
 
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank0_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank0_kp8.mem")
     ) u_uram_weight_bank0 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1468,10 +1471,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank1_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank1_kp8.mem")
     ) u_uram_weight_bank1 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1479,10 +1482,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank2_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank2_kp8.mem")
     ) u_uram_weight_bank2 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1490,10 +1493,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank3_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank3_kp8.mem")
     ) u_uram_weight_bank3 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1501,10 +1504,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank4_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank4_kp8.mem")
     ) u_uram_weight_bank4 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1512,10 +1515,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank5_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank5_kp8.mem")
     ) u_uram_weight_bank5 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1523,10 +1526,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank6_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank6_kp8.mem")
     ) u_uram_weight_bank6 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -1534,10 +1537,10 @@ module nn2rtl_top (
         .rd_en(engine_weight_rd_en)
     );
     uram_weight_bank #(
-        .DEPTH(4634),           // [KPAR4] ceil(18533/4) wide lines
-        .ADDR_W(13),
-        .WORD_W(1152),          // [KPAR4] 4 x 288b tap-major
-        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank7_kp4.mem")
+        .DEPTH(2317),           // [KPAR8 2026-06-10] (18533+3 FC pad)/8 wide lines
+        .ADDR_W(12),
+        .WORD_W(2304),          // [KPAR8 2026-06-10] 8 x 288b tap-major
+        .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank7_kp8.mem")
     ) u_uram_weight_bank7 (
         .clk(clk),
         .rd_addr(weight_bank_rd_addr),
@@ -2804,8 +2807,8 @@ module nn2rtl_top (
     // channel is unused by the scheduler (write-only); ground it.
     shared_engine #(
         .WGT_W(8),
-        .URAM_DATA_W(8192),     // [KPAR4] 4 tap-major 2048b words per line
-        .K_PAR(4),              // [KPAR4] 4 taps/cycle/lane (dense 1x1 fast walk; DW+FC serial fallback)
+        .URAM_DATA_W(16384),    // [KPAR8 2026-06-10] 8 tap-major 2048b words per line
+        .K_PAR(8),              // [KPAR8 2026-06-10] 8 taps/cycle/lane (dense 1x1 + FC fast walk; DW serial fallback)
         .MAX_IC(2048),
         .MAX_OC(2048),
         .MAX_IH(112),
