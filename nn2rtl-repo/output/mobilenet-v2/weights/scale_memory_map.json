@@ -332,6 +332,34 @@
       "base_word": 87,
       "depthwise": false,
       "fc": true
+    },
+    {
+      "module_id": "node_conv_818",
+      "oc": 96,
+      "oc_passes": 1,
+      "base_word": 91,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_830",
+      "oc": 144,
+      "oc_passes": 1,
+      "base_word": 92,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_848",
+      "oc": 192,
+      "oc_passes": 1,
+      "base_word": 93,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_890",
+      "oc": 576,
+      "oc_passes": 3,
+      "base_word": 94,
+      "depthwise": true
     }
   ]
 }
