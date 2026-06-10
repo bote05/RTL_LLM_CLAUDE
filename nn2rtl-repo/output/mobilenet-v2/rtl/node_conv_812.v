@@ -124,15 +124,18 @@ module node_conv_812 #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             out_full <= 1'b0;
-            out_data <= 256'd0;
         end else begin
             if (out_full && out_ready_in)
                 out_full <= 1'b0;
             if (dp_valid_out) begin
-                out_data <= dp_data_out;
                 out_full <= 1'b1;
             end
         end
+    end
+    // [K1-MBV2] out_data is skid DATA: sampled downstream only under
+    // out_full (reset-kept); written only under dp_valid_out (reset-kept).
+    always @(posedge clk) begin
+        if (dp_valid_out) out_data <= dp_data_out;
     end
 
     // ----------------- start_pulse generator (mirrors conv3x3 ref) -----------------
@@ -307,11 +310,71 @@ module node_conv_812 #(
 
     wire start_mac = sched_output_fires;
 
+    // [K1-MBV2] Block A: DATAPATH registers (sync-only, no reset) -- same
+    // method as ResNet K1 P2 (apply_k1_fdce_recode.py). prod_q is rewritten
+    // every cycle from the (no-reset) weight_q/tap_q stage and only reaches
+    // acc under mac_valid_q2 (reset-kept); acc is sync-cleared on ST_IDLE&
+    // start_mac / ST_OUTPUT oc-advance BEFORE the first gated accumulate of
+    // every pass; biased/scaled/dp_data_out follow strict write(STn)->read(STn+1)
+    // ordering and dp_data_out is only consumed under reset-kept valid/busy
+    // control. acc clears are placed LAST (NBA last-write-wins parity with
+    // the original single block). i/lane_i/bias_oc/sc_oc/out_oc/out_shift/
+    // out_round/v_tmp are referenced ONLY by this block after the move.
+    always @(posedge clk) begin
+            for (i = 0; i < MP_K; i = i + 1)
+                prod_q[i] <= $signed(weight_q[i]) * $signed(tap_q[i]);
+            if (mac_valid_q2 && mac_global_oc_q2 < C[5:0]) begin
+                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(sum_comb);
+            end
+            if (state == ST_BIAS) begin
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        bias_oc = oc_group * MP + lane_i;
+                        if (bias_oc < C)
+                            biased[lane_i] <= $signed(acc[lane_i]) + $signed(biases[bias_oc]);
+                        else
+                            biased[lane_i] <= {BIASED_W{1'b0}};
+                    end
+            end
+            if (state == ST_SCALE) begin
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        sc_oc = oc_group * MP + lane_i;
+                        if (sc_oc < C)
+                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed(scale_rom[sc_oc][15:0]);
+                        else
+                            scaled[lane_i] <= {SCALED_W{1'b0}};
+                    end
+            end
+            if (state == ST_OUTPUT) begin
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        out_oc = oc_group * MP + lane_i;
+                        if (out_oc < C) begin
+                            // [INVARIANT:ROUNDING]
+                            out_shift = scale_rom[out_oc][21:16];
+                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
+                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
+                            v_tmp = (scaled[lane_i] + out_round) >>> out_shift;
+                            dp_data_out[out_oc*8 +: 8] <=
+                                (v_tmp >  127) ?  8'sd127 :
+                                (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
+                        end
+                    end
+            end
+            // Accumulator clears LAST: textual-order parity with the
+            // original single block (clears overrode the accumulate).
+            if (state == ST_IDLE && start_mac) begin
+                for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
+                    acc[lane_i] <= {ACC_W{1'b0}};
+            end
+            if (state == ST_OUTPUT && oc_group != OC_PASSES - 1) begin
+                for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
+                    acc[lane_i] <= {ACC_W{1'b0}};
+            end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state            <= ST_IDLE;
             dp_valid_out     <= 1'b0;
-            dp_data_out      <= 256'd0;
             lane_counter     <= 3'd0;
             oc_group         <= 3'd0;
             mac_valid_q1     <= 1'b0;
@@ -321,28 +384,12 @@ module node_conv_812 #(
             mac_lane_q2      <= 3'd0;
             mac_global_oc_q2 <= 6'd0;
             mac_done_issuing <= 1'b0;
-            v_tmp            <= {SCALED_W{1'b0}};
-            for (i = 0; i < MP_K; i = i + 1)
-                prod_q[i] <= {PROD_W{1'b0}};
-            for (i = 0; i < MP; i = i + 1) begin
-                acc[i]    <= {ACC_W{1'b0}};
-                biased[i] <= {BIASED_W{1'b0}};
-                scaled[i] <= {SCALED_W{1'b0}};
-            end
         end else begin
             dp_valid_out <= 1'b0;
 
-            // Stage 2: registered parallel multiplies (one DSP per tap).
-            for (i = 0; i < MP_K; i = i + 1)
-                prod_q[i] <= $signed(weight_q[i]) * $signed(tap_q[i]);
             mac_valid_q2     <= mac_valid_q1;
             mac_lane_q2      <= mac_lane_q1;
             mac_global_oc_q2 <= mac_global_oc_q1;
-
-            // Stage 3: accumulator add (gated by lane validity)
-            if (mac_valid_q2 && mac_global_oc_q2 < C[5:0]) begin
-                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(sum_comb);
-            end
 
             case (state)
                 ST_IDLE: begin
@@ -353,8 +400,6 @@ module node_conv_812 #(
                         mac_valid_q1     <= 1'b0;
                         mac_valid_q2     <= 1'b0;
                         mac_done_issuing <= 1'b0;
-                        for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
-                            acc[lane_i] <= {ACC_W{1'b0}};
                     end
                 end
 
@@ -380,42 +425,17 @@ module node_conv_812 #(
                 end
 
                 ST_BIAS: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
-                        bias_oc = oc_group * MP + lane_i;
-                        if (bias_oc < C)
-                            biased[lane_i] <= $signed(acc[lane_i]) + $signed(biases[bias_oc]);
-                        else
-                            biased[lane_i] <= {BIASED_W{1'b0}};
-                    end
+                    // [K1-MBV2] biased[] writes moved to Block A (sync-only).
                     state <= ST_SCALE;
                 end
 
                 ST_SCALE: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
-                        sc_oc = oc_group * MP + lane_i;
-                        if (sc_oc < C)
-                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed(scale_rom[sc_oc][15:0]);
-                        else
-                            scaled[lane_i] <= {SCALED_W{1'b0}};
-                    end
+                    // [K1-MBV2] scaled[] writes moved to Block A (sync-only).
                     state <= ST_OUTPUT;
                 end
 
                 ST_OUTPUT: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
-                        out_oc = oc_group * MP + lane_i;
-                        if (out_oc < C) begin
-                            // [INVARIANT:ROUNDING]
-                            out_shift = scale_rom[out_oc][21:16];
-                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
-                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
-                            v_tmp = (scaled[lane_i] + out_round) >>> out_shift;
-                            dp_data_out[out_oc*8 +: 8] <=
-                                (v_tmp >  127) ?  8'sd127 :
-                                (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
-                        end
-                    end
-
+                    // [K1-MBV2] dp_data_out[]/v_tmp writes moved to Block A (sync-only).
                     if (oc_group == (OC_PASSES - 1)) begin
                         // [INVARIANT:VALID_OUT_LATENCY]
                         // [THROUGHPUT A2 2026-06-03] was hardcoded 3'd7 (MP=4 -> OC_PASSES=8).
@@ -426,8 +446,6 @@ module node_conv_812 #(
                     end else begin
                         oc_group     <= oc_group + 3'd1;
                         lane_counter <= 3'd0;
-                        for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
-                            acc[lane_i] <= {ACC_W{1'b0}};
                         state <= ST_MAC;
                     end
                 end

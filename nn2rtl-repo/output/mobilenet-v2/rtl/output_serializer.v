@@ -48,24 +48,38 @@ module output_serializer #(
     assign ready_out = !busy;
 
     /* verilator lint_off WIDTH */
+    // [K1-MBV2] buf_data/data_out are stream DATA (sync-only, no reset):
+    // buf_data is fully written on the accept edge and read strictly after
+    // (beats 1..NBEATS-1); data_out is sampled by the consumer only under
+    // valid_out (reset-kept). Guards replicate the original branch
+    // conditions exactly (busy/valid_in/valid_out/ready_in/beat control all
+    // keep their async reset). Write sites are mutually exclusive on busy.
+    always @(posedge clk) begin
+        if (!busy) begin
+            if (valid_in) begin
+                buf_data <= {{(BUF_W-W_IN){1'b0}}, data_in};
+                data_out <= data_in[0 +: BEATW];
+            end
+        end else begin
+            if (valid_out && ready_in && (beat != NBEATS-1)) begin
+                data_out <= buf_data[(beat + 1'b1)*BEATW +: BEATW];
+            end
+        end
+    end
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             busy      <= 1'b0;
             beat      <= {BCW{1'b0}};
             valid_out <= 1'b0;
             last_out  <= 1'b0;
-            data_out  <= {BEATW{1'b0}};
-            buf_data  <= {BUF_W{1'b0}};
         end else begin
             if (!busy) begin
                 if (valid_in) begin
                     // latch the word (zero-extended) and emit beat 0 (read directly from
                     // data_in this cycle since buf_data only settles next cycle).
-                    buf_data  <= {{(BUF_W-W_IN){1'b0}}, data_in};
                     busy      <= 1'b1;
                     beat      <= {BCW{1'b0}};
                     valid_out <= 1'b1;
-                    data_out  <= data_in[0 +: BEATW];
                     last_out  <= (NBEATS == 1);
                 end
             end else begin
@@ -76,7 +90,6 @@ module output_serializer #(
                         last_out  <= 1'b0;
                     end else begin
                         beat     <= beat + 1'b1;
-                        data_out <= buf_data[(beat + 1'b1)*BEATW +: BEATW];
                         last_out <= ((beat + 1'b1) == NBEATS-1);
                     end
                 end

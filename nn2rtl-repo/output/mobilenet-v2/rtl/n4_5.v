@@ -89,17 +89,19 @@ module n4_5 #(
         assign valid_out = valid_out_r;
         assign ready_in  = ready_in_r;
         assign data_out  = data_out_r;
+        // [K1-MBV2] data_out_r is DATAPATH: consumed downstream only under
+        // valid_out_r (reset-kept); written under valid_in (upstream valid
+        // chain is reset-held at t=0). Sync-only write -> FDRE.
+        always @(posedge clk) begin
+            if (valid_in) data_out_r <= requant_comb;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 valid_out_r <= 1'b0;
                 ready_in_r  <= 1'b1; // [INVARIANT:READY_IN_GATING]
-                data_out_r  <= 1152'd0;
             end else begin
                 valid_out_r <= valid_in; // [INVARIANT:VALID_OUT_LATENCY]
                 ready_in_r  <= 1'b1;     // [INVARIANT:READY_IN_GATING]
-                if (valid_in) begin
-                    data_out_r <= requant_comb;
-                end
             end
         end
     end else begin : g_bp
@@ -110,15 +112,18 @@ module n4_5 #(
         assign ready_in  = accept;
         assign valid_out = out_full;
         assign data_out  = out_data;
+        // [K1-MBV2] out_data is skid DATA: consumed only under out_full
+        // (reset-kept); written under accept && valid_in (control). -> FDRE.
+        always @(posedge clk) begin
+            if (accept && valid_in) out_data <= requant_comb;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 out_full <= 1'b0;
-                out_data <= 1152'd0;
             end else begin
                 if (out_full && out_ready_in)
                     out_full <= 1'b0;
                 if (accept && valid_in) begin
-                    out_data <= requant_comb;
                     out_full <= 1'b1;
                 end
             end

@@ -242,6 +242,19 @@ module retile_gather #(
     endgenerate
     assign data_out = emit_chunk;
 
+    // [K1-MBV2] buf0/buf1 are ping-pong gather DATA (sync-only, no reset):
+    // every consumed tile slice is rewritten during that pixel's N_TILES-beat
+    // gather before full0/full1 (reset-kept) marks the buffer drainable, and
+    // the drain reads rbuf only while valid_out (= rsel_full). Writes are
+    // gated by do_write = valid_in & wsel_empty (valid_in is the producer's
+    // reset-held valid; wsel/full* keep reset). FDCE -> FDRE on 2x FULL_W bits.
+    always @(posedge clk) begin
+        if (do_write) begin
+            if (wsel == 1'b0) buf0[g_idx*TILE_W +: TILE_W] <= data_in;
+            else              buf1[g_idx*TILE_W +: TILE_W] <= data_in;
+        end
+    end
+
     // DRAIN xfer.
     //   xfer = valid_out & ready_down & drain_en
     // ready_down is the consumer's RAW ready_in (and add skip/operand terms),
@@ -260,17 +273,14 @@ module retile_gather #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            buf0 <= {FULL_W{1'b0}};
-            buf1 <= {FULL_W{1'b0}};
             full0 <= 1'b0; full1 <= 1'b0;
             wsel  <= 1'b0; rsel  <= 1'b0;
             g_idx <= {GIDX_W{1'b0}};
             e_idx <= {EIDX_W{1'b0}};
         end else begin
             // ---- GATHER / write side (always-accept into the free buffer) ----
+            // ([K1-MBV2] buf0/buf1 data writes moved to the sync-only block above.)
             if (do_write) begin
-                if (wsel == 1'b0) buf0[g_idx*TILE_W +: TILE_W] <= data_in;
-                else              buf1[g_idx*TILE_W +: TILE_W] <= data_in;
                 if (g_idx == N_TILES[GIDX_W-1:0] - 1'b1) begin
                     g_idx <= {GIDX_W{1'b0}};
                     if (wsel == 1'b0) full0 <= 1'b1; else full1 <= 1'b1;

@@ -229,13 +229,19 @@ module node_conv_902 #(
         assign pix_valid       = accept_tile && last_tile;   // ONE-cycle pulse on tile 29
         assign ready_in_t      = tile_ready;
 
+        // [K1-MBV2] tile_acc is gather DATA: every consumed slice is
+        // rewritten during the pixel's N_TILES-tile gather before the
+        // last-tile core_valid_in pulse; writes are gated by accept_tile
+        // (valid_in_t & sched_ready_in, both reset-held). Sync-only -> FDRE.
+        always @(posedge clk) begin
+            if (accept_tile) tile_acc[in_tile*TILE_W +: TILE_W] <= data_in_t;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
-                tile_acc <= {PIX_W{1'b0}};
                 in_tile  <= {$clog2(N_TILES){1'b0}};
             end else begin
                 if (accept_tile) begin
-                    tile_acc[in_tile*TILE_W +: TILE_W] <= data_in_t;
+                    // ([K1-MBV2] tile_acc data write moved to Block A above.)
                     if (last_tile) in_tile <= {$clog2(N_TILES){1'b0}};
                     else           in_tile <= in_tile + 1'b1;
                 end
@@ -452,10 +458,70 @@ module node_conv_902 #(
     // out_pix. Unused (never read) in legacy/BP modes -> ZERO behavior change.
     reg             pix_out_ready;
 
+    // [K1-MBV2] Block A: DATAPATH registers (sync-only, no reset) -- same
+    // method as ResNet K1 P2 (apply_k1_fdce_recode.py). prod_q is rewritten
+    // every cycle from the (no-reset) weight_q/tap_q stage and only reaches
+    // acc under mac_valid_q2 (reset-kept); acc is sync-cleared on ST_IDLE&
+    // start_mac / ST_OUTPUT oc-advance BEFORE the first gated accumulate of
+    // every pass; biased/scaled/out_pix follow strict write(STn)->read(STn+1)
+    // ordering and out_pix is only consumed under reset-kept valid/busy
+    // control. acc clears are placed LAST (NBA last-write-wins parity with
+    // the original single block). i/lane_i/bias_oc/sc_oc/out_oc/out_shift/
+    // out_round/v_tmp are referenced ONLY by this block after the move.
+    always @(posedge clk) begin
+            for (i = 0; i < MP_K; i = i + 1)
+                prod_q[i] <= $signed(weight_q[i]) * $signed(tap_q[i]);
+            if (mac_valid_q2 && mac_global_oc_q2 < C[10:0]) begin
+                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(sum_comb);
+            end
+            if (state == ST_BIAS) begin
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        bias_oc = oc_group * MP + lane_i;
+                        if (bias_oc < C)
+                            biased[lane_i] <= $signed(acc[lane_i]) + $signed(biases[bias_oc]);
+                        else
+                            biased[lane_i] <= {BIASED_W{1'b0}};
+                    end
+            end
+            if (state == ST_SCALE) begin
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        sc_oc = oc_group * MP + lane_i;
+                        if (sc_oc < C)
+                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed(scale_rom[sc_oc][15:0]);
+                        else
+                            scaled[lane_i] <= {SCALED_W{1'b0}};
+                    end
+            end
+            if (state == ST_OUTPUT) begin
+                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
+                        out_oc = oc_group * MP + lane_i;
+                        if (out_oc < C) begin
+                            // [INVARIANT:ROUNDING]
+                            out_shift = scale_rom[out_oc][21:16];
+                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
+                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
+                            v_tmp = (scaled[lane_i] + out_round) >>> out_shift;
+                            out_pix[out_oc*8 +: 8] <=
+                                (v_tmp >  127) ?  8'sd127 :
+                                (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
+                        end
+                    end
+            end
+            // Accumulator clears LAST: textual-order parity with the
+            // original single block (clears overrode the accumulate).
+            if (state == ST_IDLE && start_mac) begin
+                for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
+                    acc[lane_i] <= {ACC_W{1'b0}};
+            end
+            if (state == ST_OUTPUT && oc_group != OC_PASSES - 1) begin
+                for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
+                    acc[lane_i] <= {ACC_W{1'b0}};
+            end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state            <= ST_IDLE;
-            out_pix          <= {PIX_W{1'b0}};
             dp_valid         <= 1'b0;
             dp_data          <= {BEAT_W{1'b0}};
             pix_out_ready    <= 1'b0;
@@ -469,14 +535,6 @@ module node_conv_902 #(
             mac_lane_q2      <= 4'd0;
             mac_global_oc_q2 <= 11'd0;
             mac_done_issuing <= 1'b0;
-            v_tmp            <= {SCALED_W{1'b0}};
-            for (i = 0; i < MP_K; i = i + 1)
-                prod_q[i] <= {PROD_W{1'b0}};
-            for (i = 0; i < MP; i = i + 1) begin
-                acc[i]    <= {ACC_W{1'b0}};
-                biased[i] <= {BIASED_W{1'b0}};
-                scaled[i] <= {SCALED_W{1'b0}};
-            end
         end else begin
             // Defaults: valid_out drops unless re-asserted; emit hi beat if
             // the prior cycle emitted lo. By the emit_hi cycle, out_pix has
@@ -490,17 +548,9 @@ module node_conv_902 #(
                 emit_hi  <= 1'b0;
             end
 
-            // Stage 2: registered parallel multiplies (one DSP per tap).
-            for (i = 0; i < MP_K; i = i + 1)
-                prod_q[i] <= $signed(weight_q[i]) * $signed(tap_q[i]);
             mac_valid_q2     <= mac_valid_q1;
             mac_lane_q2      <= mac_lane_q1;
             mac_global_oc_q2 <= mac_global_oc_q1;
-
-            // Stage 3: accumulator add (gated by lane validity)
-            if (mac_valid_q2 && mac_global_oc_q2 < C[10:0]) begin
-                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(sum_comb);
-            end
 
             case (state)
                 ST_IDLE: begin
@@ -511,8 +561,6 @@ module node_conv_902 #(
                         mac_valid_q1     <= 1'b0;
                         mac_valid_q2     <= 1'b0;
                         mac_done_issuing <= 1'b0;
-                        for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
-                            acc[lane_i] <= {ACC_W{1'b0}};
                     end
                 end
 
@@ -538,42 +586,17 @@ module node_conv_902 #(
                 end
 
                 ST_BIAS: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
-                        bias_oc = oc_group * MP + lane_i;
-                        if (bias_oc < C)
-                            biased[lane_i] <= $signed(acc[lane_i]) + $signed(biases[bias_oc]);
-                        else
-                            biased[lane_i] <= {BIASED_W{1'b0}};
-                    end
+                    // [K1-MBV2] biased[] writes moved to Block A (sync-only).
                     state <= ST_SCALE;
                 end
 
                 ST_SCALE: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
-                        sc_oc = oc_group * MP + lane_i;
-                        if (sc_oc < C)
-                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed(scale_rom[sc_oc][15:0]);
-                        else
-                            scaled[lane_i] <= {SCALED_W{1'b0}};
-                    end
+                    // [K1-MBV2] scaled[] writes moved to Block A (sync-only).
                     state <= ST_OUTPUT;
                 end
 
                 ST_OUTPUT: begin
-                    for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
-                        out_oc = oc_group * MP + lane_i;
-                        if (out_oc < C) begin
-                            // [INVARIANT:ROUNDING]
-                            out_shift = scale_rom[out_oc][21:16];
-                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
-                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
-                            v_tmp = (scaled[lane_i] + out_round) >>> out_shift;
-                            out_pix[out_oc*8 +: 8] <=
-                                (v_tmp >  127) ?  8'sd127 :
-                                (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
-                        end
-                    end
-
+                    // [K1-MBV2] out_pix[]/v_tmp writes moved to Block A (sync-only).
                     if (oc_group == OC_PASSES - 1) begin
                         // [INVARIANT:VALID_OUT_LATENCY]
                         // Drive lo beat (ch 0..511) THIS cycle, same latency
@@ -590,8 +613,6 @@ module node_conv_902 #(
                     end else begin
                         oc_group     <= oc_group + 8'd1;
                         lane_counter <= 4'd0;
-                        for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1)
-                            acc[lane_i] <= {ACC_W{1'b0}};
                         state <= ST_MAC;
                     end
                 end
@@ -635,15 +656,20 @@ module node_conv_902 #(
             end
         end
 
+        // [K1-MBV2] out_lat is drain DATA: latched whole-pixel under
+        // pix_out_ready (reset-kept pulse; skid_block guarantees !out_busy)
+        // and consumed (data_out_t) only while out_busy (reset-kept).
+        always @(posedge clk) begin
+            if (pix_out_ready) out_lat <= out_pix;
+        end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
-                out_lat  <= {PIX_W{1'b0}};
                 out_tile <= {$clog2(ON_TILES){1'b0}};
                 out_busy <= 1'b0;
             end else begin
                 if (pix_out_ready) begin
-                    // Capture the full pixel. (skid_block guarantees !out_busy here.)
-                    out_lat  <= out_pix;
+                    // ([K1-MBV2] out_lat data write moved to Block A above;
+                    // skid_block guarantees !out_busy here.)
                     out_tile <= {$clog2(ON_TILES){1'b0}};
                     out_busy <= 1'b1;
                 end else if (out_busy && out_ready_in_t) begin

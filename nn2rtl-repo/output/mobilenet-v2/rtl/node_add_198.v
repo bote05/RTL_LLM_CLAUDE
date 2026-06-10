@@ -45,15 +45,18 @@ module node_add_198 #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             out_full <= 1'b0;
-            out_data <= 192'd0;
         end else begin
             if (out_full && out_ready_in)
                 out_full <= 1'b0;
             if (dp_valid_out) begin
-                out_data <= dp_data_out;
                 out_full <= 1'b1;
             end
         end
+    end
+    // [K1-MBV2] out_data is skid DATA: sampled downstream only under
+    // out_full (reset-kept); written only under dp_valid_out (reset-kept).
+    always @(posedge clk) begin
+        if (dp_valid_out) out_data <= dp_data_out;
     end
 
     localparam integer OC               = 24;
@@ -101,13 +104,28 @@ module node_add_198 #(
                      (shifted < -128) ? -8'sd128 :
                      shifted[7:0];
 
+    // [K1-MBV2] Block A: array/data writes (sync-only) -- node_add_1
+    // precedent (ResNet K1 P9/P10 analog). input_buf is fully rewritten on
+    // the accept edge before the RUN pipe reads it; every consumed
+    // dp_data_out byte is written by the 3-stage pipe (stage2_valid covers
+    // ch 0..OC-1) before dp_valid_out pulses; both guards replicate the
+    // original conditions on reset-kept control. lhs/rhs/sum MAC pipes and
+    // all stage*_valid/idx control KEEP their async reset.
+    always @(posedge clk) begin
+        if (state == ST_IDLE && valid_in && !skid_block) begin
+            input_buf <= data_in;
+        end
+        if (state == ST_RUN && stage2_valid) begin
+                        // [INVARIANT:ROUNDING]
+                        dp_data_out[stage2_idx*8 +: 8] <= sat_out;
+        end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state         <= ST_IDLE;
             ready_in      <= 1'b1;                       // [INVARIANT:READY_IN_GATING]
             dp_valid_out  <= 1'b0;
-            dp_data_out   <= {OUTPUT_WIDTH{1'b0}};
-            input_buf     <= {INPUT_WIDTH{1'b0}};
             ch_idx        <= {CH_IDX_W{1'b0}};
             stage1_idx    <= {CH_IDX_W{1'b0}};
             stage2_idx    <= {CH_IDX_W{1'b0}};
@@ -124,7 +142,6 @@ module node_add_198 #(
                     stage1_valid <= 1'b0;
                     stage2_valid <= 1'b0;
                     if (valid_in && !skid_block) begin
-                        input_buf <= data_in;
                         ch_idx    <= {CH_IDX_W{1'b0}};
                         state     <= ST_RUN;
                         ready_in  <= 1'b0;               // [INVARIANT:READY_IN_GATING]
@@ -153,8 +170,6 @@ module node_add_198 #(
 
                     // Stage 3 — arithmetic shift, saturate, pack into data_out.
                     if (stage2_valid) begin
-                        // [INVARIANT:ROUNDING]
-                        dp_data_out[stage2_idx*8 +: 8] <= sat_out;
                         if (stage2_idx == OC - 1) begin
                             dp_valid_out <= 1'b1;        // [INVARIANT:VALID_OUT_LATENCY]
                             state     <= ST_IDLE;

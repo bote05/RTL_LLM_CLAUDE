@@ -108,6 +108,22 @@ module node_mean #(
         end
     end
 
+    // [K1-MBV2] emit_data is DATAPATH: all 1280 bytes are written during
+    // ST_PACK (pack_idx 0..79) BEFORE emit_busy rises, and data_out is
+    // sampled only under valid_out (= emit_busy, reset-kept). This block is
+    // SEPARATE from (and does not touch) the BRAM-critical tiled-accumulate
+    // sync-only block above (acc_mem/scaled_mem/rounded_mem untouched).
+    // `plane` is referenced ONLY by this block after the move.
+    always @(posedge clk) begin
+        if (state == ST_PACK) begin
+                    for (plane = 0; plane < SCALE_LANES; plane = plane + 1)
+                        emit_data[(pack_idx*SCALE_LANES + plane)*8 +: 8] <=
+                            ($signed(rounded_mem[pack_idx][plane*ROUNDED_W +: ROUNDED_W]) >  16'sd127)  ?  8'sd127 :
+                            ($signed(rounded_mem[pack_idx][plane*ROUNDED_W +: ROUNDED_W]) < -16'sd128)  ? -8'sd128 :
+                                                                       rounded_mem[pack_idx][plane*ROUNDED_W +: 8];
+        end
+    end
+
     // ---- FSM + decoupled emitter (single driver for emit_busy/emit_tile/state/counters) ----
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -120,7 +136,6 @@ module node_mean #(
             ready_in   <= 1'b1;
             emit_busy  <= 1'b0;
             emit_tile  <= 3'd0;
-            emit_data  <= {(C*8){1'b0}};
         end else begin
             // --- decoupled emitter: drains 5 beats independent of `state` ---
             if (emit_busy && emit_accept) begin
@@ -174,12 +189,8 @@ module node_mean #(
                 end
 
                 ST_PACK: begin
-                    // serialized clamp+pack: 16 channels/cycle (pack_idx 0..79) -> emit_data.
-                    for (plane = 0; plane < SCALE_LANES; plane = plane + 1)
-                        emit_data[(pack_idx*SCALE_LANES + plane)*8 +: 8] <=
-                            ($signed(rounded_mem[pack_idx][plane*ROUNDED_W +: ROUNDED_W]) >  16'sd127)  ?  8'sd127 :
-                            ($signed(rounded_mem[pack_idx][plane*ROUNDED_W +: ROUNDED_W]) < -16'sd128)  ? -8'sd128 :
-                                                                       rounded_mem[pack_idx][plane*ROUNDED_W +: 8];
+                    // [K1-MBV2] emit_data pack loop moved to the sync-only
+                    // block below (serialized clamp+pack, 16 ch/cycle).
                     if (pack_idx == SCALE_STEPS - 1) begin
                         pack_idx  <= 7'd0;
                         emit_busy <= 1'b1;

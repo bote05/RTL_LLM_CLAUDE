@@ -58,15 +58,18 @@ module node_linear #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             out_full <= 1'b0;
-            out_data <= 8000'd0;
         end else begin
             if (out_full && out_ready_in)
                 out_full <= 1'b0;
             if (dp_valid_out) begin
-                out_data <= dp_data_out;
                 out_full <= 1'b1;
             end
         end
+    end
+    // [K1-MBV2] out_data is skid DATA: sampled downstream only under
+    // out_full (reset-kept); written only under dp_valid_out (reset-kept).
+    always @(posedge clk) begin
+        if (dp_valid_out) out_data <= dp_data_out;
     end
 
     localparam integer K             = 1280;
