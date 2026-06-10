@@ -32,8 +32,8 @@
 //     parked and the downstream is not ready. Arithmetic unchanged (== conv_812).
 module node_conv_836 #(
     parameter ENABLE_BACKPRESSURE = 0,
-    parameter WEIGHTS_PATH = "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_836_weights.hex",
-    parameter BIAS_PATH    = "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_836_bias.hex"
+    parameter WEIGHTS_PATH = "output/mobilenet-v2/weights/node_conv_836_weights.hex",
+    parameter BIAS_PATH    = "output/mobilenet-v2/weights/node_conv_836_bias.hex"
 )(
     input  wire           clk,
     input  wire           rst_n,
@@ -117,9 +117,9 @@ module node_conv_836 #(
     reg [31:0]        scale_rom [0:C-1];
 
     initial begin
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_836_weights.hex", weights);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_836_bias.hex", biases);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_836_scale.mem", scale_rom);
+        $readmemh("output/mobilenet-v2/weights/node_conv_836_weights.hex", weights);
+        $readmemh("output/mobilenet-v2/weights/node_conv_836_bias.hex", biases);
+        $readmemh("output/mobilenet-v2/weights/node_conv_836_scale.mem", scale_rom);
     end
 
     // ----------------- Scheduler / window wires -----------------

@@ -164,8 +164,8 @@ module node_conv_810 #(
         .MP_K(9),                 // tap-parallel; K_TOTAL=27 = 3*9 -> 3 group cycles
         .WGT_BITS(8),               // MBv2 INT8 (mp_k default is 4=INT4!)
         .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT), .SCALE_PATH(""),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_810_weights_mp_k_9.hex"),
-        .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_810_bias.hex")
+        .WEIGHTS_PATH("output/mobilenet-v2/weights/node_conv_810_weights_mp_k_9.hex"),
+        .BIAS_PATH("output/mobilenet-v2/weights/node_conv_810_bias.hex")
     ) dp (
         .clk(clk), .rst_n(rst_n),
         .window_flat(window_flat),

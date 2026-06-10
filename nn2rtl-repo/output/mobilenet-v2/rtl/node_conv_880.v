@@ -53,8 +53,8 @@ module node_conv_880 (
     reg signed [31:0] biases  [0:OC-1];
 
     initial begin
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_880_weights.hex", weights);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_880_bias.hex", biases);
+        $readmemh("output/mobilenet-v2/weights/node_conv_880_weights.hex", weights);
+        $readmemh("output/mobilenet-v2/weights/node_conv_880_bias.hex", biases);
     end
 
     localparam [2:0] ST_LOAD=3'd0, ST_RUNNING=3'd1, ST_BIAS=3'd2, ST_SCALE=3'd3, ST_OUTPUT=3'd4, ST_EMIT=3'd5;

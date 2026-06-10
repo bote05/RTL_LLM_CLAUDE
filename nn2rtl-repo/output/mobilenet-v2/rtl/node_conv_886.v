@@ -48,8 +48,8 @@ module node_conv_886 (
     reg signed [31:0] biases  [0:OC-1];
 
     initial begin
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_886_weights.hex", weights);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_886_bias.hex", biases);
+        $readmemh("output/mobilenet-v2/weights/node_conv_886_weights.hex", weights);
+        $readmemh("output/mobilenet-v2/weights/node_conv_886_bias.hex", biases);
     end
 
     // ---- Activation latch (one full input pixel = IC INT8 channels) ----

@@ -111,12 +111,12 @@ module node_linear #(
         // bank b holds the CONTIGUOUS flat slice [b*BANK_DEPTH, (b+1)*BANK_DEPTH) of the row-major
         // weight hex -> byte-identical to the prior single weights[] array. Last bank is partially
         // filled (covers indices 1048576..1279999); the unused tail is never addressed.
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_linear_weights_bank0.hex", bank0);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_linear_weights_bank1.hex", bank1);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_linear_weights_bank2.hex", bank2);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_linear_weights_bank3.hex", bank3);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_linear_weights_bank4.hex", bank4);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_linear_bias.hex", biases);
+        $readmemh("output/mobilenet-v2/weights/node_linear_weights_bank0.hex", bank0);
+        $readmemh("output/mobilenet-v2/weights/node_linear_weights_bank1.hex", bank1);
+        $readmemh("output/mobilenet-v2/weights/node_linear_weights_bank2.hex", bank2);
+        $readmemh("output/mobilenet-v2/weights/node_linear_weights_bank3.hex", bank3);
+        $readmemh("output/mobilenet-v2/weights/node_linear_weights_bank4.hex", bank4);
+        $readmemh("output/mobilenet-v2/weights/node_linear_bias.hex", biases);
     end
 
     localparam [2:0] ST_IDLE      = 3'd0;
