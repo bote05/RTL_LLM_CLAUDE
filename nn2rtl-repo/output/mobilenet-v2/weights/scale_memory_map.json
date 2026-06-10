@@ -324,6 +324,14 @@
       "oc_passes": 3,
       "base_word": 84,
       "depthwise": true
+    },
+    {
+      "module_id": "node_linear",
+      "oc": 1000,
+      "oc_passes": 4,
+      "base_word": 87,
+      "depthwise": false,
+      "fc": true
     }
   ]
 }
