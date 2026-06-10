@@ -129,8 +129,11 @@ module node_conv_884 #(
     reg signed [7:0]  weights [0:C*K_TOTAL-1];
     (* rom_style = "block", ram_style = "block" *)
     reg signed [31:0] biases  [0:C-1];
-    // [PER-OC 2026-06-08] per-output-channel requant ROM: {shift[21:16], mult[15:0]} per OC
-    // (compute_scale_approx of the composite per-OC scale). Replaces the per-tensor SCALE_*.
+    // [PER-OC 2026-06-08][DW-CONSTSHIFT 2026-06-10] per-output-channel requant ROM. Slot is
+    // the PRE-WIDENED multiplier mult' = mult << (DW_FIXED_SHIFT - shift), bits [30:0]
+    // (< 2^31; the per-OC shift is folded OFFLINE -- scripts/apply_mbv2_dw_constshift.py /
+    // build_spatial_scale_mems.py). RTL applies ONE compile-time >>> DW_FIXED_SHIFT with a
+    // CONSTANT round, replacing the per-lane variable barrel shifter + round decode.
     (* rom_style = "block", ram_style = "block" *)
     reg [31:0]        scale_rom [0:C-1];
 
@@ -369,7 +372,17 @@ module node_conv_884 #(
     localparam integer BIAS_W        = 32;
     localparam integer BIASED_W      = 34;
     localparam integer SCALE_CONST_W = 16;
-    localparam integer SCALED_W      = BIASED_W + SCALE_CONST_W; // 50
+    // [DW-CONSTSHIFT 2026-06-10] constant-shift requant (FIT-FIX form proven on the ResNet
+    // engine requant_pipeline.v 2026-06-07): the scale .mem now holds the pre-widened
+    // mult' = mult << (DW_FIXED_SHIFT - shift) so the variable per-OC shift + variable
+    // round decode collapse into ONE compile-time arithmetic shift + constant round.
+    // Byte-exact identity (shift in [0,23], mult in [1,32767]):
+    //   floor((x*mult + 2^(s-1))/2^s) == floor((x*(mult<<(23-s)) + 2^22)/2^23).
+    localparam integer MULTP_W       = 32; // signed operand width for mult' ({1'b0, slot[30:0]})
+    localparam integer SCALED_W      = BIASED_W + MULTP_W; // 66 (34b x 32b product, no truncation)
+    localparam integer DW_FIXED_SHIFT = 23;
+    localparam signed [SCALED_W-1:0] DW_ROUND_CONST =
+        {{(SCALED_W-1){1'b0}}, 1'b1} <<< (DW_FIXED_SHIFT - 1);
 
     localparam signed [SCALE_CONST_W-1:0] SCALE_MULT_CONST = SCALE_MULT[SCALE_CONST_W-1:0];
     localparam signed [SCALED_W-1:0]      SCALE_ROUND_BIAS =
@@ -387,8 +400,6 @@ module node_conv_884 #(
     reg signed [BIASED_W-1:0] biased [0:MP-1];
     (* use_dsp = "yes" *) reg signed [SCALED_W-1:0] scaled [0:MP-1];
     reg signed [SCALED_W-1:0] v_tmp;
-    reg        [5:0]          out_shift;  // [PER-OC] per-OC shift (OUTPUT stage)
-    reg signed [SCALED_W-1:0] out_round;  // [PER-OC] per-OC round bias (OUTPUT stage)
 
     // Pixel result is assembled into pix_out (4608b) as OC passes complete,
     // then streamed out as two 4096b beats by the output splitter below.
@@ -462,8 +473,8 @@ module node_conv_884 #(
     // every pass; biased/scaled/pix_out follow strict write(STn)->read(STn+1)
     // ordering and pix_out is only consumed under reset-kept valid/busy
     // control. acc clears are placed LAST (NBA last-write-wins parity with
-    // the original single block). i/lane_i/bias_oc/sc_oc/out_oc/out_shift/
-    // out_round/v_tmp are referenced ONLY by this block after the move.
+    // the original single block). i/lane_i/bias_oc/sc_oc/out_oc/v_tmp
+    // are referenced ONLY by this block after the move.
     always @(posedge clk) begin
             for (i = 0; i < MP_K; i = i + 1)
                 prod_q[i] <= $signed(weight_q[i]) * $signed(tap_q[i]);
@@ -483,7 +494,8 @@ module node_conv_884 #(
                     for (lane_i = 0; lane_i < MP; lane_i = lane_i + 1) begin
                         sc_oc = oc_group * MP + lane_i;
                         if (sc_oc < C)
-                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed(scale_rom[sc_oc][15:0]);
+                            // [DW-CONSTSHIFT] slot = pre-widened mult' (bits [30:0], positive)
+                            scaled[lane_i] <= $signed(biased[lane_i]) * $signed({1'b0, scale_rom[sc_oc][30:0]});
                         else
                             scaled[lane_i] <= {SCALED_W{1'b0}};
                     end
@@ -493,10 +505,9 @@ module node_conv_884 #(
                         out_oc = oc_group * MP + lane_i;
                         if (out_oc < C) begin
                             // [INVARIANT:ROUNDING]
-                            out_shift = scale_rom[out_oc][21:16];
-                            out_round = (out_shift == 6'd0) ? {SCALED_W{1'b0}}
-                                      : ({{(SCALED_W-1){1'b0}}, 1'b1} <<< (out_shift - 6'd1));
-                            v_tmp = (scaled[lane_i] + out_round) >>> out_shift;
+                            // [DW-CONSTSHIFT] per-OC shift folded offline into mult' ->
+                            // constant round + compile-time shift (no barrel shifter)
+                            v_tmp = (scaled[lane_i] + DW_ROUND_CONST) >>> DW_FIXED_SHIFT;
                             pix_out[out_oc*8 +: 8] <=
                                 (v_tmp >  127) ?  8'sd127 :
                                 (v_tmp < -128) ? -8'sd128 : v_tmp[7:0];
