@@ -19,7 +19,7 @@
 [tb][mbv2][vec0] cycle=1048576 in=50176/50176 out=0/1 tready=1 tvalid=0
 [dbg-out] beat 0 logit[0..7]=-28 15 34 26 54 2 22 -7
 [dbg-out] beat 1 logit[0..7]=-6 2 2 -22 34 -11 -10 5
-[tb][mbv2][vec0] frame done: first_input_cycle=18 last_output_cycle=1957409 e2e_cycles=1957391 out_beats=32
+[tb][mbv2][vec0] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
 [tb][mbv2][vec0] result=PASS mismatch_bytes=0 out_beats=32/1
 [tb][mbv2] total mismatching bytes = 0 / 32000
 [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
