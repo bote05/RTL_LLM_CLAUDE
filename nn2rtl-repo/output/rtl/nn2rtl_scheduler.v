@@ -557,20 +557,20 @@ module nn2rtl_scheduler (
             5'd0: act_in_base_word_rom = 16'd8192;
             5'd1: act_in_base_word_rom = 16'd0;
             5'd2: act_in_base_word_rom = 16'd8192;
-            5'd3: act_in_base_word_rom = 16'd8192;
+            5'd3: act_in_base_word_rom = 16'd12288;  // [OVERLAP] remap (was 8192); see ENGINE_OVERLAP_ANALYSIS.md
             5'd4: act_in_base_word_rom = 16'd0;
             5'd5: act_in_base_word_rom = 16'd8192;
-            5'd6: act_in_base_word_rom = 16'd8192;
+            5'd6: act_in_base_word_rom = 16'd12544;  // [OVERLAP] remap (was 8192); see ENGINE_OVERLAP_ANALYSIS.md
             5'd7: act_in_base_word_rom = 16'd8192;
             5'd8: act_in_base_word_rom = 16'd0;
             5'd9: act_in_base_word_rom = 16'd8192;
-            5'd10: act_in_base_word_rom = 16'd8192;
+            5'd10: act_in_base_word_rom = 16'd12800;  // [OVERLAP] remap (was 8192); see ENGINE_OVERLAP_ANALYSIS.md
             5'd11: act_in_base_word_rom = 16'd4096;
             5'd12: act_in_base_word_rom = 16'd8192;
-            5'd13: act_in_base_word_rom = 16'd8192;
+            5'd13: act_in_base_word_rom = 16'd12928;  // [OVERLAP] remap (was 8192); see ENGINE_OVERLAP_ANALYSIS.md
             5'd14: act_in_base_word_rom = 16'd0;
             5'd15: act_in_base_word_rom = 16'd8192;
-            5'd16: act_in_base_word_rom = 16'd8192;
+            5'd16: act_in_base_word_rom = 16'd13056;  // [OVERLAP] remap (was 8192); see ENGINE_OVERLAP_ANALYSIS.md
             default: act_in_base_word_rom = 16'd0;
         endcase
     end
@@ -753,7 +753,12 @@ module nn2rtl_scheduler (
                 spatial_stall = 1'b1;
             end
             S_WAIT_DONE: begin
-                spatial_stall = 1'b1;
+                // [OVERLAP] engine/spatial overlap: the chain keeps streaming
+                // while the engine runs. Safe because (1) every dispatch
+                // input region is loader-private (5 remapped to bank 3),
+                // (2) the engine no longer writes the act BRAM (FIFO-only
+                // output), (3) skip FIFOs bound at full-map < DEPTH.
+                spatial_stall = 1'b0;
             end
             S_WAIT_DRAIN: begin
                 // Fix 14: chain MUST run so the bridge can drain the

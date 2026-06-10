@@ -547,7 +547,10 @@ module nn2rtl_top (
     // subset of loads -> short routes), cutting that hop. BYTE-EXACT: synth-only attribute, no logic
     // or latency change (Verilator/iverilog ignore it -> e2e unchanged). Fit-safe: a few extra LUT/FF
     // (FF is only 37.8% used). NOT registered (that would shift control-gate latency -> deadlock risk).
-    (* max_fanout = 32 *) wire spatial_throttle = engine_busy | sched_spatial_stall;
+    // [OVERLAP] overlap: engine_busy no longer freezes the chain (the
+    // scheduler's spatial_stall covers config-write/start windows only).
+    (* max_fanout = 32 *) wire spatial_throttle = sched_spatial_stall;
+    wire _unused_engine_busy_throttle = engine_busy;
     (* max_fanout = 32 *) wire spatial_run      = ~spatial_throttle;
 
     assign s_axis_tready = node_conv_196_ready_in & spatial_run;
@@ -3232,7 +3235,7 @@ node_relu_48 u_node_relu_48 (
     wire ldr_node_conv_260_in_ready;
     stream_to_act_bram_bridge #(
         .BUS_W(256),
-        .BRAM_BASE_ADDR(8192),
+        .BRAM_BASE_ADDR(12288)  /* [OVERLAP] was 8192 */,
         .TOTAL_BRAM_WORDS(196)
     ) u_ldr_node_conv_260 (
         .clk(clk), .rst_n(rst_n),
@@ -3298,7 +3301,7 @@ node_relu_48 u_node_relu_48 (
     wire ldr_node_conv_272_in_ready;
     stream_to_act_bram_bridge #(
         .BUS_W(256),
-        .BRAM_BASE_ADDR(8192),
+        .BRAM_BASE_ADDR(12544)  /* [OVERLAP] was 8192 */,
         .TOTAL_BRAM_WORDS(196)
     ) u_ldr_node_conv_272 (
         .clk(clk), .rst_n(rst_n),
@@ -3364,7 +3367,7 @@ node_relu_48 u_node_relu_48 (
     wire ldr_node_conv_286_in_ready;
     stream_to_act_bram_bridge #(
         .BUS_W(256),
-        .BRAM_BASE_ADDR(8192),
+        .BRAM_BASE_ADDR(12800)  /* [OVERLAP] was 8192 */,
         .TOTAL_BRAM_WORDS(98)
     ) u_ldr_node_conv_286 (
         .clk(clk), .rst_n(rst_n),
@@ -3408,7 +3411,7 @@ node_relu_48 u_node_relu_48 (
     wire ldr_node_conv_294_in_ready;
     stream_to_act_bram_bridge #(
         .BUS_W(256),
-        .BRAM_BASE_ADDR(8192),
+        .BRAM_BASE_ADDR(12928)  /* [OVERLAP] was 8192 */,
         .TOTAL_BRAM_WORDS(98)
     ) u_ldr_node_conv_294 (
         .clk(clk), .rst_n(rst_n),
@@ -3452,7 +3455,7 @@ node_relu_48 u_node_relu_48 (
     wire ldr_node_conv_300_in_ready;
     stream_to_act_bram_bridge #(
         .BUS_W(256),
-        .BRAM_BASE_ADDR(8192),
+        .BRAM_BASE_ADDR(13056)  /* [OVERLAP] was 8192 */,
         .TOTAL_BRAM_WORDS(98)
     ) u_ldr_node_conv_300 (
         .clk(clk), .rst_n(rst_n),
@@ -3543,26 +3546,31 @@ node_relu_48 u_node_relu_48 (
     wire [14:0] act_wr_addr_final;
     wire [2047:0] act_wr_data_final;
     // Priority: engine > ldr0 > ldr1 > ... > ldr13.
-    assign ldr0_wr_grant = ldr0_wr_req & ~(engine_act_out_wr_en);
-    assign ldr1_wr_grant = ldr1_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req);
-    assign ldr2_wr_grant = ldr2_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req);
-    assign ldr3_wr_grant = ldr3_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req);
-    assign ldr4_wr_grant = ldr4_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req);
-    assign ldr5_wr_grant = ldr5_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req);
-    assign ldr6_wr_grant = ldr6_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req);
-    assign ldr7_wr_grant = ldr7_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req);
-    assign ldr8_wr_grant = ldr8_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req);
-    assign ldr9_wr_grant = ldr9_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req);
-    assign ldr10_wr_grant = ldr10_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req);
-    assign ldr11_wr_grant = ldr11_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req);
-    assign ldr12_wr_grant = ldr12_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req);
-    assign ldr13_wr_grant = ldr13_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req);
-    assign ldr14_wr_grant = ldr14_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req);
-    assign ldr15_wr_grant = ldr15_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req);
-    assign ldr16_wr_grant = ldr16_wr_req & ~(engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req);
-    assign act_wr_en_final   = engine_act_out_wr_en | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req;
-    assign act_wr_addr_final = engine_act_out_wr_en ? engine_act_out_wr_addr[14:0] : ldr0_wr_req ? ldr0_wr_addr : ldr1_wr_req ? ldr1_wr_addr : ldr2_wr_req ? ldr2_wr_addr : ldr3_wr_req ? ldr3_wr_addr : ldr4_wr_req ? ldr4_wr_addr : ldr5_wr_req ? ldr5_wr_addr : ldr6_wr_req ? ldr6_wr_addr : ldr7_wr_req ? ldr7_wr_addr : ldr8_wr_req ? ldr8_wr_addr : ldr9_wr_req ? ldr9_wr_addr : ldr10_wr_req ? ldr10_wr_addr : ldr11_wr_req ? ldr11_wr_addr : ldr12_wr_req ? ldr12_wr_addr : ldr13_wr_req ? ldr13_wr_addr : ldr14_wr_req ? ldr14_wr_addr : ldr15_wr_req ? ldr15_wr_addr : ldr16_wr_req ? ldr16_wr_addr : 15'd0;
-    assign act_wr_data_final = engine_act_out_wr_en ? engine_act_out_wr_data : ldr0_wr_req ? ldr0_wr_data : ldr1_wr_req ? ldr1_wr_data : ldr2_wr_req ? ldr2_wr_data : ldr3_wr_req ? ldr3_wr_data : ldr4_wr_req ? ldr4_wr_data : ldr5_wr_req ? ldr5_wr_data : ldr6_wr_req ? ldr6_wr_data : ldr7_wr_req ? ldr7_wr_data : ldr8_wr_req ? ldr8_wr_data : ldr9_wr_req ? ldr9_wr_data : ldr10_wr_req ? ldr10_wr_data : ldr11_wr_req ? ldr11_wr_data : ldr12_wr_req ? ldr12_wr_data : ldr13_wr_req ? ldr13_wr_data : ldr14_wr_req ? ldr14_wr_data : ldr15_wr_req ? ldr15_wr_data : ldr16_wr_req ? ldr16_wr_data : 2048'd0;
+    // [OVERLAP] engine act-BRAM write removed: act_out is DEAD in BRAM
+    // (sole act-mem read port = engine act_in; all inputs loader-filled;
+    // skips ride skip_fifo's; real outputs ride engine_output_fifo which
+    // taps engine_act_out_wr_en/data directly). Loaders now never lose
+    // grants to the engine during overlapped runs.
+    assign ldr0_wr_grant = ldr0_wr_req;
+    assign ldr1_wr_grant = ldr1_wr_req & ~(ldr0_wr_req);
+    assign ldr2_wr_grant = ldr2_wr_req & ~(ldr0_wr_req | ldr1_wr_req);
+    assign ldr3_wr_grant = ldr3_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req);
+    assign ldr4_wr_grant = ldr4_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req);
+    assign ldr5_wr_grant = ldr5_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req);
+    assign ldr6_wr_grant = ldr6_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req);
+    assign ldr7_wr_grant = ldr7_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req);
+    assign ldr8_wr_grant = ldr8_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req);
+    assign ldr9_wr_grant = ldr9_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req);
+    assign ldr10_wr_grant = ldr10_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req);
+    assign ldr11_wr_grant = ldr11_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req);
+    assign ldr12_wr_grant = ldr12_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req);
+    assign ldr13_wr_grant = ldr13_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req);
+    assign ldr14_wr_grant = ldr14_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req);
+    assign ldr15_wr_grant = ldr15_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req);
+    assign ldr16_wr_grant = ldr16_wr_req & ~(ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req);
+    assign act_wr_en_final   = ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req;
+    assign act_wr_addr_final = ldr0_wr_req ? ldr0_wr_addr : ldr1_wr_req ? ldr1_wr_addr : ldr2_wr_req ? ldr2_wr_addr : ldr3_wr_req ? ldr3_wr_addr : ldr4_wr_req ? ldr4_wr_addr : ldr5_wr_req ? ldr5_wr_addr : ldr6_wr_req ? ldr6_wr_addr : ldr7_wr_req ? ldr7_wr_addr : ldr8_wr_req ? ldr8_wr_addr : ldr9_wr_req ? ldr9_wr_addr : ldr10_wr_req ? ldr10_wr_addr : ldr11_wr_req ? ldr11_wr_addr : ldr12_wr_req ? ldr12_wr_addr : ldr13_wr_req ? ldr13_wr_addr : ldr14_wr_req ? ldr14_wr_addr : ldr15_wr_req ? ldr15_wr_addr : ldr16_wr_req ? ldr16_wr_addr : 15'd0;
+    assign act_wr_data_final = ldr0_wr_req ? ldr0_wr_data : ldr1_wr_req ? ldr1_wr_data : ldr2_wr_req ? ldr2_wr_data : ldr3_wr_req ? ldr3_wr_data : ldr4_wr_req ? ldr4_wr_data : ldr5_wr_req ? ldr5_wr_data : ldr6_wr_req ? ldr6_wr_data : ldr7_wr_req ? ldr7_wr_data : ldr8_wr_req ? ldr8_wr_data : ldr9_wr_req ? ldr9_wr_data : ldr10_wr_req ? ldr10_wr_data : ldr11_wr_req ? ldr11_wr_data : ldr12_wr_req ? ldr12_wr_data : ldr13_wr_req ? ldr13_wr_data : ldr14_wr_req ? ldr14_wr_data : ldr15_wr_req ? ldr15_wr_data : ldr16_wr_req ? ldr16_wr_data : 2048'd0;
 
     // ----- activation BRAM (Fix 8 + Fix 11: unified 6-bank URAM, 24576 × 2048b) -----
     act_unified_mem #(
@@ -3578,7 +3586,7 @@ node_relu_48 u_node_relu_48 (
         .wr_data(act_wr_data_final)
     );
     wire _unused_act_in_addr_hi  = |engine_act_in_rd_addr[15:15];
-    wire _unused_act_out_addr_hi = |engine_act_out_wr_addr[15:15];
+    wire _unused_act_out_addr_full = |engine_act_out_wr_addr;  // [OVERLAP] BRAM write dropped
     wire _unused_sched_bank_sels = |sched_input_bank_sel
                                   | |sched_output_bank_sel
                                   | |sched_skip_bank_reserved_mask;

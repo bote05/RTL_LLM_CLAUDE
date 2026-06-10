@@ -58,6 +58,10 @@ module node_conv_202 (
     reg [OUT_PIXEL_BITS-1:0] out_pix;
     reg [OUTB_W:0]           out_idx;
     reg                      out_busy;
+    // [OVL-PEND] one-deep pending slot: a pixel completing while the streamer
+    // is busy is parked here (never dropped) and reloaded when it frees.
+    reg                      out_pend;
+    reg [OUT_PIXEL_BITS-1:0] pend_pix;
     assign valid_out = out_busy;
     assign data_out  = out_pix[out_idx*TILE_BITS +: TILE_BITS];
 
@@ -70,12 +74,17 @@ module node_conv_202 (
             in_lo[in_beat_idx*TILE_BITS +: TILE_BITS] <= data_in;
         if (lib_valid_out_w && !out_busy)
             out_pix <= lib_data_out_w;
+        // [OVL-PEND] park / reload datapath
+        if (lib_valid_out_w && out_busy)
+            pend_pix <= lib_data_out_w;
+        if (out_busy && ready_out && (out_idx == OUT_BEATS-1) && out_pend)
+            out_pix <= pend_pix;
     end
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             frame_state<=ST_ARM; start_pulse<=1'b0; in_beat_idx<=0;
-            out_idx<=0; out_busy<=1'b0;
+            out_idx<=0; out_busy<=1'b0; out_pend<=1'b0;
         end else begin
             start_pulse <= 1'b0;
             case (frame_state)
@@ -92,9 +101,15 @@ module node_conv_202 (
                 out_idx  <= 0;
                 out_busy <= 1'b1;
             end else if (out_busy && ready_out) begin
-                if (out_idx == OUT_BEATS-1) out_busy <= 1'b0;
-                else                        out_idx  <= out_idx + 1'b1;
+                // [OVL-PEND] reload the parked pixel (stay busy) instead of idling
+                if (out_idx == OUT_BEATS-1) begin
+                    if (out_pend) begin out_idx <= 0; out_pend <= 1'b0; end
+                    else out_busy <= 1'b0;
+                end else out_idx <= out_idx + 1'b1;
             end
+            // [OVL-PEND] a pixel completing while busy is parked, never dropped
+            if (lib_valid_out_w && out_busy)
+                out_pend <= 1'b1;
         end
     end
 
