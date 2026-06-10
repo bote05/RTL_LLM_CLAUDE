@@ -1,0 +1,56 @@
+[hazard-ext] parsed: baseline (P1) 37 dispatches / 36 loaders, EXT 46 dispatches / 45 loaders
+[hazard-ext] C5: bounds + DW region lifetime
+[hazard-ext] C1: loader region == engine read region
+[hazard-ext] C2/C3/C4 per-dispatch verdicts (A=strict for EXT-touched, B=P1-baseline-equivalent for inherited)
+   d module                read           write fill(d+1)                wxr / rxf / wxf
+   0 conv_814   [    0,+12544) [12544,+12544) u_ldr_node_conv_816      disjoint / disjoint / redundant-copy  [B]
+   1 conv_816   [12544,+12544) [12544,+12544) u_ldr_node_conv_820      in-place-1x1 / disjoint / disjoint  [B]
+   2 conv_820   [ 4096,+3136 ) [    0,+3136 ) u_ldr_node_conv_822      disjoint / disjoint / redundant-copy  [B]
+   3 conv_822   [    0,+3136 ) [ 4096,+3136 ) u_ldr_node_conv_824      disjoint / disjoint / disjoint  [A]
+   4 conv_824   [ 9368,+3136 ) [12504,+3136 ) u_ldr_node_conv_826      disjoint / disjoint / disjoint  [A]
+   5 conv_826   [    0,+3136 ) [ 4096,+3136 ) u_ldr_node_conv_828      disjoint / lag-safe-1x1 / disjoint  [B]
+   6 conv_828   [    0,+3136 ) [ 4096,+3136 ) u_ldr_node_conv_832      disjoint / RATE / disjoint  [B]
+   7 conv_832   [    0,+784  ) [ 4096,+784  ) u_ldr_node_conv_834      disjoint / disjoint / redundant-copy  [B]
+   8 conv_834   [ 4096,+784  ) [    0,+784  ) u_ldr_node_conv_836      disjoint / disjoint / disjoint  [A]
+   9 conv_836   [15640,+784  ) [16424,+784  ) u_ldr_node_conv_838      disjoint / disjoint / disjoint  [A]
+  10 conv_838   [ 4096,+784  ) [    0,+784  ) u_ldr_node_conv_840      disjoint / lag-safe-1x1 / disjoint  [B]
+  11 conv_840   [ 4096,+784  ) [    0,+784  ) u_ldr_node_conv_842      disjoint / disjoint / disjoint  [A]
+  12 conv_842   [17208,+784  ) [17992,+784  ) u_ldr_node_conv_844      disjoint / disjoint / disjoint  [A]
+  13 conv_844   [ 4096,+784  ) [    0,+784  ) u_ldr_node_conv_846      disjoint / lag-safe-1x1 / disjoint  [B]
+  14 conv_846   [ 4096,+784  ) [    0,+784  ) u_ldr_node_conv_850      disjoint / RATE / disjoint  [B]
+  15 conv_850   [ 4096,+196  ) [    0,+196  ) u_ldr_node_conv_852      disjoint / disjoint / redundant-copy  [B]
+  16 conv_852   [    0,+196  ) [ 4096,+392  ) u_ldr_node_conv_854      disjoint / disjoint / disjoint  [A]
+  17 conv_854   [18776,+392  ) [19168,+392  ) u_ldr_node_conv_856      disjoint / disjoint / disjoint  [A]
+  18 conv_856   [    0,+392  ) [ 4096,+196  ) u_ldr_node_conv_858      disjoint / lag-safe-1x1 / disjoint  [B]
+  19 conv_858   [    0,+196  ) [ 4096,+392  ) u_ldr_node_conv_860      disjoint / disjoint / disjoint  [A]
+  20 conv_860   [19560,+392  ) [19952,+392  ) u_ldr_node_conv_862      disjoint / disjoint / disjoint  [A]
+  21 conv_862   [    0,+392  ) [ 4096,+196  ) u_ldr_node_conv_864      disjoint / lag-safe-1x1 / disjoint  [B]
+  22 conv_864   [    0,+196  ) [ 4096,+392  ) u_ldr_node_conv_866      disjoint / disjoint / disjoint  [A]
+  23 conv_866   [20344,+392  ) [20736,+392  ) u_ldr_node_conv_868      disjoint / disjoint / disjoint  [A]
+  24 conv_868   [    0,+392  ) [ 4096,+196  ) u_ldr_node_conv_870      disjoint / lag-safe-1x1 / disjoint  [B]
+  25 conv_870   [    0,+196  ) [ 4096,+392  ) u_ldr_node_conv_872      disjoint / disjoint / disjoint  [A]
+  26 conv_872   [21128,+392  ) [21520,+392  ) u_ldr_node_conv_874      disjoint / disjoint / disjoint  [A]
+  27 conv_874   [    0,+392  ) [ 4096,+196  ) -                        disjoint / none / none  [B]
+  28 conv_876   [ 4096,+196  ) [    0,+588  ) u_ldr_node_conv_878      disjoint / disjoint / disjoint  [A]
+  29 conv_878   [21912,+588  ) [22500,+588  ) u_ldr_node_conv_880      disjoint / disjoint / disjoint  [A]
+  30 conv_880   [ 4096,+588  ) [    0,+196  ) u_ldr_node_conv_882      disjoint / lag-safe-1x1 / disjoint  [B]
+  31 conv_882   [ 4096,+196  ) [    0,+588  ) u_ldr_node_conv_884      disjoint / disjoint / disjoint  [A]
+  32 conv_884   [23088,+588  ) [23676,+588  ) u_ldr_node_conv_886      disjoint / disjoint / disjoint  [A]
+  33 conv_886   [ 4096,+588  ) [    0,+196  ) u_ldr_node_conv_888      disjoint / lag-safe-1x1 / disjoint  [B]
+  34 conv_888   [ 4096,+196  ) [    0,+588  ) u_ldr_node_conv_892      disjoint / RATE / disjoint  [B]
+  35 conv_892   [ 4096,+147  ) [    0,+49   ) u_ldr_node_conv_894      disjoint / disjoint / redundant-copy  [B]
+  36 conv_894   [    0,+49   ) [ 4096,+196  ) u_ldr_node_conv_896      disjoint / disjoint / disjoint  [B]
+  37 conv_896   [ 8192,+196  ) [ 8780,+196  ) u_ldr_node_conv_898      disjoint / disjoint / disjoint  [B]
+  38 conv_898   [    0,+196  ) [ 4096,+49   ) u_ldr_node_conv_900      disjoint / lag-safe-1x1 / disjoint  [B]
+  39 conv_900   [    0,+49   ) [ 4096,+196  ) u_ldr_node_conv_902      disjoint / disjoint / disjoint  [B]
+  40 conv_902   [ 8388,+196  ) [ 8976,+196  ) u_ldr_node_conv_904      disjoint / disjoint / disjoint  [B]
+  41 conv_904   [    0,+196  ) [ 4096,+49   ) u_ldr_node_conv_906      disjoint / lag-safe-1x1 / disjoint  [B]
+  42 conv_906   [    0,+49   ) [ 4096,+196  ) u_ldr_node_conv_908      disjoint / disjoint / disjoint  [B]
+  43 conv_908   [ 8584,+196  ) [ 9172,+196  ) u_ldr_node_conv_910      disjoint / disjoint / disjoint  [B]
+  44 conv_910   [    0,+196  ) [ 4096,+98   ) u_ldr_node_conv_912      disjoint / disjoint / redundant-copy  [B]
+  45 conv_912   [ 4096,+98   ) [    0,+245  ) -                        disjoint / none / none  [B]
+[hazard-ext] rate-bounded inherited pairs: 3 (each verified identical to the e2e-proven P1 baseline)
+
+[hazard-ext] RESULT: PASS — PART A: all EXT-touched pairs strictly disjoint;
+         PART B: all inherited pairs identical to the e2e-proven P1 baseline
+         (or strictly safer); C1/C5 region+lifetime invariants hold.

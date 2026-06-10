@@ -1,0 +1,22 @@
+[wrap] preloaded 196 act pixels (ic_chunks=3)
+[wrap] config done at cyc=14656  (node_conv_878 IC=576 OC=576 14x14->14x14 wbase=13359 bbase=81)
+[TERM] t=0 act=5 wbus=be7f623c
+[TERM] t=1 act=6 wbus=1019d72f
+[TERM] t=2 act=0 wbus=ccff2ffc
+[TERM] t=3 act=3 wbus=fa0efa14
+[PULSE] pix=0 pulses=4 acc_lane0=642
+[ACC8] pix0 lanes0..7: 642 1513 -7 -2258 0 100 1165 0
+[BSC] bias0_3=-233 -241 -6620 -929  scale0_3=00019650 0000dc9e 0000f55a 00009678
+[PULSE] pix=1 pulses=4 acc_lane0=0
+[PULSE] pix=2 pulses=4 acc_lane0=3900
+[PULSE] pix=3 pulses=6 acc_lane0=-146
+[PULSE] pix=4 pulses=6 acc_lane0=0
+[PULSE] pix=5 pulses=6 acc_lane0=1485
+[wrap] done=1 took=11566 cycles
+[dbg] pixel0 got vs gold (first 24 OC):
+  got:   5   9 -50 -15  18 -23 -24 -15   5 -14 -13 -14 -26  15 -16 -33   0 -52  38  41 -27   0  29  27
+  gld:   5   9 -50 -15  18 -23 -24 -15   5 -14 -13 -14 -26  15 -16 -33   0 -52  38  41 -27   0  29  27
+
+=== WRAP engine-ISOLATION (node_conv_878, REAL mbv2 mems) vs goldout vec0 ===
+bytes=112896 mismatch=0 max|err|=0 firstbad_pixel=-1
+PASS: byte-exact

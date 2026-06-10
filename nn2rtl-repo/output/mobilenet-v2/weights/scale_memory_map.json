@@ -261,6 +261,69 @@
       "oc_passes": 4,
       "base_word": 66,
       "depthwise": true
+    },
+    {
+      "module_id": "node_conv_824",
+      "oc": 144,
+      "oc_passes": 1,
+      "base_word": 70,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_836",
+      "oc": 192,
+      "oc_passes": 1,
+      "base_word": 71,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_842",
+      "oc": 192,
+      "oc_passes": 1,
+      "base_word": 72,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_854",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 73,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_860",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 75,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_866",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 77,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_872",
+      "oc": 384,
+      "oc_passes": 2,
+      "base_word": 79,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_878",
+      "oc": 576,
+      "oc_passes": 3,
+      "base_word": 81,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_884",
+      "oc": 576,
+      "oc_passes": 3,
+      "base_word": 84,
+      "depthwise": true
     }
   ]
 }
