@@ -8,6 +8,16 @@ output/weights/node_conv_<id>_scale.mem for every conv2d in layer_ir that is NOT
 an engine dispatch (engine convs use the wide scale.mem instead).
 
 Run after the INT4-GPTQ goldens are regenerated (needs scale_factor_per_oc).
+
+[DW-CONSTSHIFT 2026-06-10] FORMAT IS NOW PER-MODULE, decided by the CONSUMING RTL:
+if BASE/rtl/<module_id>.v contains the "[DW-CONSTSHIFT" marker (the MBV2 depthwise
+constant-shift requant, scripts/apply_mbv2_dw_constshift.py), the mem is emitted in
+the CONSTANT-SHIFT format instead: slot[30:0] = mult' = mult << (23 - shift), one
+leading // comment header as the format marker, and the RTL applies a single
+compile-time >>> 23 with round 2^22. This keeps RTL and .mem format locked together
+across regens (the ResNet-2953 stale-scale.mem hazard class): regenerating the mems
+can never silently revert them to the {shift[21:16], mult[15:0]} layout while the
+RTL expects mult'. Asserts shift<=23 and mult' < 2^31 per slot.
 """
 from __future__ import annotations
 import json, os, sys
@@ -41,13 +51,32 @@ def main() -> int:
         if per_oc is None:
             print(f"  WARN {mid}: no scale_factor_per_oc; skip"); continue
         oc = L["weight_shape"][0]
+        # [DW-CONSTSHIFT 2026-06-10] format follows the CONSUMING RTL (see module docstring):
+        # marker present -> emit pre-widened mult' (constant-shift); absent -> legacy layout.
+        rtl_f = BASE / "rtl" / f"{mid}.v"
+        constshift = rtl_f.exists() and "[DW-CONSTSHIFT" in rtl_f.read_text()
         lines = []
-        for ch in range(oc):
-            mult, shift = compute_scale_approx(float(per_oc[ch]))
-            lines.append(f"{((shift & 0x3F) << 16) | (mult & 0xFFFF):08X}")
+        if constshift:
+            FS = 23  # must equal DW_FIXED_SHIFT in the consuming RTL
+            lines.append(f"// [DW-CONSTSHIFT] {mid}_scale.mem -- CONSTANT-SHIFT format.")
+            lines.append(f"// slot[30:0] = mult' = mult << ({FS} - shift)   "
+                         "(was {shift[21:16], mult[15:0]})")
+            lines.append(f"// consumed by {mid}.v: v = (biased * mult' + 2^{FS-1}) >>> {FS}")
+            lines.append("// regen: scripts/build_spatial_scale_mems.py "
+                         "(auto-detects the [DW-CONSTSHIFT] RTL marker)")
+            for ch in range(oc):
+                mult, shift = compute_scale_approx(float(per_oc[ch]))
+                assert 0 <= shift <= FS, f"{mid} ch{ch}: shift={shift} outside [0,{FS}]"
+                mp = mult << (FS - shift)
+                assert mp < (1 << 31), f"{mid} ch{ch}: mult'={mp} >= 2^31 (slot[30:0] overflow)"
+                lines.append(f"{mp:08X}")
+        else:
+            for ch in range(oc):
+                mult, shift = compute_scale_approx(float(per_oc[ch]))
+                lines.append(f"{((shift & 0x3F) << 16) | (mult & 0xFFFF):08X}")
         (wdir / f"{mid}_scale.mem").write_text("\n".join(lines) + "\n", newline="\n")
         n += 1
-    print(f"[spatial-scale] wrote {n} per-conv scale .mem files to output/weights/")
+    print(f"[spatial-scale] wrote {n} per-conv scale .mem files to {wdir}")
     return 0
 
 

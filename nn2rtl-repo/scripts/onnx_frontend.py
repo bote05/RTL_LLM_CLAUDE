@@ -897,7 +897,29 @@ def fill_calibration_stats(
                     np.round(_W / _per_oc.reshape((-1,) + (1,) * (_W.ndim - 1))),
                     _WQMIN, _WQMAX).astype(np.int8)
             else:
-                spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
+                _g1 = int(spec.groups) == 1
+                _1x1 = (int(spec.weight.shape[2]) == 1 and int(spec.weight.shape[3]) == 1)
+                _pw = _g1 and _1x1          # ENGINE 1x1 pointwise  (improvement E)
+                _stem = _g1 and not _1x1    # spatial 3x3 stem groups==1 (improvement A)
+                # [ACCURACY A/E 2026-06-09] per-OUTPUT-CHANNEL INT8 for groups==1 convs.
+                #  A (stem, NN2RTL_STEM_PER_CHANNEL default ON): the stem uses conv_datapath_mp_k whose
+                #    SCALE_PATH per-OC scale_rom is proven (ResNet convs); node_conv_810.v points
+                #    SCALE_PATH at node_conv_810_scale.mem (emitted by build_spatial_scale_mems).
+                #  E (pointwise, NN2RTL_PW_PER_CHANNEL default OFF): the engine is already per-OC, BUT
+                #    enabling it broke e2e on 2/8 vecs (subtle engine constant-shift per-OC issue under
+                #    debug); kept OFF until root-caused. Set NN2RTL_PW_PER_CHANNEL=1 to test E.
+                _do_per_oc = ((_pw and os.environ.get("NN2RTL_PW_PER_CHANNEL", "0") != "0") or
+                              (_stem and os.environ.get("NN2RTL_STEM_PER_CHANNEL", "1") != "0"))
+                if _do_per_oc:
+                    _W = spec.weight
+                    _per_oc = np.maximum(
+                        np.abs(_W).reshape(_W.shape[0], -1).max(axis=1) / _WQMAX, 1e-12)
+                    spec.weight_scale_per_oc = _per_oc.astype(np.float64)
+                    spec.gptq_qweight = np.clip(
+                        np.round(_W / _per_oc.reshape((-1,) + (1,) * (_W.ndim - 1))),
+                        _WQMIN, _WQMAX).astype(np.int8)
+                else:
+                    spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
 
         if spec.op_type == "gemm" and spec.weight is not None:
             spec.weight_scale = _safe_weight_scale(float(np.abs(spec.weight).max()))
@@ -1455,6 +1477,16 @@ _A2_MP_OVERRIDE = {
 }
 
 
+# [MP32-S34] 2026-06-10: ResNet stage-3/4 spatial 1x1 convs raised to MP=32 lanes
+# (conv_datapath_mp_k, MP_K=8) by scripts/apply_resnet_mp32_stage34.py. Keeps
+# compute_conv2d_latency_cycles consistent with the live RTL for a future
+# regen (same convention as _A2_MP_OVERRIDE above). These modules are DENSE
+# conv_datapath_mp_k instances -> lane-parallel pass cycles (k_groups + stages).
+_MP32_STAGE34_OVERRIDE = {
+    "node_conv_248": 32, "node_conv_252": 32, "node_conv_256": 32, "node_conv_258": 32, "node_conv_262": 32, "node_conv_268": 32, "node_conv_270": 32, "node_conv_274": 32, "node_conv_276": 32, "node_conv_280": 32, "node_conv_288": 32,
+}
+
+
 def _conv_mac_parallelism(spec: OnnxLayerSpec) -> int:
     """Accumulator-group size for an ONNX conv layer: min(OC, MAX_PARALLEL_MACS)."""
     if spec.weight is None or len(spec.weight.shape) < 1:
@@ -1462,12 +1494,17 @@ def _conv_mac_parallelism(spec: OnnxLayerSpec) -> int:
     ov = _A2_MP_OVERRIDE.get(getattr(spec, "module_id", None))
     if ov is not None:
         return ov
+    ov32 = _MP32_STAGE34_OVERRIDE.get(getattr(spec, "module_id", None))  # [MP32-S34]
+    if ov32 is not None:
+        return ov32
     return conv_mac_parallelism(int(spec.weight.shape[0]))
 
 
 def _conv_mp_k(spec: OnnxLayerSpec) -> int:
     """A2: the 3x3 spatial path (MBv2 stem + 17 depthwise) uses the MP_K=9
     tap-parallel datapath; everything else stays tap-serial (mp_k=1)."""
+    if getattr(spec, "module_id", None) in _MP32_STAGE34_OVERRIDE:
+        return 8  # [MP32-S34] stage-3/4 1x1s use the MP_K=8 dense mp_k datapath
     if spec.weight is not None and len(spec.weight.shape) >= 4:
         kh, kw = int(spec.weight.shape[2]), int(spec.weight.shape[3])
         if kh == 3 and kw == 3:

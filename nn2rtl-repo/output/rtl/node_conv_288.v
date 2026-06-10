@@ -4,7 +4,7 @@
 // keeps only even-row/even-col input pixels (the s2 sampling grid) and feeds a
 // proven stride-1 7x7 1x1 inner conv (coord_scheduler+line_buf_window+
 // conv_datapath_mp_k). Backpressured output streamer. Auto-gen apply_conv288_decimator.py.
-//   IC=1024 OC=2048  14x14 -> 7x7 (s2)  MP=16 MP_K=8
+//   IC=1024 OC=2048  14x14 -> 7x7 (s2)  MP=32 MP_K=8
 module node_conv_288 (
     input  wire                       clk,
     input  wire                       rst_n,
@@ -20,7 +20,7 @@ module node_conv_288 (
     localparam integer OH=7, OW=7;
     localparam integer KH=1, KW=1, SH=1, SW=1, PH=0, PW=0;   // INNER conv: stride-1
     localparam integer K_TOTAL=IC*KH*KW;
-    localparam integer MP=16, MP_K=8;
+    localparam integer MP=32, MP_K=8;  // [MP32-S34] 16->32 (stage-3/4 lane doubling)
     localparam integer SCALE_MULT=15825, SCALE_SHIFT=20;
     localparam integer CHANNEL_TILE=32, TILE_BITS=256;
     localparam integer IN_BEATS=IC/CHANNEL_TILE;     // 32
@@ -148,7 +148,7 @@ module node_conv_288 (
         .valid_in(lib_valid_in_w),.data_in(lib_data_in_w),.window_flat(window_flat));
     conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.TAIL_PIPE(1),.IC(IC),.OC(OC),.KH(KH),.KW(KW),.K_TOTAL(K_TOTAL),.MP(MP),.WGT_BITS(3),
         .MP_K(MP_K),.SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.SCALE_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_scale.mem"),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights_mp_k_8.hex"),
+        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights_mp32_k8.hex"),
         .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_bias.hex")) dp (
         .clk(clk),.rst_n(rst_n),.window_flat(window_flat),
         .start_mac(sched_output_fires),

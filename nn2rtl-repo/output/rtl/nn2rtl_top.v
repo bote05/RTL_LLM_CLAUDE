@@ -1885,7 +1885,8 @@ node_relu_24 u_node_relu_24 (
     wire skid_node_conv_252_valid;
     wire [255:0] skid_node_conv_252_data;
     wire skid_node_conv_252_ready;
-    skip_fifo #(.WIDTH(256), .DEPTH(2)) u_skid_node_conv_252 (
+    // [MP32-S34] 2->64: B20 last-beat-offer margin for the post-add relu fork
+    skip_fifo #(.WIDTH(256), .DEPTH(64)) u_skid_node_conv_252 (
         .clk(clk), .rst_n(rst_n),
         .in_valid(node_relu_24_valid_out & spatial_run & node_relu_24_ready_out_combined),
         .in_data(node_relu_24_data_out),
@@ -1972,16 +1973,33 @@ node_conv_256 u_node_conv_256 (
         .ready_in(node_conv_256_ready_in),
         .data_in(skid_node_conv_256_data),
         .valid_out(node_conv_256_valid_out),
-        .ready_out(node_add_8_skip_valid & spatial_run & node_add_8_ready_in),
+        .ready_out(node_add_8_main_in_ready & spatial_run),  // [MP32-S34] lhs-skid
         .data_out(node_conv_256_data_out)
     );
 
     // residual add: lhs (low half) from main path, rhs (high half) from skip FIFO
+    // [MP32-S34] LHS elastic buffer (template: apply_conv202_lhs_skid.py).
+    // conv_256 (MP32, ~2x faster) drains here instead of directly into the
+    // synchronized join; absorbs the valid/ready phase slip that wedged the
+    // MP-increase attempts (B22). FIFO preserves beat value+order -> byte-exact.
+    wire node_add_8_main_in_ready;
+    wire node_add_8_main_valid;
+    wire [255:0] node_add_8_main_data;
+    skip_fifo #(.WIDTH(256), .DEPTH(512)) u_skip_node_add_8_main (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_conv_256_valid_out & spatial_run & node_add_8_main_in_ready),
+        .in_data(node_conv_256_data_out[255:0]),
+        .in_ready(node_add_8_main_in_ready),
+        .out_valid(node_add_8_main_valid),
+        .out_data(node_add_8_main_data),
+        .out_ready(node_add_8_ready_in & node_add_8_skip_valid & spatial_run)
+    );
+
     node_add_8 u_node_add_8 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_256_valid_out & node_add_8_skip_valid & spatial_run),
+        .valid_in(node_add_8_main_valid & node_add_8_skip_valid & spatial_run),  // [MP32-S34]
         .ready_in(node_add_8_ready_in),
-        .data_in({node_add_8_skip_data, node_conv_256_data_out[255:0]}),
+        .data_in({node_add_8_skip_data, node_add_8_main_data}),  // [MP32-S34]
         .valid_out(node_add_8_valid_out),
         .ready_out(skid_node_relu_27_ready & spatial_run),   // [BP-FIX] hold output until accepted
         .data_out(node_add_8_data_out)
@@ -2015,7 +2033,8 @@ node_relu_27 u_node_relu_27 (
     wire skid_node_conv_258_valid;
     wire [255:0] skid_node_conv_258_data;
     wire skid_node_conv_258_ready;
-    skip_fifo #(.WIDTH(256), .DEPTH(2)) u_skid_node_conv_258 (
+    // [MP32-S34] 2->64: B20 last-beat-offer margin for the post-add relu fork
+    skip_fifo #(.WIDTH(256), .DEPTH(64)) u_skid_node_conv_258 (
         .clk(clk), .rst_n(rst_n),
         .in_valid(node_relu_27_valid_out & spatial_run & node_relu_27_ready_out_combined),
         .in_data(node_relu_27_data_out),
@@ -2102,16 +2121,33 @@ node_conv_262 u_node_conv_262 (
         .ready_in(node_conv_262_ready_in),
         .data_in(skid_node_conv_262_data),
         .valid_out(node_conv_262_valid_out),
-        .ready_out(node_add_9_skip_valid & spatial_run & node_add_9_ready_in),
+        .ready_out(node_add_9_main_in_ready & spatial_run),  // [MP32-S34] lhs-skid
         .data_out(node_conv_262_data_out)
     );
 
     // residual add: lhs (low half) from main path, rhs (high half) from skip FIFO
+    // [MP32-S34] LHS elastic buffer (template: apply_conv202_lhs_skid.py).
+    // conv_262 (MP32, ~2x faster) drains here instead of directly into the
+    // synchronized join; absorbs the valid/ready phase slip that wedged the
+    // MP-increase attempts (B22). FIFO preserves beat value+order -> byte-exact.
+    wire node_add_9_main_in_ready;
+    wire node_add_9_main_valid;
+    wire [255:0] node_add_9_main_data;
+    skip_fifo #(.WIDTH(256), .DEPTH(512)) u_skip_node_add_9_main (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_conv_262_valid_out & spatial_run & node_add_9_main_in_ready),
+        .in_data(node_conv_262_data_out[255:0]),
+        .in_ready(node_add_9_main_in_ready),
+        .out_valid(node_add_9_main_valid),
+        .out_data(node_add_9_main_data),
+        .out_ready(node_add_9_ready_in & node_add_9_skip_valid & spatial_run)
+    );
+
     node_add_9 u_node_add_9 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_262_valid_out & node_add_9_skip_valid & spatial_run),
+        .valid_in(node_add_9_main_valid & node_add_9_skip_valid & spatial_run),  // [MP32-S34]
         .ready_in(node_add_9_ready_in),
-        .data_in({node_add_9_skip_data, node_conv_262_data_out[255:0]}),
+        .data_in({node_add_9_skip_data, node_add_9_main_data}),  // [MP32-S34]
         .valid_out(node_add_9_valid_out),
         .ready_out(skid_node_relu_30_ready & spatial_run),   // [BP-FIX] hold output until accepted
         .data_out(node_add_9_data_out)
@@ -2211,16 +2247,33 @@ node_conv_268 u_node_conv_268 (
         .ready_in(node_conv_268_ready_in),
         .data_in(skid_node_conv_268_data),
         .valid_out(node_conv_268_valid_out),
-        .ready_out(node_add_10_skip_valid & spatial_run & node_add_10_ready_in),
+        .ready_out(node_add_10_main_in_ready & spatial_run),  // [MP32-S34] lhs-skid
         .data_out(node_conv_268_data_out)
     );
 
     // residual add: lhs (low half) from main path, rhs (high half) from skip FIFO
+    // [MP32-S34] LHS elastic buffer (template: apply_conv202_lhs_skid.py).
+    // conv_268 (MP32, ~2x faster) drains here instead of directly into the
+    // synchronized join; absorbs the valid/ready phase slip that wedged the
+    // MP-increase attempts (B22). FIFO preserves beat value+order -> byte-exact.
+    wire node_add_10_main_in_ready;
+    wire node_add_10_main_valid;
+    wire [255:0] node_add_10_main_data;
+    skip_fifo #(.WIDTH(256), .DEPTH(512)) u_skip_node_add_10_main (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_conv_268_valid_out & spatial_run & node_add_10_main_in_ready),
+        .in_data(node_conv_268_data_out[255:0]),
+        .in_ready(node_add_10_main_in_ready),
+        .out_valid(node_add_10_main_valid),
+        .out_data(node_add_10_main_data),
+        .out_ready(node_add_10_ready_in & node_add_10_skip_valid & spatial_run)
+    );
+
     node_add_10 u_node_add_10 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_268_valid_out & node_add_10_skip_valid & spatial_run),
+        .valid_in(node_add_10_main_valid & node_add_10_skip_valid & spatial_run),  // [MP32-S34]
         .ready_in(node_add_10_ready_in),
-        .data_in({node_add_10_skip_data, node_conv_268_data_out[255:0]}),
+        .data_in({node_add_10_skip_data, node_add_10_main_data}),  // [MP32-S34]
         .valid_out(node_add_10_valid_out),
         .ready_out(skid_node_relu_33_ready & spatial_run),   // [BP-FIX] hold output until accepted
         .data_out(node_add_10_data_out)
@@ -2254,7 +2307,8 @@ node_relu_33 u_node_relu_33 (
     wire skid_node_conv_270_valid;
     wire [255:0] skid_node_conv_270_data;
     wire skid_node_conv_270_ready;
-    skip_fifo #(.WIDTH(256), .DEPTH(2)) u_skid_node_conv_270 (
+    // [MP32-S34] 2->64: B20 last-beat-offer margin for the post-add relu fork
+    skip_fifo #(.WIDTH(256), .DEPTH(64)) u_skid_node_conv_270 (
         .clk(clk), .rst_n(rst_n),
         .in_valid(node_relu_33_valid_out & spatial_run & node_relu_33_ready_out_combined),
         .in_data(node_relu_33_data_out),
@@ -2341,16 +2395,33 @@ node_conv_274 u_node_conv_274 (
         .ready_in(node_conv_274_ready_in),
         .data_in(skid_node_conv_274_data),
         .valid_out(node_conv_274_valid_out),
-        .ready_out(node_add_11_skip_valid & spatial_run & node_add_11_ready_in),
+        .ready_out(node_add_11_main_in_ready & spatial_run),  // [MP32-S34] lhs-skid
         .data_out(node_conv_274_data_out)
     );
 
     // residual add: lhs (low half) from main path, rhs (high half) from skip FIFO
+    // [MP32-S34] LHS elastic buffer (template: apply_conv202_lhs_skid.py).
+    // conv_274 (MP32, ~2x faster) drains here instead of directly into the
+    // synchronized join; absorbs the valid/ready phase slip that wedged the
+    // MP-increase attempts (B22). FIFO preserves beat value+order -> byte-exact.
+    wire node_add_11_main_in_ready;
+    wire node_add_11_main_valid;
+    wire [255:0] node_add_11_main_data;
+    skip_fifo #(.WIDTH(256), .DEPTH(512)) u_skip_node_add_11_main (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_conv_274_valid_out & spatial_run & node_add_11_main_in_ready),
+        .in_data(node_conv_274_data_out[255:0]),
+        .in_ready(node_add_11_main_in_ready),
+        .out_valid(node_add_11_main_valid),
+        .out_data(node_add_11_main_data),
+        .out_ready(node_add_11_ready_in & node_add_11_skip_valid & spatial_run)
+    );
+
     node_add_11 u_node_add_11 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_274_valid_out & node_add_11_skip_valid & spatial_run),
+        .valid_in(node_add_11_main_valid & node_add_11_skip_valid & spatial_run),  // [MP32-S34]
         .ready_in(node_add_11_ready_in),
-        .data_in({node_add_11_skip_data, node_conv_274_data_out[255:0]}),
+        .data_in({node_add_11_skip_data, node_add_11_main_data}),  // [MP32-S34]
         .valid_out(node_add_11_valid_out),
         .ready_out(skid_node_relu_36_ready & spatial_run),   // [BP-FIX] hold output until accepted
         .data_out(node_add_11_data_out)
@@ -2384,7 +2455,8 @@ node_relu_36 u_node_relu_36 (
     wire skid_node_conv_276_valid;
     wire [255:0] skid_node_conv_276_data;
     wire skid_node_conv_276_ready;
-    skip_fifo #(.WIDTH(256), .DEPTH(2)) u_skid_node_conv_276 (
+    // [MP32-S34] 2->64: B20 last-beat-offer margin for the post-add relu fork
+    skip_fifo #(.WIDTH(256), .DEPTH(64)) u_skid_node_conv_276 (
         .clk(clk), .rst_n(rst_n),
         .in_valid(node_relu_36_valid_out & spatial_run & node_relu_36_ready_out_combined),
         .in_data(node_relu_36_data_out),
@@ -2471,16 +2543,33 @@ node_conv_280 u_node_conv_280 (
         .ready_in(node_conv_280_ready_in),
         .data_in(skid_node_conv_280_data),
         .valid_out(node_conv_280_valid_out),
-        .ready_out(node_add_12_skip_valid & spatial_run & node_add_12_ready_in),
+        .ready_out(node_add_12_main_in_ready & spatial_run),  // [MP32-S34] lhs-skid
         .data_out(node_conv_280_data_out)
     );
 
     // residual add: lhs (low half) from main path, rhs (high half) from skip FIFO
+    // [MP32-S34] LHS elastic buffer (template: apply_conv202_lhs_skid.py).
+    // conv_280 (MP32, ~2x faster) drains here instead of directly into the
+    // synchronized join; absorbs the valid/ready phase slip that wedged the
+    // MP-increase attempts (B22). FIFO preserves beat value+order -> byte-exact.
+    wire node_add_12_main_in_ready;
+    wire node_add_12_main_valid;
+    wire [255:0] node_add_12_main_data;
+    skip_fifo #(.WIDTH(256), .DEPTH(512)) u_skip_node_add_12_main (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(node_conv_280_valid_out & spatial_run & node_add_12_main_in_ready),
+        .in_data(node_conv_280_data_out[255:0]),
+        .in_ready(node_add_12_main_in_ready),
+        .out_valid(node_add_12_main_valid),
+        .out_data(node_add_12_main_data),
+        .out_ready(node_add_12_ready_in & node_add_12_skip_valid & spatial_run)
+    );
+
     node_add_12 u_node_add_12 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in(node_conv_280_valid_out & node_add_12_skip_valid & spatial_run),
+        .valid_in(node_add_12_main_valid & node_add_12_skip_valid & spatial_run),  // [MP32-S34]
         .ready_in(node_add_12_ready_in),
-        .data_in({node_add_12_skip_data, node_conv_280_data_out[255:0]}),
+        .data_in({node_add_12_skip_data, node_add_12_main_data}),  // [MP32-S34]
         .valid_out(node_add_12_valid_out),
         .ready_out(skid_node_relu_39_ready & spatial_run),   // [BP-FIX] hold output until accepted
         .data_out(node_add_12_data_out)
@@ -2943,7 +3032,7 @@ node_relu_48 u_node_relu_48 (
         .in_ready(node_add_8_skip_in_ready),
         .out_valid(node_add_8_skip_valid),
         .out_data(node_add_8_skip_data),
-        .out_ready(node_add_8_ready_in & node_conv_256_valid_out & spatial_run)
+        .out_ready(node_add_8_ready_in & node_add_8_main_valid & spatial_run)  // [MP32-S34]
     );
 
     wire node_add_9_skip_in_ready;
@@ -2954,7 +3043,7 @@ node_relu_48 u_node_relu_48 (
         .in_ready(node_add_9_skip_in_ready),
         .out_valid(node_add_9_skip_valid),
         .out_data(node_add_9_skip_data),
-        .out_ready(node_add_9_ready_in & node_conv_262_valid_out & spatial_run)
+        .out_ready(node_add_9_ready_in & node_add_9_main_valid & spatial_run)  // [MP32-S34]
     );
 
     wire node_add_10_skip_in_ready;
@@ -2965,7 +3054,7 @@ node_relu_48 u_node_relu_48 (
         .in_ready(node_add_10_skip_in_ready),
         .out_valid(node_add_10_skip_valid),
         .out_data(node_add_10_skip_data),
-        .out_ready(node_add_10_ready_in & node_conv_268_valid_out & spatial_run)
+        .out_ready(node_add_10_ready_in & node_add_10_main_valid & spatial_run)  // [MP32-S34]
     );
 
     wire node_add_11_skip_in_ready;
@@ -2976,7 +3065,7 @@ node_relu_48 u_node_relu_48 (
         .in_ready(node_add_11_skip_in_ready),
         .out_valid(node_add_11_skip_valid),
         .out_data(node_add_11_skip_data),
-        .out_ready(node_add_11_ready_in & node_conv_274_valid_out & spatial_run)
+        .out_ready(node_add_11_ready_in & node_add_11_main_valid & spatial_run)  // [MP32-S34]
     );
 
     wire node_add_12_skip_in_ready;
@@ -2987,7 +3076,7 @@ node_relu_48 u_node_relu_48 (
         .in_ready(node_add_12_skip_in_ready),
         .out_valid(node_add_12_skip_valid),
         .out_data(node_add_12_skip_data),
-        .out_ready(node_add_12_ready_in & node_conv_280_valid_out & spatial_run)
+        .out_ready(node_add_12_ready_in & node_add_12_main_valid & spatial_run)  // [MP32-S34]
     );
 
     wire node_add_13_skip_in_ready;
@@ -4057,6 +4146,165 @@ node_relu_48 u_node_relu_48 (
     assign all_drain[12] = u_engine_out_node_conv_292_drain_complete;
     assign all_drain[15] = u_engine_out_node_conv_298_drain_complete;
     assign current_drain_complete = all_drain[sched_dispatch_idx[4:0]];
+
+    // [MP32-S34] B20 drop detectors: the narrow-relu streamer offers each
+    // pixel's LAST beat for exactly one cycle; valid_out FALLING after an
+    // un-accepted offer == a silently dropped beat (the wedge seed).
+    // $display-only sinks -> pruned in synthesis (same as [fifo-peak]).
+    reg [31:0] b20_drop_relu_23; reg b20_vo_d_23, b20_acc_d_23;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_23 <= 0; b20_vo_d_23 <= 0; b20_acc_d_23 <= 0; end
+        else begin
+            b20_vo_d_23  <= node_relu_23_valid_out;
+            b20_acc_d_23 <= node_relu_23_valid_out & (skid_node_conv_248_ready & spatial_run);
+            if (b20_vo_d_23 & ~b20_acc_d_23 & ~node_relu_23_valid_out)
+                b20_drop_relu_23 <= b20_drop_relu_23 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_23 drops=%0d", b20_drop_relu_23);
+    reg [31:0] b20_drop_relu_24; reg b20_vo_d_24, b20_acc_d_24;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_24 <= 0; b20_vo_d_24 <= 0; b20_acc_d_24 <= 0; end
+        else begin
+            b20_vo_d_24  <= node_relu_24_valid_out;
+            b20_acc_d_24 <= node_relu_24_valid_out & (node_relu_24_ready_out_combined);
+            if (b20_vo_d_24 & ~b20_acc_d_24 & ~node_relu_24_valid_out)
+                b20_drop_relu_24 <= b20_drop_relu_24 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_24 drops=%0d", b20_drop_relu_24);
+    reg [31:0] b20_drop_relu_26; reg b20_vo_d_26, b20_acc_d_26;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_26 <= 0; b20_vo_d_26 <= 0; b20_acc_d_26 <= 0; end
+        else begin
+            b20_vo_d_26  <= node_relu_26_valid_out;
+            b20_acc_d_26 <= node_relu_26_valid_out & (skid_node_conv_256_ready & spatial_run);
+            if (b20_vo_d_26 & ~b20_acc_d_26 & ~node_relu_26_valid_out)
+                b20_drop_relu_26 <= b20_drop_relu_26 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_26 drops=%0d", b20_drop_relu_26);
+    reg [31:0] b20_drop_relu_27; reg b20_vo_d_27, b20_acc_d_27;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_27 <= 0; b20_vo_d_27 <= 0; b20_acc_d_27 <= 0; end
+        else begin
+            b20_vo_d_27  <= node_relu_27_valid_out;
+            b20_acc_d_27 <= node_relu_27_valid_out & (node_relu_27_ready_out_combined);
+            if (b20_vo_d_27 & ~b20_acc_d_27 & ~node_relu_27_valid_out)
+                b20_drop_relu_27 <= b20_drop_relu_27 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_27 drops=%0d", b20_drop_relu_27);
+    reg [31:0] b20_drop_relu_29; reg b20_vo_d_29, b20_acc_d_29;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_29 <= 0; b20_vo_d_29 <= 0; b20_acc_d_29 <= 0; end
+        else begin
+            b20_vo_d_29  <= node_relu_29_valid_out;
+            b20_acc_d_29 <= node_relu_29_valid_out & (skid_node_conv_262_ready & spatial_run);
+            if (b20_vo_d_29 & ~b20_acc_d_29 & ~node_relu_29_valid_out)
+                b20_drop_relu_29 <= b20_drop_relu_29 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_29 drops=%0d", b20_drop_relu_29);
+    reg [31:0] b20_drop_relu_30; reg b20_vo_d_30, b20_acc_d_30;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_30 <= 0; b20_vo_d_30 <= 0; b20_acc_d_30 <= 0; end
+        else begin
+            b20_vo_d_30  <= node_relu_30_valid_out;
+            b20_acc_d_30 <= node_relu_30_valid_out & (node_relu_30_ready_out_combined);
+            if (b20_vo_d_30 & ~b20_acc_d_30 & ~node_relu_30_valid_out)
+                b20_drop_relu_30 <= b20_drop_relu_30 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_30 drops=%0d", b20_drop_relu_30);
+    reg [31:0] b20_drop_relu_32; reg b20_vo_d_32, b20_acc_d_32;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_32 <= 0; b20_vo_d_32 <= 0; b20_acc_d_32 <= 0; end
+        else begin
+            b20_vo_d_32  <= node_relu_32_valid_out;
+            b20_acc_d_32 <= node_relu_32_valid_out & (skid_node_conv_268_ready & spatial_run);
+            if (b20_vo_d_32 & ~b20_acc_d_32 & ~node_relu_32_valid_out)
+                b20_drop_relu_32 <= b20_drop_relu_32 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_32 drops=%0d", b20_drop_relu_32);
+    reg [31:0] b20_drop_relu_33; reg b20_vo_d_33, b20_acc_d_33;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_33 <= 0; b20_vo_d_33 <= 0; b20_acc_d_33 <= 0; end
+        else begin
+            b20_vo_d_33  <= node_relu_33_valid_out;
+            b20_acc_d_33 <= node_relu_33_valid_out & (node_relu_33_ready_out_combined);
+            if (b20_vo_d_33 & ~b20_acc_d_33 & ~node_relu_33_valid_out)
+                b20_drop_relu_33 <= b20_drop_relu_33 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_33 drops=%0d", b20_drop_relu_33);
+    reg [31:0] b20_drop_relu_35; reg b20_vo_d_35, b20_acc_d_35;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_35 <= 0; b20_vo_d_35 <= 0; b20_acc_d_35 <= 0; end
+        else begin
+            b20_vo_d_35  <= node_relu_35_valid_out;
+            b20_acc_d_35 <= node_relu_35_valid_out & (skid_node_conv_274_ready & spatial_run);
+            if (b20_vo_d_35 & ~b20_acc_d_35 & ~node_relu_35_valid_out)
+                b20_drop_relu_35 <= b20_drop_relu_35 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_35 drops=%0d", b20_drop_relu_35);
+    reg [31:0] b20_drop_relu_36; reg b20_vo_d_36, b20_acc_d_36;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_36 <= 0; b20_vo_d_36 <= 0; b20_acc_d_36 <= 0; end
+        else begin
+            b20_vo_d_36  <= node_relu_36_valid_out;
+            b20_acc_d_36 <= node_relu_36_valid_out & (node_relu_36_ready_out_combined);
+            if (b20_vo_d_36 & ~b20_acc_d_36 & ~node_relu_36_valid_out)
+                b20_drop_relu_36 <= b20_drop_relu_36 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_36 drops=%0d", b20_drop_relu_36);
+    reg [31:0] b20_drop_relu_38; reg b20_vo_d_38, b20_acc_d_38;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_38 <= 0; b20_vo_d_38 <= 0; b20_acc_d_38 <= 0; end
+        else begin
+            b20_vo_d_38  <= node_relu_38_valid_out;
+            b20_acc_d_38 <= node_relu_38_valid_out & (skid_node_conv_280_ready & spatial_run);
+            if (b20_vo_d_38 & ~b20_acc_d_38 & ~node_relu_38_valid_out)
+                b20_drop_relu_38 <= b20_drop_relu_38 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_38 drops=%0d", b20_drop_relu_38);
+    reg [31:0] b20_drop_relu_39; reg b20_vo_d_39, b20_acc_d_39;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_39 <= 0; b20_vo_d_39 <= 0; b20_acc_d_39 <= 0; end
+        else begin
+            b20_vo_d_39  <= node_relu_39_valid_out;
+            b20_acc_d_39 <= node_relu_39_valid_out & (node_relu_39_ready_out_combined);
+            if (b20_vo_d_39 & ~b20_acc_d_39 & ~node_relu_39_valid_out)
+                b20_drop_relu_39 <= b20_drop_relu_39 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_39 drops=%0d", b20_drop_relu_39);
+    reg [31:0] b20_drop_relu_41; reg b20_vo_d_41, b20_acc_d_41;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_41 <= 0; b20_vo_d_41 <= 0; b20_acc_d_41 <= 0; end
+        else begin
+            b20_vo_d_41  <= node_relu_41_valid_out;
+            b20_acc_d_41 <= node_relu_41_valid_out & (node_relu_41_ready_out_combined);
+            if (b20_vo_d_41 & ~b20_acc_d_41 & ~node_relu_41_valid_out)
+                b20_drop_relu_41 <= b20_drop_relu_41 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_41 drops=%0d", b20_drop_relu_41);
+    reg [31:0] b20_drop_relu_42; reg b20_vo_d_42, b20_acc_d_42;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin b20_drop_relu_42 <= 0; b20_vo_d_42 <= 0; b20_acc_d_42 <= 0; end
+        else begin
+            b20_vo_d_42  <= node_relu_42_valid_out;
+            b20_acc_d_42 <= node_relu_42_valid_out & (node_relu_42_ready_out_combined);
+            if (b20_vo_d_42 & ~b20_acc_d_42 & ~node_relu_42_valid_out)
+                b20_drop_relu_42 <= b20_drop_relu_42 + 1;
+        end
+    end
+    final $display("[b20-drop] relu_42 drops=%0d", b20_drop_relu_42);
 
     // ----- DEBUG INSTRUMENTATION (DEBUG_E2E) -----
     // Print events at key chain milestones so we can localize hangs.
