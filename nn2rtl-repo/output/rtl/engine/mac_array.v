@@ -39,6 +39,14 @@ module mac_array #(
     input  wire          mac_valid_in,
     input  wire [7:0]    act_byte,
     input  wire [256*WGT_W-1:0] weight_bus,  // WGT_W-packed: 256 lanes * WGT_W bits
+    // [DW-ENGINE P1 2026-06-10] per-lane activation mode (MobileNetV2 wide
+    // depthwise convs). dw_mode=1: lane L multiplies its OWN byte of the
+    // already-aligned activation word (act_word[L*8 +: 8], channels map 1:1
+    // to lanes) instead of the shared broadcast act_byte. dw_mode=0 (legacy
+    // and every ResNet instance — the skeleton ties it 0 when
+    // ENABLE_DEPTHWISE==0): identical to the original broadcast datapath.
+    input  wire          dw_mode,
+    input  wire [2047:0] act_word,
     output wire [8191:0] acc_out,
     output wire          mac_busy
 );
@@ -87,9 +95,15 @@ module mac_array #(
             assign w_byte = $signed(weight_bus[lane*WGT_W +: WGT_W]);
             assign a_byte = $signed(act_byte);
 
+            // [DW-ENGINE P1] per-lane activation select: broadcast byte in
+            // dense mode, this lane's own channel byte in depthwise mode.
+            // With dw_mode tied 0 (legacy) this is the original a_byte.
+            wire signed [7:0] a_byte_lane =
+                dw_mode ? $signed(act_word[lane*8 +: 8]) : a_byte;
+
             // Stage 1: signed 8×8 multiply, registered into the DSP block.
             always @(posedge clk) begin
-                mul_q1 <= w_byte * a_byte;
+                mul_q1 <= w_byte * a_byte_lane;
             end
 
             // Stage 2: gated accumulate. The accumulator stays at zero from

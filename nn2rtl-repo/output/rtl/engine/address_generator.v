@@ -87,6 +87,16 @@ module address_generator (
     input  wire [15:0] cfg_act_in_bram_base,
     input  wire [15:0] cfg_act_out_bram_base,
 
+    // [DW-ENGINE P1 2026-06-10] depthwise mode (MobileNetV2 wide DW convs).
+    // When 1: K_TOTAL = KH*KW only (the ic loop collapses to a single
+    // iteration), the act-BRAM channel-chunk index is the CURRENT oc_pass
+    // (channels map 1:1 to MAC lanes: lane L of pass p = channel 256p+L),
+    // and the weight word index is oc_pass*KH*KW + (kh*KW+kw). cfg_ic keeps
+    // the REAL channel count (e.g. 960) so ic_chunks_total still gives the
+    // per-pixel act-word stride (ceil(C/256)). When 0 every expression
+    // reduces to the original dense form (legacy nets are bit-identical).
+    input  wire        cfg_depthwise,
+
     // Outer-loop position driven by the engine FSM.
     input  wire [2:0]  oc_pass_idx,
     input  wire [7:0]  pixel_h,
@@ -143,7 +153,12 @@ module address_generator (
     // needs 17 bits. Per-pass weight offset = oc_pass * K_TOTAL <= 7 * 100k
     // ≈ 700k, needs 20 bits.
     wire [5:0]  kh_kw_prod   = cfg_kh * cfg_kw;                     // <= 49
-    wire [16:0] k_total      = cfg_ic * {11'b0, kh_kw_prod};        // <= 100352
+    // [DW-ENGINE P1] depthwise: the K walk covers ONLY the KH*KW taps (the
+    // 256 lanes each carry their own channel, so there is no ic reduction).
+    // loop_ic collapses the ic-innermost counter to a single iteration.
+    wire [16:0] k_total      = cfg_depthwise ? {11'b0, kh_kw_prod}
+                                             : cfg_ic * {11'b0, kh_kw_prod};   // <= 100352
+    wire [11:0] loop_ic      = cfg_depthwise ? 12'd1 : cfg_ic;
     wire [15:0] k_total_m1   = k_total[15:0] - 16'd1;
     wire [19:0] pass_offset  = {3'b0, k_total} * oc_pass_idx;       // <= 7 * 100352
     wire [16:0] ic_weight    = ic_cnt * {6'b0, kh_kw_prod};         // ic * (KH*KW) <= 18432; 17b is plenty
@@ -190,7 +205,10 @@ module address_generator (
     // ic_cnt[11:8] is exactly floor(ic_cnt / 256) for ic_cnt in [0, 4096),
     // which covers MAX_IC=2048 with one bit of headroom.
     wire [3:0]  ic_chunks_total = cfg_ic[11:8] + {3'b0, |cfg_ic[7:0]};
-    wire [3:0]  ic_chunk_idx    = ic_cnt[11:8];
+    // [DW-ENGINE P1] depthwise: lane L of oc_pass p consumes channel 256p+L,
+    // so the act word for the current tap is chunk p (NOT ic_cnt/256 — ic_cnt
+    // is parked at 0 in DW mode).
+    wire [3:0]  ic_chunk_idx    = cfg_depthwise ? {1'b0, oc_pass_idx} : ic_cnt[11:8];
     wire [15:0] pixel_word_idx  = in_r[7:0] * cfg_iw + {8'b0, in_c[7:0]};
     wire [19:0] act_in_offset20 = pixel_word_idx * {12'b0, ic_chunks_total}
                                  + {16'b0, ic_chunk_idx};
@@ -326,7 +344,7 @@ module address_generator (
                         if (last_pixel && last_oc_pass) begin
                             pixel_done_latch <= 1'b1;
                         end
-                    end else if (ic_cnt == (cfg_ic - 12'd1)) begin
+                    end else if (ic_cnt == (loop_ic - 12'd1)) begin   // [DW-ENGINE P1] loop_ic==1 in DW mode
                         ic_cnt <= 12'd0;
                         if (kw_cnt == (cfg_kw - 3'd1)) begin
                             kw_cnt <= 3'd0;

@@ -71,7 +71,17 @@ module shared_engine #(
     // they are byte-identical to today (the undriven out_ready value is gated
     // out, never observed). Only the MobileNetV2 engine top sets this to 1 and
     // drives out_ready from engine_output_fifo.in_ready, enabling the stall.
-    parameter integer ENABLE_OUTPUT_BACKPRESSURE = 0
+    parameter integer ENABLE_OUTPUT_BACKPRESSURE = 0,
+
+    // ---- Depthwise per-lane mode (default OFF = byte-identical legacy) ----
+    // [DW-ENGINE P1 2026-06-10] When 0 (DEFAULT) the cfg_depthwise register
+    // (0x3C) is force-gated to 0, so the address_generator's K walk and the
+    // mac_array's activation select are EXACTLY the original dense forms —
+    // every ResNet instance (which never sets this parameter and whose
+    // scheduler never writes 0x3C) is bit- and cycle-identical. Only the
+    // MobileNetV2 engine top sets this to 1 so its scheduler can dispatch the
+    // 3 wide depthwise convs (conv_896/902/908: C=960, 3x3, lanes==channels).
+    parameter integer ENABLE_DEPTHWISE = 0
 ) (
     // ---- Clock + reset ----
     input  wire                          clk,
@@ -163,6 +173,11 @@ module shared_engine #(
     wire [URAM_ADDR_W-1:0]     cfg_bias_uram_base;
     wire [ACT_BRAM_ADDR_W-1:0] cfg_act_in_bram_base;
     wire [ACT_BRAM_ADDR_W-1:0] cfg_act_out_bram_base;
+    // [DW-ENGINE P1] depthwise flag from config reg 0x3C; dw_mode is the
+    // PARAMETER-GATED version consumed by the datapath (hard 0 when the
+    // feature is disabled, so legacy instances are bit-identical).
+    wire cfg_depthwise;
+    wire dw_mode = (ENABLE_DEPTHWISE != 0) ? cfg_depthwise : 1'b0;
 
     // -- FSM <-> config_register_block handshake --
     wire engine_start_pulse;        // config -> FSM (1-cycle pulse, sourced from engine_start input)
@@ -607,7 +622,8 @@ module shared_engine #(
         .cfg_weight_uram_base  (cfg_weight_uram_base),
         .cfg_bias_uram_base    (cfg_bias_uram_base),
         .cfg_act_in_bram_base  (cfg_act_in_bram_base),
-        .cfg_act_out_bram_base (cfg_act_out_bram_base)
+        .cfg_act_out_bram_base (cfg_act_out_bram_base),
+        .cfg_depthwise         (cfg_depthwise)
     );
 
     // ====================================================================
@@ -641,6 +657,7 @@ module shared_engine #(
         .cfg_bias_uram_base    (cfg_bias_uram_base),
         .cfg_act_in_bram_base  (cfg_act_in_bram_base),
         .cfg_act_out_bram_base (cfg_act_out_bram_base),
+        .cfg_depthwise         (dw_mode),
         .oc_pass_idx           (oc_pass_idx),
         .pixel_h               (pixel_h),
         .pixel_w               (pixel_w),
@@ -719,6 +736,11 @@ module shared_engine #(
         .mac_valid_in  (mac_valid_in & mac_act_byte_valid),
         .act_byte      (mac_act_byte),
         .weight_bus    (mac_weight_bus),
+        // [DW-ENGINE P1] per-lane act source for depthwise mode: the HELD
+        // activation word (same N+2 alignment as the dense byte select above).
+        // dw_mode is a hard 0 unless ENABLE_DEPTHWISE — legacy bit-identical.
+        .dw_mode       (dw_mode),
+        .act_word      (act_in_rd_data_d),
         .acc_out       (mac_acc_out),
         .mac_busy      (mac_busy)
     );
@@ -782,6 +804,8 @@ module mac_array (
     input  wire         mac_valid_in,
     input  wire [7:0]   act_byte,
     input  wire [2047:0] weight_bus,
+    input  wire         dw_mode,      // [DW-ENGINE P1]
+    input  wire [2047:0] act_word,    // [DW-ENGINE P1]
     output wire [8191:0] acc_out,
     output wire         mac_busy
 );
@@ -833,6 +857,7 @@ module address_generator (
     input  wire [21:0]  cfg_bias_uram_base,
     input  wire [15:0]  cfg_act_in_bram_base,
     input  wire [15:0]  cfg_act_out_bram_base,
+    input  wire         cfg_depthwise,   // [DW-ENGINE P1]
     input  wire [2:0]   oc_pass_idx,
     input  wire [7:0]   pixel_h,
     input  wire [7:0]   pixel_w,
@@ -905,7 +930,8 @@ module config_register_block (
     output wire [21:0]  cfg_weight_uram_base,
     output wire [21:0]  cfg_bias_uram_base,
     output wire [15:0]  cfg_act_in_bram_base,
-    output wire [15:0]  cfg_act_out_bram_base
+    output wire [15:0]  cfg_act_out_bram_base,
+    output wire         cfg_depthwise    // [DW-ENGINE P1]
 );
     assign s_axil_awready        = 1'b0;
     assign s_axil_wready         = 1'b0;
@@ -936,6 +962,7 @@ module config_register_block (
     assign cfg_bias_uram_base    = 22'd0;
     assign cfg_act_in_bram_base  = 16'd0;
     assign cfg_act_out_bram_base = 16'd0;
+    assign cfg_depthwise         = 1'b0;   // [DW-ENGINE P1]
 endmodule
 
 

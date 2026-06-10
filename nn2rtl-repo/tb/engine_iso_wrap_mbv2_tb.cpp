@@ -110,6 +110,9 @@ int main(int argc, char** argv) {
   axi_write(0x28, (CFG_ZP << 6) | CFG_SCALE_SHIFT);       // SCALE_SHIFT_AND_ZP
   axi_write(0x34, CFG_ACT_IN_BASE);                       // ACT_IN_BASE
   axi_write(0x38, CFG_ACT_OUT_BASE);                      // ACT_OUT_BASE
+#ifdef CFG_DEPTHWISE
+  axi_write(0x3C, CFG_DEPTHWISE);                         // [DW-ENGINE P1] depthwise mode flag
+#endif
   std::printf("[wrap] config done at cyc=%llu  (%s IC=%u OC=%u %ux%u->%ux%u wbase=%u bbase=%u)\n",
               (unsigned long long)cyc, CFG_MODULE_ID, CFG_IC, CFG_OC, CFG_IH, CFG_IW,
               CFG_OH, CFG_OW, CFG_WEIGHT_BASE, CFG_BIAS_BASE);

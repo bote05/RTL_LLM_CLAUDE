@@ -101,7 +101,10 @@ module engine_iso_wrap_mbv2 (
         .MAX_IH(112),
         .MAX_IW(112),
         .MAX_OH(112),
-        .MAX_OW(112)
+        .MAX_OW(112),
+        // [DW-ENGINE P1] mirror the MBV2 engine top: depthwise mode armed
+        // (inert for dense dispatches — cfg 0x3C resets to 0).
+        .ENABLE_DEPTHWISE(1)
     ) u_engine(
         .clk(clk), .rst_n(rst_n),
         .s_axil_awvalid(s_axil_awvalid), .s_axil_awready(s_axil_awready), .s_axil_awaddr(s_axil_awaddr),

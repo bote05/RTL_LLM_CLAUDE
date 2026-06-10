@@ -31,6 +31,11 @@
 //                                            scheduler writes 0 until task 03 is regenerated
 //                                            to cover the BRAM bases)
 //   0x38 ACT_OUT_BASE         wdata[15:0]  -> cfg_act_out_bram_base
+//   0x3C DEPTHWISE            wdata[0]     -> cfg_depthwise  ([DW-ENGINE P1 2026-06-10]
+//                                            per-lane depthwise mode: K walks KH*KW taps only,
+//                                            channels map to MAC lanes; resets to 0 and is only
+//                                            ever written by schedulers that have DW dispatches,
+//                                            so legacy (ResNet) behavior is bit-identical)
 //
 // Read-back returns the full 32-bit value last written (so a scoreboard
 // can write-then-read each register and expect bit-exact match). Each
@@ -98,7 +103,9 @@ module config_register_block (
     output wire [21:0]  cfg_weight_uram_base,
     output wire [21:0]  cfg_bias_uram_base,
     output wire [15:0]  cfg_act_in_bram_base,
-    output wire [15:0]  cfg_act_out_bram_base
+    output wire [15:0]  cfg_act_out_bram_base,
+    // [DW-ENGINE P1] depthwise-mode flag (register 0x3C bit 0; reset 0)
+    output wire         cfg_depthwise
 );
 
     // ----------------------------------------------------------------------
@@ -118,6 +125,7 @@ module config_register_block (
     reg [31:0] reg_scale_shift_zp;
     reg [31:0] reg_act_in_base;
     reg [31:0] reg_act_out_base;
+    reg [31:0] reg_depthwise;        // [DW-ENGINE P1] 0x3C
 
     // ----------------------------------------------------------------------
     // AXI4-Lite handshake registers.
@@ -178,6 +186,7 @@ module config_register_block (
     assign cfg_scale_shift       = reg_scale_shift_zp[5:0];
     assign cfg_act_in_bram_base  = reg_act_in_base[15:0];
     assign cfg_act_out_bram_base = reg_act_out_base[15:0];
+    assign cfg_depthwise         = reg_depthwise[0];   // [DW-ENGINE P1]
 
     // ----------------------------------------------------------------------
     // Write path + engine_start_pulse generation.
@@ -199,6 +208,7 @@ module config_register_block (
             reg_scale_shift_zp    <= 32'd0;
             reg_act_in_base       <= 32'd0;
             reg_act_out_base      <= 32'd0;
+            reg_depthwise         <= 32'd0;   // [DW-ENGINE P1]
         end else begin
             // engine_start_pulse defaults low; raised below if a trigger fires.
             engine_start_pulse_r <= 1'b0;
@@ -227,6 +237,7 @@ module config_register_block (
                     // 0x30 STATUS is read-only
                     8'h34:   reg_act_in_base     <= s_axil_wdata;
                     8'h38:   reg_act_out_base    <= s_axil_wdata;
+                    8'h3C:   reg_depthwise       <= s_axil_wdata;   // [DW-ENGINE P1]
                     default: ; // unrecognised offset: write completes with OKAY but no register changes
                 endcase
             end
@@ -270,6 +281,7 @@ module config_register_block (
                     8'h30:   rdata_r <= {30'd0, engine_busy_in, engine_done_in};
                     8'h34:   rdata_r <= reg_act_in_base;
                     8'h38:   rdata_r <= reg_act_out_base;
+                    8'h3C:   rdata_r <= reg_depthwise;   // [DW-ENGINE P1]
                     default: rdata_r <= 32'd0;
                 endcase
             end

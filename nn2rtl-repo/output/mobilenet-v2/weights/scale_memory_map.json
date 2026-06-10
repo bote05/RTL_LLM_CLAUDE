@@ -240,6 +240,27 @@
       "oc_passes": 5,
       "base_word": 53,
       "size_words": 5
+    },
+    {
+      "module_id": "node_conv_896",
+      "oc": 960,
+      "oc_passes": 4,
+      "base_word": 58,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_902",
+      "oc": 960,
+      "oc_passes": 4,
+      "base_word": 62,
+      "depthwise": true
+    },
+    {
+      "module_id": "node_conv_908",
+      "oc": 960,
+      "oc_passes": 4,
+      "base_word": 66,
+      "depthwise": true
     }
   ]
 }
