@@ -151,21 +151,42 @@ free of any new rate argument except the 818 overlay above.
 | (d) MBV2 8/8 e2e byte-exact + cycles | **8/8 PASS, mismatch=0, e2e_cycles = 1,725,683 IDENTICAL on all 8 vectors** (was 1,957,391; **−231,708 = −11.8%**) |
 | (e) ResNet inertness vec0 | **PASS 0/100352 @ EXACTLY 5,664,715** — `resnet_inertness_stage1.log` (structural: no shared engine file touched) |
 
-### STAGE 2 (+818 → 51 dispatches)
+### STAGE 2 (+818 → 51 dispatches: `818@2 830@8 848@17 890@38`, FC@50)
 
 | gate | result |
 |------|--------|
-| (a) lint | TBD |
-| (b) ISO 818 vec0+vec1 | TBD |
-| (c) hazard proof (818 overlay lag classes confirmed) | TBD |
-| (d) MBV2 8/8 e2e | TBD |
-| (e) ResNet inertness | TBD |
+| (a) lint | **0 errors** — `lint_stage2.log` |
+| (b) ISO 818 vec0+vec1 (KPAR8+ENG_PIPE WLAT=2) | **PASS mismatch=0, 37,644 cyc** (vec0==vec1) — `iso_818_v*.log` |
+| (c) hazard proof | **PASS** — d1(816) overlay verdicts CONFIRMED `rxf=lag-safe-1x1, wxf=lag-safe-inplace-fill` (fill source structurally traced to node_conv_816); everything else strictly disjoint / baseline-identical — `hazard_stage2.log` |
+| (d) MBV2 8/8 e2e | **8/8 PASS, mismatch=0, e2e_cycles = 1,380,155 IDENTICAL on all 8 vectors** (−345,528 vs stage 1; **−577,236 = −29.5% vs the 1,957,391 base**) |
+| (e) ResNet inertness | **PASS 0/100352 @ EXACTLY 5,664,715** — `resnet_inertness_stage2.log` |
 
 ## 8. Cycle accounting
 
-TBD after gates (raw spatial busy on the old frame: 818=413,952,
-830=155,232, 848=51,744, 890=38,808; engine-side serial adds measured by
-ISO; net frame deltas measured by the 8/8 gate).
+* Engine-side cost added (ISO-measured, KPAR8+ENG_PIPE serial DW walk,
+  ~12 cyc per (pixel, oc_pass)): 818 = 37,644; 830 = 9,420; 848 = 2,364;
+  890 = 1,776 → **+51,204 engine cycles total**.
+* Frame MEASURED (8/8, cycle-identical on all vectors):
+
+  | state | frame | Δ |
+  |-------|-----------|---------|
+  | ENG-PIPE base (5fe7327) | 1,957,391 | — |
+  | STAGE 1 (830/848/890) | **1,725,683** | −231,708 (−11.8%) |
+  | STAGE 2 (+818) | **1,380,155** | −345,528 more; **total −577,236 (−29.5%)** |
+
+* The win EXCEEDS the verdict's −277K-class estimate (and even the raw
+  busy-time sum 659,736 × the usual overlap discount) because the spatial
+  stride-2 convs were not just busy — they SERIALIZED the stream between the
+  expand bridge and the project loader at MP=16 rate. On the engine, the
+  loader absorbs the producer stream at full bridge-drain rate while the DW
+  compute itself shrinks to ~12 cyc/px on 256 lanes.
+* At 200 MHz: 1,380,155 cyc ≈ **145 fps equivalent** (was 102 at base).
+  The remaining spatial block = stem conv_810 + DW 812 (the only DW left
+  spatial) + the GAP/serializer tail.
+* LUT projection (~129 LUT/channel for MP-16 spatial DW, per the P1/EXT
+  measurements): the quartet carries ΣC = 1,008 channels → **~−110-130K LUT**
+  removed from the congestion-hot DW zone, minus ~10-15K added back (4
+  loaders, 4 bridges). To be confirmed at the next MBV2 synth.
 
 ## 9. Reproduction / promotion notes
 

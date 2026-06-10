@@ -4,7 +4,7 @@
 // Heavy module list: C:\Users\User\Desktop\RTL_LLM_CLAUDE\nn2rtl-repo\output\mobilenet-v2\mbv2-heavy-pointwise.txt
 // Skip-FIFO sizes:   output/wrapper/skip_fifo_sizes.json
 // Weight memory map: output/mobilenet-v2/weights/weight_memory_map.json
-// Layers total: 99, spatial: 49, engine-dispatched: 50 ([DW-ENGINE P1]+[DW-ENGINE EXT] 12 stride-1 DW + [DW-QUARTET] stride-2 DW 830/848/890 + [FC-ENGINE] node_linear), residual adds: 10, projection convs: 11.
+// Layers total: 99, spatial: 48, engine-dispatched: 51 ([DW-ENGINE P1]+[DW-ENGINE EXT] 12 stride-1 DW + [DW-QUARTET] stride-2 DW 818/830/848/890 + [FC-ENGINE] node_linear), residual adds: 10, projection convs: 11.
 //
 // This file is deterministically regenerated; do not edit by hand.
 
@@ -73,8 +73,7 @@ module nn2rtl_top (
     wire [767:0] n4_3_data_out;
     wire n4_3_ready_in;
     wire node_conv_818_valid_out;
-    wire [767:0] node_conv_818_data_out;
-    wire node_conv_818_ready_in;
+    wire [767:0] node_conv_818_data_out;  // driven by engine_output_bridge SLOT 2 ([DW-QUARTET])
     wire n4_4_valid_out;
     wire [767:0] n4_4_data_out;
     wire n4_4_ready_in;
@@ -101,7 +100,7 @@ module nn2rtl_top (
     wire [1151:0] n4_7_data_out;
     wire n4_7_ready_in;
     wire node_conv_830_valid_out;
-    wire [1151:0] node_conv_830_data_out;  // driven by engine_output_bridge SLOT 7 ([DW-QUARTET])
+    wire [1151:0] node_conv_830_data_out;  // driven by engine_output_bridge SLOT 8 ([DW-QUARTET])
     wire n4_8_valid_out;
     wire [1151:0] n4_8_data_out;
     wire n4_8_ready_in;
@@ -143,7 +142,7 @@ module nn2rtl_top (
     wire [1535:0] n4_13_data_out;
     wire n4_13_ready_in;
     wire node_conv_848_valid_out;
-    wire [1535:0] node_conv_848_data_out;  // driven by engine_output_bridge SLOT 16 ([DW-QUARTET])
+    wire [1535:0] node_conv_848_data_out;  // driven by engine_output_bridge SLOT 17 ([DW-QUARTET])
     wire n4_14_valid_out;
     wire [1535:0] n4_14_data_out;
     wire n4_14_ready_in;
@@ -242,7 +241,7 @@ module nn2rtl_top (
     wire [255:0] n4_27_data_out;
     wire n4_27_ready_in;
     wire node_conv_890_valid_out;
-    wire [255:0] node_conv_890_data_out;  // 256b tile bus, driven by engine_output_bridge SLOT 37 ([DW-QUARTET])
+    wire [255:0] node_conv_890_data_out;  // 256b tile bus, driven by engine_output_bridge SLOT 38 ([DW-QUARTET])
     wire n4_28_valid_out;
     wire [255:0] n4_28_data_out;
     wire n4_28_ready_in;
@@ -615,20 +614,14 @@ module nn2rtl_top (
         .valid_in(node_conv_816_valid_out & spatial_run),
         .ready_in(n4_3_ready_in),
         .data_in(node_conv_816_data_out),
-        .out_ready_in(node_conv_818_ready_in & spatial_run),
+        // [DW-QUARTET] conv_818 is engine dispatch 2: this flat stream
+        // fills the DW input loader (u_ldr_node_conv_818).
+        .out_ready_in(ldr_dw818_in_ready & spatial_run),
         .valid_out(n4_3_valid_out),
         .data_out(n4_3_data_out)
     );
 
-    node_conv_818 #(.ENABLE_BACKPRESSURE(1)) u_node_conv_818 (
-.clk(clk), .rst_n(rst_n),
-        .valid_in(n4_3_valid_out & spatial_run),
-        .ready_in(node_conv_818_ready_in),
-        .data_in(n4_3_data_out),
-        .out_ready_in(n4_4_ready_in & spatial_run),
-        .valid_out(node_conv_818_valid_out),
-        .data_out(node_conv_818_data_out)
-    );
+    // node_conv_818: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 2; data_out driven by shared_engine via engine_output_bridge SLOT 2)
 
     n4_4 #(.ENABLE_BACKPRESSURE(1)) u_n4_4 (
 .clk(clk), .rst_n(rst_n),
@@ -688,14 +681,14 @@ module nn2rtl_top (
         .valid_in(node_conv_828_valid_out & spatial_run),
         .ready_in(n4_7_ready_in),
         .data_in(node_conv_828_data_out),
-        // [DW-QUARTET] conv_830 is engine dispatch 7: this flat stream
+        // [DW-QUARTET] conv_830 is engine dispatch 8: this flat stream
         // fills the DW input loader (u_ldr_node_conv_830).
         .out_ready_in(ldr_dw830_in_ready & spatial_run),
         .valid_out(n4_7_valid_out),
         .data_out(n4_7_data_out)
     );
 
-    // node_conv_830: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 7; data_out driven by shared_engine via engine_output_bridge SLOT 7)
+    // node_conv_830: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 8; data_out driven by shared_engine via engine_output_bridge SLOT 8)
 
     n4_8 #(.ENABLE_BACKPRESSURE(1)) u_n4_8 (
 .clk(clk), .rst_n(rst_n),
@@ -794,14 +787,14 @@ module nn2rtl_top (
         .valid_in(node_conv_846_valid_out & spatial_run),
         .ready_in(n4_13_ready_in),
         .data_in(node_conv_846_data_out),
-        // [DW-QUARTET] conv_848 is engine dispatch 16: this flat stream
+        // [DW-QUARTET] conv_848 is engine dispatch 17: this flat stream
         // fills the DW input loader (u_ldr_node_conv_848).
         .out_ready_in(ldr_dw848_in_ready & spatial_run),
         .valid_out(n4_13_valid_out),
         .data_out(n4_13_data_out)
     );
 
-    // node_conv_848: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 16; data_out driven by shared_engine via engine_output_bridge SLOT 16)
+    // node_conv_848: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 17; data_out driven by shared_engine via engine_output_bridge SLOT 17)
 
     n4_14 #(.ENABLE_BACKPRESSURE(1)) u_n4_14 (
 .clk(clk), .rst_n(rst_n),
@@ -1045,14 +1038,14 @@ module nn2rtl_top (
         .valid_in(node_conv_888_valid_out & spatial_run),
         .ready_in(n4_27_ready_in),
         .data_in(node_conv_888_data_out),
-        // [DW-QUARTET] conv_890 is engine dispatch 37: this tile stream
+        // [DW-QUARTET] conv_890 is engine dispatch 38: this tile stream
         // fills the DW input loader (u_ldr_node_conv_890).
         .out_ready_in(ldr_dw890_in_ready & spatial_run),
         .valid_out(n4_27_valid_out),
         .data_out(n4_27_data_out)
     );
 
-    // node_conv_890: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 37; data_out driven by shared_engine via engine_output_bridge SLOT 37)
+    // node_conv_890: engine-dispatched ([DW-QUARTET] STRIDE-2 DEPTHWISE dispatch 38; data_out driven by shared_engine via engine_output_bridge SLOT 38)
 
     n4_28 #(.ENABLE_BACKPRESSURE(1)) u_n4_28 (
 .clk(clk), .rst_n(rst_n),
@@ -2621,6 +2614,32 @@ module nn2rtl_top (
     );
 
 
+    // [DW-QUARTET] STRIDE-2 DW input loader: relu n4_3's stream -> the FULL
+    // 112x112 input image, act words 12544..25087,
+    // for the conv_818 DEPTHWISE engine dispatch (engine reads rows 2*oh_r..+2).
+    wire        ldr_dw818_wr_req;
+    wire        ldr_dw818_wr_grant;
+    wire [14:0] ldr_dw818_wr_addr;
+    wire [2047:0] ldr_dw818_wr_data;
+    wire        ldr_dw818_loaded;
+    wire        ldr_dw818_in_ready;
+    stream_to_act_bram_bridge #(
+        .BUS_W(768),
+        .BRAM_BASE_ADDR(12544),
+        .TOTAL_BRAM_WORDS(12544)
+    ) u_ldr_node_conv_818 (
+        .clk(clk), .rst_n(rst_n),
+        .in_valid(n4_3_valid_out & spatial_run),
+        .in_data(n4_3_data_out),
+        .wr_req(ldr_dw818_wr_req),
+        .wr_grant(ldr_dw818_wr_grant),
+        .wr_addr(ldr_dw818_wr_addr),
+        .wr_data(ldr_dw818_wr_data),
+        .loaded(ldr_dw818_loaded),
+        .in_ready(ldr_dw818_in_ready)
+    );
+
+
     // [DW-QUARTET] STRIDE-2 DW input loader: relu n4_7's stream -> the FULL
     // 56x56 input image, act words 9368..12503,
     // for the conv_830 DEPTHWISE engine dispatch (engine reads rows 2*oh_r..+2).
@@ -2766,12 +2785,13 @@ module nn2rtl_top (
     assign ldr_fc_wr_grant = ldr_fc_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req);
     // [DW-QUARTET] stride-2 DW input loaders (lowest priority; the spatial
     // chain is serial so at most one loader is ever active at a time).
-    assign ldr_dw830_wr_grant = ldr_dw830_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req);
-    assign ldr_dw848_wr_grant = ldr_dw848_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw830_wr_req);
-    assign ldr_dw890_wr_grant = ldr_dw890_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw830_wr_req | ldr_dw848_wr_req);
-    assign act_wr_en_final   = engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw830_wr_req | ldr_dw848_wr_req | ldr_dw890_wr_req;
-    assign act_wr_addr_final = engine_act_wr_commit ? engine_act_out_wr_addr[14:0] : ldr0_wr_req ? ldr0_wr_addr : ldr1_wr_req ? ldr1_wr_addr : ldr2_wr_req ? ldr2_wr_addr : ldr3_wr_req ? ldr3_wr_addr : ldr4_wr_req ? ldr4_wr_addr : ldr5_wr_req ? ldr5_wr_addr : ldr6_wr_req ? ldr6_wr_addr : ldr7_wr_req ? ldr7_wr_addr : ldr8_wr_req ? ldr8_wr_addr : ldr9_wr_req ? ldr9_wr_addr : ldr10_wr_req ? ldr10_wr_addr : ldr11_wr_req ? ldr11_wr_addr : ldr12_wr_req ? ldr12_wr_addr : ldr13_wr_req ? ldr13_wr_addr : ldr14_wr_req ? ldr14_wr_addr : ldr15_wr_req ? ldr15_wr_addr : ldr16_wr_req ? ldr16_wr_addr : ldr17_wr_req ? ldr17_wr_addr : ldr18_wr_req ? ldr18_wr_addr : ldr19_wr_req ? ldr19_wr_addr : ldr20_wr_req ? ldr20_wr_addr : ldr22_wr_req ? ldr22_wr_addr : ldr24_wr_req ? ldr24_wr_addr : ldr26_wr_req ? ldr26_wr_addr : ldr27_wr_req ? ldr27_wr_addr : ldr28_wr_req ? ldr28_wr_addr : ldr30_wr_req ? ldr30_wr_addr : ldr32_wr_req ? ldr32_wr_addr : ldr33_wr_req ? ldr33_wr_addr : ldr23_wr_req ? ldr23_wr_addr : ldr25_wr_req ? ldr25_wr_addr : ldr29_wr_req ? ldr29_wr_addr : ldr31_wr_req ? ldr31_wr_addr : ldr_dw896_wr_req ? ldr_dw896_wr_addr : ldr_dw902_wr_req ? ldr_dw902_wr_addr : ldr_dw908_wr_req ? ldr_dw908_wr_addr : ldr_dw824_wr_req ? ldr_dw824_wr_addr : ldr_dw836_wr_req ? ldr_dw836_wr_addr : ldr_dw842_wr_req ? ldr_dw842_wr_addr : ldr_dw854_wr_req ? ldr_dw854_wr_addr : ldr_dw860_wr_req ? ldr_dw860_wr_addr : ldr_dw866_wr_req ? ldr_dw866_wr_addr : ldr_dw872_wr_req ? ldr_dw872_wr_addr : ldr_dw878_wr_req ? ldr_dw878_wr_addr : ldr_dw884_wr_req ? ldr_dw884_wr_addr : ldr_fc_wr_req ? ldr_fc_wr_addr : ldr_dw830_wr_req ? ldr_dw830_wr_addr : ldr_dw848_wr_req ? ldr_dw848_wr_addr : ldr_dw890_wr_req ? ldr_dw890_wr_addr : 15'd0;
-    assign act_wr_data_final = engine_act_wr_commit ? engine_act_out_wr_data : ldr0_wr_req ? ldr0_wr_data : ldr1_wr_req ? ldr1_wr_data : ldr2_wr_req ? ldr2_wr_data : ldr3_wr_req ? ldr3_wr_data : ldr4_wr_req ? ldr4_wr_data : ldr5_wr_req ? ldr5_wr_data : ldr6_wr_req ? ldr6_wr_data : ldr7_wr_req ? ldr7_wr_data : ldr8_wr_req ? ldr8_wr_data : ldr9_wr_req ? ldr9_wr_data : ldr10_wr_req ? ldr10_wr_data : ldr11_wr_req ? ldr11_wr_data : ldr12_wr_req ? ldr12_wr_data : ldr13_wr_req ? ldr13_wr_data : ldr14_wr_req ? ldr14_wr_data : ldr15_wr_req ? ldr15_wr_data : ldr16_wr_req ? ldr16_wr_data : ldr17_wr_req ? ldr17_wr_data : ldr18_wr_req ? ldr18_wr_data : ldr19_wr_req ? ldr19_wr_data : ldr20_wr_req ? ldr20_wr_data : ldr22_wr_req ? ldr22_wr_data : ldr24_wr_req ? ldr24_wr_data : ldr26_wr_req ? ldr26_wr_data : ldr27_wr_req ? ldr27_wr_data : ldr28_wr_req ? ldr28_wr_data : ldr30_wr_req ? ldr30_wr_data : ldr32_wr_req ? ldr32_wr_data : ldr33_wr_req ? ldr33_wr_data : ldr23_wr_req ? ldr23_wr_data : ldr25_wr_req ? ldr25_wr_data : ldr29_wr_req ? ldr29_wr_data : ldr31_wr_req ? ldr31_wr_data : ldr_dw896_wr_req ? ldr_dw896_wr_data : ldr_dw902_wr_req ? ldr_dw902_wr_data : ldr_dw908_wr_req ? ldr_dw908_wr_data : ldr_dw824_wr_req ? ldr_dw824_wr_data : ldr_dw836_wr_req ? ldr_dw836_wr_data : ldr_dw842_wr_req ? ldr_dw842_wr_data : ldr_dw854_wr_req ? ldr_dw854_wr_data : ldr_dw860_wr_req ? ldr_dw860_wr_data : ldr_dw866_wr_req ? ldr_dw866_wr_data : ldr_dw872_wr_req ? ldr_dw872_wr_data : ldr_dw878_wr_req ? ldr_dw878_wr_data : ldr_dw884_wr_req ? ldr_dw884_wr_data : ldr_fc_wr_req ? ldr_fc_wr_data : ldr_dw830_wr_req ? ldr_dw830_wr_data : ldr_dw848_wr_req ? ldr_dw848_wr_data : ldr_dw890_wr_req ? ldr_dw890_wr_data : 2048'd0;
+    assign ldr_dw818_wr_grant = ldr_dw818_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req);
+    assign ldr_dw830_wr_grant = ldr_dw830_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw818_wr_req);
+    assign ldr_dw848_wr_grant = ldr_dw848_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw818_wr_req | ldr_dw830_wr_req);
+    assign ldr_dw890_wr_grant = ldr_dw890_wr_req & ~(engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw818_wr_req | ldr_dw830_wr_req | ldr_dw848_wr_req);
+    assign act_wr_en_final   = engine_act_wr_commit | ldr0_wr_req | ldr1_wr_req | ldr2_wr_req | ldr3_wr_req | ldr4_wr_req | ldr5_wr_req | ldr6_wr_req | ldr7_wr_req | ldr8_wr_req | ldr9_wr_req | ldr10_wr_req | ldr11_wr_req | ldr12_wr_req | ldr13_wr_req | ldr14_wr_req | ldr15_wr_req | ldr16_wr_req | ldr17_wr_req | ldr18_wr_req | ldr19_wr_req | ldr20_wr_req | ldr22_wr_req | ldr24_wr_req | ldr26_wr_req | ldr27_wr_req | ldr28_wr_req | ldr30_wr_req | ldr32_wr_req | ldr33_wr_req | ldr23_wr_req | ldr25_wr_req | ldr29_wr_req | ldr31_wr_req | ldr_dw896_wr_req | ldr_dw902_wr_req | ldr_dw908_wr_req | ldr_dw824_wr_req | ldr_dw836_wr_req | ldr_dw842_wr_req | ldr_dw854_wr_req | ldr_dw860_wr_req | ldr_dw866_wr_req | ldr_dw872_wr_req | ldr_dw878_wr_req | ldr_dw884_wr_req | ldr_fc_wr_req | ldr_dw818_wr_req | ldr_dw830_wr_req | ldr_dw848_wr_req | ldr_dw890_wr_req;
+    assign act_wr_addr_final = engine_act_wr_commit ? engine_act_out_wr_addr[14:0] : ldr0_wr_req ? ldr0_wr_addr : ldr1_wr_req ? ldr1_wr_addr : ldr2_wr_req ? ldr2_wr_addr : ldr3_wr_req ? ldr3_wr_addr : ldr4_wr_req ? ldr4_wr_addr : ldr5_wr_req ? ldr5_wr_addr : ldr6_wr_req ? ldr6_wr_addr : ldr7_wr_req ? ldr7_wr_addr : ldr8_wr_req ? ldr8_wr_addr : ldr9_wr_req ? ldr9_wr_addr : ldr10_wr_req ? ldr10_wr_addr : ldr11_wr_req ? ldr11_wr_addr : ldr12_wr_req ? ldr12_wr_addr : ldr13_wr_req ? ldr13_wr_addr : ldr14_wr_req ? ldr14_wr_addr : ldr15_wr_req ? ldr15_wr_addr : ldr16_wr_req ? ldr16_wr_addr : ldr17_wr_req ? ldr17_wr_addr : ldr18_wr_req ? ldr18_wr_addr : ldr19_wr_req ? ldr19_wr_addr : ldr20_wr_req ? ldr20_wr_addr : ldr22_wr_req ? ldr22_wr_addr : ldr24_wr_req ? ldr24_wr_addr : ldr26_wr_req ? ldr26_wr_addr : ldr27_wr_req ? ldr27_wr_addr : ldr28_wr_req ? ldr28_wr_addr : ldr30_wr_req ? ldr30_wr_addr : ldr32_wr_req ? ldr32_wr_addr : ldr33_wr_req ? ldr33_wr_addr : ldr23_wr_req ? ldr23_wr_addr : ldr25_wr_req ? ldr25_wr_addr : ldr29_wr_req ? ldr29_wr_addr : ldr31_wr_req ? ldr31_wr_addr : ldr_dw896_wr_req ? ldr_dw896_wr_addr : ldr_dw902_wr_req ? ldr_dw902_wr_addr : ldr_dw908_wr_req ? ldr_dw908_wr_addr : ldr_dw824_wr_req ? ldr_dw824_wr_addr : ldr_dw836_wr_req ? ldr_dw836_wr_addr : ldr_dw842_wr_req ? ldr_dw842_wr_addr : ldr_dw854_wr_req ? ldr_dw854_wr_addr : ldr_dw860_wr_req ? ldr_dw860_wr_addr : ldr_dw866_wr_req ? ldr_dw866_wr_addr : ldr_dw872_wr_req ? ldr_dw872_wr_addr : ldr_dw878_wr_req ? ldr_dw878_wr_addr : ldr_dw884_wr_req ? ldr_dw884_wr_addr : ldr_fc_wr_req ? ldr_fc_wr_addr : ldr_dw818_wr_req ? ldr_dw818_wr_addr : ldr_dw830_wr_req ? ldr_dw830_wr_addr : ldr_dw848_wr_req ? ldr_dw848_wr_addr : ldr_dw890_wr_req ? ldr_dw890_wr_addr : 15'd0;
+    assign act_wr_data_final = engine_act_wr_commit ? engine_act_out_wr_data : ldr0_wr_req ? ldr0_wr_data : ldr1_wr_req ? ldr1_wr_data : ldr2_wr_req ? ldr2_wr_data : ldr3_wr_req ? ldr3_wr_data : ldr4_wr_req ? ldr4_wr_data : ldr5_wr_req ? ldr5_wr_data : ldr6_wr_req ? ldr6_wr_data : ldr7_wr_req ? ldr7_wr_data : ldr8_wr_req ? ldr8_wr_data : ldr9_wr_req ? ldr9_wr_data : ldr10_wr_req ? ldr10_wr_data : ldr11_wr_req ? ldr11_wr_data : ldr12_wr_req ? ldr12_wr_data : ldr13_wr_req ? ldr13_wr_data : ldr14_wr_req ? ldr14_wr_data : ldr15_wr_req ? ldr15_wr_data : ldr16_wr_req ? ldr16_wr_data : ldr17_wr_req ? ldr17_wr_data : ldr18_wr_req ? ldr18_wr_data : ldr19_wr_req ? ldr19_wr_data : ldr20_wr_req ? ldr20_wr_data : ldr22_wr_req ? ldr22_wr_data : ldr24_wr_req ? ldr24_wr_data : ldr26_wr_req ? ldr26_wr_data : ldr27_wr_req ? ldr27_wr_data : ldr28_wr_req ? ldr28_wr_data : ldr30_wr_req ? ldr30_wr_data : ldr32_wr_req ? ldr32_wr_data : ldr33_wr_req ? ldr33_wr_data : ldr23_wr_req ? ldr23_wr_data : ldr25_wr_req ? ldr25_wr_data : ldr29_wr_req ? ldr29_wr_data : ldr31_wr_req ? ldr31_wr_data : ldr_dw896_wr_req ? ldr_dw896_wr_data : ldr_dw902_wr_req ? ldr_dw902_wr_data : ldr_dw908_wr_req ? ldr_dw908_wr_data : ldr_dw824_wr_req ? ldr_dw824_wr_data : ldr_dw836_wr_req ? ldr_dw836_wr_data : ldr_dw842_wr_req ? ldr_dw842_wr_data : ldr_dw854_wr_req ? ldr_dw854_wr_data : ldr_dw860_wr_req ? ldr_dw860_wr_data : ldr_dw866_wr_req ? ldr_dw866_wr_data : ldr_dw872_wr_req ? ldr_dw872_wr_data : ldr_dw878_wr_req ? ldr_dw878_wr_data : ldr_dw884_wr_req ? ldr_dw884_wr_data : ldr_fc_wr_req ? ldr_fc_wr_data : ldr_dw818_wr_req ? ldr_dw818_wr_data : ldr_dw830_wr_req ? ldr_dw830_wr_data : ldr_dw848_wr_req ? ldr_dw848_wr_data : ldr_dw890_wr_req ? ldr_dw890_wr_data : 2048'd0;
 
     // ----- activation BRAM (Fix 8 + Fix 11: unified 6-bank URAM, 24576 × 2048b) -----
     act_unified_mem #(
@@ -2799,58 +2819,58 @@ module nn2rtl_top (
     // the BRAM before pulsing engine_start.
     wire [63:0] all_loaded;
     // [DW-ENGINE EXT] renumbered for 46 dispatches (DW inserts: 824@4, 836@9, 842@12, 854@17, 860@20, 866@23, 872@26, 878@29, 884@32)
-    // [DW-QUARTET] renumbered for 50 dispatches (stride-2 DW inserts: 830@7, 848@16, 890@37)
+    // [DW-QUARTET] renumbered for 51 dispatches (stride-2 DW inserts: 818@2, 830@8, 848@17, 890@38)
     assign all_loaded[0] = ldr0_loaded;
     assign all_loaded[1] = ldr1_loaded;
-    assign all_loaded[2] = ldr2_loaded;
-    assign all_loaded[3] = ldr3_loaded;
-    assign all_loaded[4] = ldr_dw824_loaded;
-    assign all_loaded[5] = ldr4_loaded;
-    assign all_loaded[6] = ldr5_loaded;
-    assign all_loaded[7] = ldr_dw830_loaded;
-    assign all_loaded[8] = ldr6_loaded;
-    assign all_loaded[9] = ldr7_loaded;
-    assign all_loaded[10] = ldr_dw836_loaded;
-    assign all_loaded[11] = ldr8_loaded;
-    assign all_loaded[12] = ldr9_loaded;
-    assign all_loaded[13] = ldr_dw842_loaded;
-    assign all_loaded[14] = ldr10_loaded;
-    assign all_loaded[15] = ldr11_loaded;
-    assign all_loaded[16] = ldr_dw848_loaded;
-    assign all_loaded[17] = ldr12_loaded;
-    assign all_loaded[18] = ldr13_loaded;
-    assign all_loaded[19] = ldr_dw854_loaded;
-    assign all_loaded[20] = ldr14_loaded;
-    assign all_loaded[21] = ldr15_loaded;
-    assign all_loaded[22] = ldr_dw860_loaded;
-    assign all_loaded[23] = ldr16_loaded;
-    assign all_loaded[24] = ldr17_loaded;
-    assign all_loaded[25] = ldr_dw866_loaded;
-    assign all_loaded[26] = ldr18_loaded;
-    assign all_loaded[27] = ldr19_loaded;
-    assign all_loaded[28] = ldr_dw872_loaded;
-    assign all_loaded[29] = ldr20_loaded;
-    assign all_loaded[30] = 1'b1;
-    assign all_loaded[31] = ldr_dw878_loaded;
-    assign all_loaded[32] = ldr22_loaded;
-    assign all_loaded[33] = ldr23_loaded;
-    assign all_loaded[34] = ldr_dw884_loaded;
-    assign all_loaded[35] = ldr24_loaded;
-    assign all_loaded[36] = ldr25_loaded;
-    assign all_loaded[37] = ldr_dw890_loaded;
-    assign all_loaded[38] = ldr26_loaded;
-    assign all_loaded[39] = ldr27_loaded;
-    assign all_loaded[40] = ldr_dw896_loaded;
-    assign all_loaded[41] = ldr28_loaded;
-    assign all_loaded[42] = ldr29_loaded;
-    assign all_loaded[43] = ldr_dw902_loaded;
-    assign all_loaded[44] = ldr30_loaded;
-    assign all_loaded[45] = ldr31_loaded;
-    assign all_loaded[46] = ldr_dw908_loaded;
-    assign all_loaded[47] = ldr32_loaded;
-    assign all_loaded[48] = ldr33_loaded;
-    assign all_loaded[49] = ldr_fc_loaded;
-    assign all_loaded[50] = 1'b1;
+    assign all_loaded[2] = ldr_dw818_loaded;
+    assign all_loaded[3] = ldr2_loaded;
+    assign all_loaded[4] = ldr3_loaded;
+    assign all_loaded[5] = ldr_dw824_loaded;
+    assign all_loaded[6] = ldr4_loaded;
+    assign all_loaded[7] = ldr5_loaded;
+    assign all_loaded[8] = ldr_dw830_loaded;
+    assign all_loaded[9] = ldr6_loaded;
+    assign all_loaded[10] = ldr7_loaded;
+    assign all_loaded[11] = ldr_dw836_loaded;
+    assign all_loaded[12] = ldr8_loaded;
+    assign all_loaded[13] = ldr9_loaded;
+    assign all_loaded[14] = ldr_dw842_loaded;
+    assign all_loaded[15] = ldr10_loaded;
+    assign all_loaded[16] = ldr11_loaded;
+    assign all_loaded[17] = ldr_dw848_loaded;
+    assign all_loaded[18] = ldr12_loaded;
+    assign all_loaded[19] = ldr13_loaded;
+    assign all_loaded[20] = ldr_dw854_loaded;
+    assign all_loaded[21] = ldr14_loaded;
+    assign all_loaded[22] = ldr15_loaded;
+    assign all_loaded[23] = ldr_dw860_loaded;
+    assign all_loaded[24] = ldr16_loaded;
+    assign all_loaded[25] = ldr17_loaded;
+    assign all_loaded[26] = ldr_dw866_loaded;
+    assign all_loaded[27] = ldr18_loaded;
+    assign all_loaded[28] = ldr19_loaded;
+    assign all_loaded[29] = ldr_dw872_loaded;
+    assign all_loaded[30] = ldr20_loaded;
+    assign all_loaded[31] = 1'b1;
+    assign all_loaded[32] = ldr_dw878_loaded;
+    assign all_loaded[33] = ldr22_loaded;
+    assign all_loaded[34] = ldr23_loaded;
+    assign all_loaded[35] = ldr_dw884_loaded;
+    assign all_loaded[36] = ldr24_loaded;
+    assign all_loaded[37] = ldr25_loaded;
+    assign all_loaded[38] = ldr_dw890_loaded;
+    assign all_loaded[39] = ldr26_loaded;
+    assign all_loaded[40] = ldr27_loaded;
+    assign all_loaded[41] = ldr_dw896_loaded;
+    assign all_loaded[42] = ldr28_loaded;
+    assign all_loaded[43] = ldr29_loaded;
+    assign all_loaded[44] = ldr_dw902_loaded;
+    assign all_loaded[45] = ldr30_loaded;
+    assign all_loaded[46] = ldr31_loaded;
+    assign all_loaded[47] = ldr_dw908_loaded;
+    assign all_loaded[48] = ldr32_loaded;
+    assign all_loaded[49] = ldr33_loaded;
+    assign all_loaded[50] = ldr_fc_loaded;
     assign all_loaded[51] = 1'b1;
     assign all_loaded[52] = 1'b1;
     assign all_loaded[53] = 1'b1;
@@ -2947,7 +2967,7 @@ module nn2rtl_top (
         .ACT_W(2048),
         .DATA_W(128),
         .EXPECTED_BEATS(12544),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_814 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -2967,7 +2987,7 @@ module nn2rtl_top (
         .ACT_W(2048),
         .DATA_W(768),
         .EXPECTED_BEATS(12544),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_816 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -2980,14 +3000,36 @@ module nn2rtl_top (
         .drain_complete(u_engine_out_node_conv_816_drain_complete)
     );
 
-    wire u_engine_out_node_conv_820_fifo_ready;
-    wire u_engine_out_node_conv_820_drain_complete;
+    wire u_engine_out_node_conv_818_fifo_ready;
+    wire u_engine_out_node_conv_818_drain_complete;
+    // [DW-QUARTET] conv_818 STRIDE-2 DEPTHWISE dispatch 2: re-emit the engine's
+    // 56x56 output as the flat 768b low-slice (1 beat/pos) the (unchanged) relu n4_4 consumes.
     engine_output_bridge #(
         .SLOT(2),
         .ACT_W(2048),
+        .DATA_W(768),
+        .EXPECTED_BEATS(3136),
+        .NUM_DISPATCHES(51)
+    ) u_engine_out_node_conv_818 (
+        .clk(clk), .rst_n(rst_n),
+        .start(sched_engine_output_ready),
+        .fifo_out_valid(eofifo_out_valid),
+        .fifo_out_data(eofifo_out_data),
+        .fifo_out_ready(u_engine_out_node_conv_818_fifo_ready),
+        .ready_out((n4_4_ready_in & spatial_run)),
+        .valid_out(node_conv_818_valid_out),
+        .data_out(node_conv_818_data_out),
+        .drain_complete(u_engine_out_node_conv_818_drain_complete)
+    );
+
+    wire u_engine_out_node_conv_820_fifo_ready;
+    wire u_engine_out_node_conv_820_drain_complete;
+    engine_output_bridge #(
+        .SLOT(3),  // [DW-QUARTET] was 2
+        .ACT_W(2048),
         .DATA_W(192),
         .EXPECTED_BEATS(3136),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_820 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3003,11 +3045,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_822_fifo_ready;
     wire u_engine_out_node_conv_822_drain_complete;
     engine_output_bridge #(
-        .SLOT(3),
+        .SLOT(4),  // [DW-QUARTET] was 3
         .ACT_W(2048),
         .DATA_W(1152),
         .EXPECTED_BEATS(3136),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_822 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3025,11 +3067,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_824 DEPTHWISE dispatch 4: re-emit the engine's act
     // words as the flat 1152b low-slice (1 beat/pos) the (unchanged) relu n4_6 consumes.
     engine_output_bridge #(
-        .SLOT(4),
+        .SLOT(5),  // [DW-QUARTET] was 4
         .ACT_W(2048),
         .DATA_W(1152),
         .EXPECTED_BEATS(3136),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_824 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3045,11 +3087,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_826_fifo_ready;
     wire u_engine_out_node_conv_826_drain_complete;
     engine_output_bridge #(
-        .SLOT(5),
+        .SLOT(6),  // [DW-QUARTET] was 5
         .ACT_W(2048),
         .DATA_W(192),
         .EXPECTED_BEATS(3136),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_826 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3065,11 +3107,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_828_fifo_ready;
     wire u_engine_out_node_conv_828_drain_complete;
     engine_output_bridge #(
-        .SLOT(6),
+        .SLOT(7),  // [DW-QUARTET] was 6
         .ACT_W(2048),
         .DATA_W(1152),
         .EXPECTED_BEATS(3136),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_828 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3084,14 +3126,14 @@ module nn2rtl_top (
 
     wire u_engine_out_node_conv_830_fifo_ready;
     wire u_engine_out_node_conv_830_drain_complete;
-    // [DW-QUARTET] conv_830 STRIDE-2 DEPTHWISE dispatch 7: re-emit the engine's
+    // [DW-QUARTET] conv_830 STRIDE-2 DEPTHWISE dispatch 8: re-emit the engine's
     // 28x28 output as the flat 1152b low-slice (1 beat/pos) the (unchanged) relu n4_8 consumes.
     engine_output_bridge #(
-        .SLOT(7),
+        .SLOT(8),
         .ACT_W(2048),
         .DATA_W(1152),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_830 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3107,11 +3149,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_832_fifo_ready;
     wire u_engine_out_node_conv_832_drain_complete;
     engine_output_bridge #(
-        .SLOT(8),  // [DW-QUARTET] was 7
+        .SLOT(9),  // [DW-QUARTET] was 7
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_832 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3127,11 +3169,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_834_fifo_ready;
     wire u_engine_out_node_conv_834_drain_complete;
     engine_output_bridge #(
-        .SLOT(9),  // [DW-QUARTET] was 8
+        .SLOT(10),  // [DW-QUARTET] was 8
         .ACT_W(2048),
         .DATA_W(1536),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_834 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3149,11 +3191,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_836 DEPTHWISE dispatch 9: re-emit the engine's act
     // words as the flat 1536b low-slice (1 beat/pos) the (unchanged) relu n4_10 consumes.
     engine_output_bridge #(
-        .SLOT(10),  // [DW-QUARTET] was 9
+        .SLOT(11),  // [DW-QUARTET] was 9
         .ACT_W(2048),
         .DATA_W(1536),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_836 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3169,11 +3211,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_838_fifo_ready;
     wire u_engine_out_node_conv_838_drain_complete;
     engine_output_bridge #(
-        .SLOT(11),  // [DW-QUARTET] was 10
+        .SLOT(12),  // [DW-QUARTET] was 10
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_838 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3189,11 +3231,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_840_fifo_ready;
     wire u_engine_out_node_conv_840_drain_complete;
     engine_output_bridge #(
-        .SLOT(12),  // [DW-QUARTET] was 11
+        .SLOT(13),  // [DW-QUARTET] was 11
         .ACT_W(2048),
         .DATA_W(1536),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_840 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3211,11 +3253,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_842 DEPTHWISE dispatch 12: re-emit the engine's act
     // words as the flat 1536b low-slice (1 beat/pos) the (unchanged) relu n4_12 consumes.
     engine_output_bridge #(
-        .SLOT(13),  // [DW-QUARTET] was 12
+        .SLOT(14),  // [DW-QUARTET] was 12
         .ACT_W(2048),
         .DATA_W(1536),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_842 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3231,11 +3273,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_844_fifo_ready;
     wire u_engine_out_node_conv_844_drain_complete;
     engine_output_bridge #(
-        .SLOT(14),  // [DW-QUARTET] was 13
+        .SLOT(15),  // [DW-QUARTET] was 13
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_844 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3251,11 +3293,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_846_fifo_ready;
     wire u_engine_out_node_conv_846_drain_complete;
     engine_output_bridge #(
-        .SLOT(15),  // [DW-QUARTET] was 14
+        .SLOT(16),  // [DW-QUARTET] was 14
         .ACT_W(2048),
         .DATA_W(1536),
         .EXPECTED_BEATS(784),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_846 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3270,14 +3312,14 @@ module nn2rtl_top (
 
     wire u_engine_out_node_conv_848_fifo_ready;
     wire u_engine_out_node_conv_848_drain_complete;
-    // [DW-QUARTET] conv_848 STRIDE-2 DEPTHWISE dispatch 16: re-emit the engine's
+    // [DW-QUARTET] conv_848 STRIDE-2 DEPTHWISE dispatch 17: re-emit the engine's
     // 14x14 output as the flat 1536b low-slice (1 beat/pos) the (unchanged) relu n4_14 consumes.
     engine_output_bridge #(
-        .SLOT(16),
+        .SLOT(17),
         .ACT_W(2048),
         .DATA_W(1536),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_848 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3293,11 +3335,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_850_fifo_ready;
     wire u_engine_out_node_conv_850_drain_complete;
     engine_output_bridge #(
-        .SLOT(17),  // [DW-QUARTET] was 15
+        .SLOT(18),  // [DW-QUARTET] was 15
         .ACT_W(2048),
         .DATA_W(512),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_850 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3313,11 +3355,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_852_fifo_ready;
     wire u_engine_out_node_conv_852_drain_complete;
     engine_output_bridge #(
-        .SLOT(18),  // [DW-QUARTET] was 16
+        .SLOT(19),  // [DW-QUARTET] was 16
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_852 (
         .clk(clk), .rst_n(rst_n),
@@ -3336,11 +3378,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_854 DEPTHWISE dispatch 17: re-emit the engine's act
     // words as the flat 3072b/pos (2-beat gather) the (unchanged) relu n4_16 consumes.
     engine_output_bridge #(
-        .SLOT(19),  // [DW-QUARTET] was 17
+        .SLOT(20),  // [DW-QUARTET] was 17
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_854 (
         .clk(clk), .rst_n(rst_n),
@@ -3357,11 +3399,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_856_fifo_ready;
     wire u_engine_out_node_conv_856_drain_complete;
     engine_output_bridge #(
-        .SLOT(20),  // [DW-QUARTET] was 18
+        .SLOT(21),  // [DW-QUARTET] was 18
         .ACT_W(2048),
         .DATA_W(512),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_856 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3377,11 +3419,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_858_fifo_ready;
     wire u_engine_out_node_conv_858_drain_complete;
     engine_output_bridge #(
-        .SLOT(21),  // [DW-QUARTET] was 19
+        .SLOT(22),  // [DW-QUARTET] was 19
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_858 (
         .clk(clk), .rst_n(rst_n),
@@ -3400,11 +3442,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_860 DEPTHWISE dispatch 20: re-emit the engine's act
     // words as the flat 3072b/pos (2-beat gather) the (unchanged) relu n4_18 consumes.
     engine_output_bridge #(
-        .SLOT(22),  // [DW-QUARTET] was 20
+        .SLOT(23),  // [DW-QUARTET] was 20
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_860 (
         .clk(clk), .rst_n(rst_n),
@@ -3421,11 +3463,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_862_fifo_ready;
     wire u_engine_out_node_conv_862_drain_complete;
     engine_output_bridge #(
-        .SLOT(23),  // [DW-QUARTET] was 21
+        .SLOT(24),  // [DW-QUARTET] was 21
         .ACT_W(2048),
         .DATA_W(512),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_862 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3441,11 +3483,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_864_fifo_ready;
     wire u_engine_out_node_conv_864_drain_complete;
     engine_output_bridge #(
-        .SLOT(24),  // [DW-QUARTET] was 22
+        .SLOT(25),  // [DW-QUARTET] was 22
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_864 (
         .clk(clk), .rst_n(rst_n),
@@ -3464,11 +3506,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_866 DEPTHWISE dispatch 23: re-emit the engine's act
     // words as the flat 3072b/pos (2-beat gather) the (unchanged) relu n4_20 consumes.
     engine_output_bridge #(
-        .SLOT(25),  // [DW-QUARTET] was 23
+        .SLOT(26),  // [DW-QUARTET] was 23
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_866 (
         .clk(clk), .rst_n(rst_n),
@@ -3485,11 +3527,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_868_fifo_ready;
     wire u_engine_out_node_conv_868_drain_complete;
     engine_output_bridge #(
-        .SLOT(26),  // [DW-QUARTET] was 24
+        .SLOT(27),  // [DW-QUARTET] was 24
         .ACT_W(2048),
         .DATA_W(512),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_868 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3505,11 +3547,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_870_fifo_ready;
     wire u_engine_out_node_conv_870_drain_complete;
     engine_output_bridge #(
-        .SLOT(27),  // [DW-QUARTET] was 25
+        .SLOT(28),  // [DW-QUARTET] was 25
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_870 (
         .clk(clk), .rst_n(rst_n),
@@ -3528,11 +3570,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_872 DEPTHWISE dispatch 26: re-emit the engine's act
     // words as the flat 3072b/pos (2-beat gather) the (unchanged) relu n4_22 consumes.
     engine_output_bridge #(
-        .SLOT(28),  // [DW-QUARTET] was 26
+        .SLOT(29),  // [DW-QUARTET] was 26
         .ACT_W(2048),
         .DATA_W(3072),
         .EXPECTED_BEATS(392),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(384), .OUT_KIND(2), .POSITIONS(196)
     ) u_engine_out_node_conv_872 (
         .clk(clk), .rst_n(rst_n),
@@ -3549,11 +3591,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_874_fifo_ready;
     wire u_engine_out_node_conv_874_drain_complete;
     engine_output_bridge #(
-        .SLOT(29),  // [DW-QUARTET] was 27
+        .SLOT(30),  // [DW-QUARTET] was 27
         .ACT_W(2048),
         .DATA_W(768),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_874 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3575,11 +3617,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_876_fifo_ready;
     wire u_engine_out_node_conv_876_drain_complete;
     engine_output_bridge #(
-        .SLOT(30),  // [DW-QUARTET] was 28
+        .SLOT(31),  // [DW-QUARTET] was 28
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(588),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(576), .OUT_KIND(1), .POSITIONS(196)
     ) u_engine_out_node_conv_876 (
         .clk(clk), .rst_n(rst_n),
@@ -3598,11 +3640,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_878 DEPTHWISE dispatch 29: re-emit the engine's act
     // words as the 18x256b tile stream the (unchanged) relu n4_24 consumes.
     engine_output_bridge #(
-        .SLOT(31),  // [DW-QUARTET] was 29
+        .SLOT(32),  // [DW-QUARTET] was 29
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(588),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(576), .OUT_KIND(1), .POSITIONS(196)
     ) u_engine_out_node_conv_878 (
         .clk(clk), .rst_n(rst_n),
@@ -3619,11 +3661,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_880_fifo_ready;
     wire u_engine_out_node_conv_880_drain_complete;
     engine_output_bridge #(
-        .SLOT(32),  // [DW-QUARTET] was 30
+        .SLOT(33),  // [DW-QUARTET] was 30
         .ACT_W(2048),
         .DATA_W(768),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_880 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3639,11 +3681,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_882_fifo_ready;
     wire u_engine_out_node_conv_882_drain_complete;
     engine_output_bridge #(
-        .SLOT(33),  // [DW-QUARTET] was 31
+        .SLOT(34),  // [DW-QUARTET] was 31
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(588),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(576), .OUT_KIND(1), .POSITIONS(196)
     ) u_engine_out_node_conv_882 (
         .clk(clk), .rst_n(rst_n),
@@ -3662,11 +3704,11 @@ module nn2rtl_top (
     // [DW-ENGINE EXT] conv_884 DEPTHWISE dispatch 32: re-emit the engine's act
     // words as the 18x256b tile stream the (unchanged) relu n4_26 consumes.
     engine_output_bridge #(
-        .SLOT(34),  // [DW-QUARTET] was 32
+        .SLOT(35),  // [DW-QUARTET] was 32
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(588),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(576), .OUT_KIND(1), .POSITIONS(196)
     ) u_engine_out_node_conv_884 (
         .clk(clk), .rst_n(rst_n),
@@ -3683,11 +3725,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_886_fifo_ready;
     wire u_engine_out_node_conv_886_drain_complete;
     engine_output_bridge #(
-        .SLOT(35),  // [DW-QUARTET] was 33
+        .SLOT(36),  // [DW-QUARTET] was 33
         .ACT_W(2048),
         .DATA_W(768),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_886 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3703,11 +3745,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_888_fifo_ready;
     wire u_engine_out_node_conv_888_drain_complete;
     engine_output_bridge #(
-        .SLOT(36),  // [DW-QUARTET] was 34
+        .SLOT(37),  // [DW-QUARTET] was 34
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(588),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(576), .OUT_KIND(1), .POSITIONS(196)
     ) u_engine_out_node_conv_888 (
         .clk(clk), .rst_n(rst_n),
@@ -3723,14 +3765,14 @@ module nn2rtl_top (
 
     wire u_engine_out_node_conv_890_fifo_ready;
     wire u_engine_out_node_conv_890_drain_complete;
-    // [DW-QUARTET] conv_890 STRIDE-2 DEPTHWISE dispatch 37: re-emit the engine's
+    // [DW-QUARTET] conv_890 STRIDE-2 DEPTHWISE dispatch 38: re-emit the engine's
     // 7x7 output as the 18x256b tile stream the (unchanged) relu n4_28 consumes.
     engine_output_bridge #(
-        .SLOT(37),
+        .SLOT(38),
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(147),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(576), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_890 (
         .clk(clk), .rst_n(rst_n),
@@ -3747,11 +3789,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_892_fifo_ready;
     wire u_engine_out_node_conv_892_drain_complete;
     engine_output_bridge #(
-        .SLOT(38),  // [DW-QUARTET] was 35
+        .SLOT(39),  // [DW-QUARTET] was 35
         .ACT_W(2048),
         .DATA_W(1280),
         .EXPECTED_BEATS(49),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_892 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3767,11 +3809,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_894_fifo_ready;
     wire u_engine_out_node_conv_894_drain_complete;
     engine_output_bridge #(
-        .SLOT(39),  // [DW-QUARTET] was 36
+        .SLOT(40),  // [DW-QUARTET] was 36
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(960), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_894 (
         .clk(clk), .rst_n(rst_n),
@@ -3791,11 +3833,11 @@ module nn2rtl_top (
     // words as the 30x256b tile stream the (unchanged) relu n4_30 consumes —
     // identical geometry to the conv_894-style OC=960 g_tiled bridges.
     engine_output_bridge #(
-        .SLOT(40),  // [DW-QUARTET] was 37
+        .SLOT(41),  // [DW-QUARTET] was 37
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(960), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_896 (
         .clk(clk), .rst_n(rst_n),
@@ -3812,11 +3854,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_898_fifo_ready;
     wire u_engine_out_node_conv_898_drain_complete;
     engine_output_bridge #(
-        .SLOT(41),  // [DW-QUARTET] was 38
+        .SLOT(42),  // [DW-QUARTET] was 38
         .ACT_W(2048),
         .DATA_W(1280),
         .EXPECTED_BEATS(49),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_898 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3832,11 +3874,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_900_fifo_ready;
     wire u_engine_out_node_conv_900_drain_complete;
     engine_output_bridge #(
-        .SLOT(42),  // [DW-QUARTET] was 39
+        .SLOT(43),  // [DW-QUARTET] was 39
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(960), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_900 (
         .clk(clk), .rst_n(rst_n),
@@ -3856,11 +3898,11 @@ module nn2rtl_top (
     // words as the 30x256b tile stream the (unchanged) relu n4_32 consumes —
     // identical geometry to the conv_894-style OC=960 g_tiled bridges.
     engine_output_bridge #(
-        .SLOT(43),  // [DW-QUARTET] was 40
+        .SLOT(44),  // [DW-QUARTET] was 40
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(960), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_902 (
         .clk(clk), .rst_n(rst_n),
@@ -3877,11 +3919,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_904_fifo_ready;
     wire u_engine_out_node_conv_904_drain_complete;
     engine_output_bridge #(
-        .SLOT(44),  // [DW-QUARTET] was 41
+        .SLOT(45),  // [DW-QUARTET] was 41
         .ACT_W(2048),
         .DATA_W(1280),
         .EXPECTED_BEATS(49),
-        .NUM_DISPATCHES(50)
+        .NUM_DISPATCHES(51)
     ) u_engine_out_node_conv_904 (
         .clk(clk), .rst_n(rst_n),
         .start(sched_engine_output_ready),
@@ -3897,11 +3939,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_906_fifo_ready;
     wire u_engine_out_node_conv_906_drain_complete;
     engine_output_bridge #(
-        .SLOT(45),  // [DW-QUARTET] was 42
+        .SLOT(46),  // [DW-QUARTET] was 42
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(960), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_906 (
         .clk(clk), .rst_n(rst_n),
@@ -3921,11 +3963,11 @@ module nn2rtl_top (
     // words as the 30x256b tile stream the (unchanged) relu n4_34 consumes —
     // identical geometry to the conv_894-style OC=960 g_tiled bridges.
     engine_output_bridge #(
-        .SLOT(46),  // [DW-QUARTET] was 43
+        .SLOT(47),  // [DW-QUARTET] was 43
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(196),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(960), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_908 (
         .clk(clk), .rst_n(rst_n),
@@ -3942,11 +3984,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_910_fifo_ready;
     wire u_engine_out_node_conv_910_drain_complete;
     engine_output_bridge #(
-        .SLOT(47),  // [DW-QUARTET] was 44
+        .SLOT(48),  // [DW-QUARTET] was 44
         .ACT_W(2048),
         .DATA_W(2560),
         .EXPECTED_BEATS(98),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(320), .OUT_KIND(2), .POSITIONS(49)
     ) u_engine_out_node_conv_910 (
         .clk(clk), .rst_n(rst_n),
@@ -3963,11 +4005,11 @@ module nn2rtl_top (
     wire u_engine_out_node_conv_912_fifo_ready;
     wire u_engine_out_node_conv_912_drain_complete;
     engine_output_bridge #(
-        .SLOT(48),  // [DW-QUARTET] was 45
+        .SLOT(49),  // [DW-QUARTET] was 45
         .ACT_W(2048),
         .DATA_W(256),
         .EXPECTED_BEATS(245),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(1280), .OUT_KIND(1), .POSITIONS(49)
     ) u_engine_out_node_conv_912 (
         .clk(clk), .rst_n(rst_n),
@@ -3990,11 +4032,11 @@ module nn2rtl_top (
     // Engine requant == node_linear requant (mult'=32568 slot; identity proof in
     // docs/agent_tasks/FC_ENGINE_ANALYSIS.md), and the engine applies NO relu.
     engine_output_bridge #(
-        .SLOT(49),  // [DW-QUARTET] was 46
+        .SLOT(50),  // [DW-QUARTET] was 46
         .ACT_W(2048),
         .DATA_W(8000),
         .EXPECTED_BEATS(4),
-        .NUM_DISPATCHES(50),
+        .NUM_DISPATCHES(51),
         .OC(1000), .OUT_KIND(2), .POSITIONS(1)
     ) u_engine_out_node_linear (
         .clk(clk), .rst_n(rst_n),
@@ -4008,63 +4050,63 @@ module nn2rtl_top (
         .drain_complete(u_engine_out_node_linear_drain_complete)
     );
 
-    assign eofifo_out_ready = u_engine_out_node_conv_814_fifo_ready | u_engine_out_node_conv_816_fifo_ready | u_engine_out_node_conv_820_fifo_ready | u_engine_out_node_conv_822_fifo_ready | u_engine_out_node_conv_826_fifo_ready | u_engine_out_node_conv_828_fifo_ready | u_engine_out_node_conv_832_fifo_ready | u_engine_out_node_conv_834_fifo_ready | u_engine_out_node_conv_838_fifo_ready | u_engine_out_node_conv_840_fifo_ready | u_engine_out_node_conv_844_fifo_ready | u_engine_out_node_conv_846_fifo_ready | u_engine_out_node_conv_850_fifo_ready | u_engine_out_node_conv_852_fifo_ready | u_engine_out_node_conv_856_fifo_ready | u_engine_out_node_conv_858_fifo_ready | u_engine_out_node_conv_862_fifo_ready | u_engine_out_node_conv_864_fifo_ready | u_engine_out_node_conv_868_fifo_ready | u_engine_out_node_conv_870_fifo_ready | u_engine_out_node_conv_874_fifo_ready | u_engine_out_node_conv_876_fifo_ready | u_engine_out_node_conv_880_fifo_ready | u_engine_out_node_conv_882_fifo_ready | u_engine_out_node_conv_886_fifo_ready | u_engine_out_node_conv_888_fifo_ready | u_engine_out_node_conv_892_fifo_ready | u_engine_out_node_conv_894_fifo_ready | u_engine_out_node_conv_898_fifo_ready | u_engine_out_node_conv_900_fifo_ready | u_engine_out_node_conv_904_fifo_ready | u_engine_out_node_conv_906_fifo_ready | u_engine_out_node_conv_910_fifo_ready | u_engine_out_node_conv_912_fifo_ready | u_engine_out_node_conv_896_fifo_ready | u_engine_out_node_conv_902_fifo_ready | u_engine_out_node_conv_908_fifo_ready | u_engine_out_node_conv_824_fifo_ready | u_engine_out_node_conv_836_fifo_ready | u_engine_out_node_conv_842_fifo_ready | u_engine_out_node_conv_854_fifo_ready | u_engine_out_node_conv_860_fifo_ready | u_engine_out_node_conv_866_fifo_ready | u_engine_out_node_conv_872_fifo_ready | u_engine_out_node_conv_878_fifo_ready | u_engine_out_node_conv_884_fifo_ready | u_engine_out_node_conv_830_fifo_ready | u_engine_out_node_conv_848_fifo_ready | u_engine_out_node_conv_890_fifo_ready | u_engine_out_node_linear_fifo_ready;
+    assign eofifo_out_ready = u_engine_out_node_conv_814_fifo_ready | u_engine_out_node_conv_816_fifo_ready | u_engine_out_node_conv_820_fifo_ready | u_engine_out_node_conv_822_fifo_ready | u_engine_out_node_conv_826_fifo_ready | u_engine_out_node_conv_828_fifo_ready | u_engine_out_node_conv_832_fifo_ready | u_engine_out_node_conv_834_fifo_ready | u_engine_out_node_conv_838_fifo_ready | u_engine_out_node_conv_840_fifo_ready | u_engine_out_node_conv_844_fifo_ready | u_engine_out_node_conv_846_fifo_ready | u_engine_out_node_conv_850_fifo_ready | u_engine_out_node_conv_852_fifo_ready | u_engine_out_node_conv_856_fifo_ready | u_engine_out_node_conv_858_fifo_ready | u_engine_out_node_conv_862_fifo_ready | u_engine_out_node_conv_864_fifo_ready | u_engine_out_node_conv_868_fifo_ready | u_engine_out_node_conv_870_fifo_ready | u_engine_out_node_conv_874_fifo_ready | u_engine_out_node_conv_876_fifo_ready | u_engine_out_node_conv_880_fifo_ready | u_engine_out_node_conv_882_fifo_ready | u_engine_out_node_conv_886_fifo_ready | u_engine_out_node_conv_888_fifo_ready | u_engine_out_node_conv_892_fifo_ready | u_engine_out_node_conv_894_fifo_ready | u_engine_out_node_conv_898_fifo_ready | u_engine_out_node_conv_900_fifo_ready | u_engine_out_node_conv_904_fifo_ready | u_engine_out_node_conv_906_fifo_ready | u_engine_out_node_conv_910_fifo_ready | u_engine_out_node_conv_912_fifo_ready | u_engine_out_node_conv_896_fifo_ready | u_engine_out_node_conv_902_fifo_ready | u_engine_out_node_conv_908_fifo_ready | u_engine_out_node_conv_824_fifo_ready | u_engine_out_node_conv_836_fifo_ready | u_engine_out_node_conv_842_fifo_ready | u_engine_out_node_conv_854_fifo_ready | u_engine_out_node_conv_860_fifo_ready | u_engine_out_node_conv_866_fifo_ready | u_engine_out_node_conv_872_fifo_ready | u_engine_out_node_conv_878_fifo_ready | u_engine_out_node_conv_884_fifo_ready | u_engine_out_node_conv_818_fifo_ready | u_engine_out_node_conv_830_fifo_ready | u_engine_out_node_conv_848_fifo_ready | u_engine_out_node_conv_890_fifo_ready | u_engine_out_node_linear_fifo_ready;
 
     // ----- per-dispatch drain_complete mux (Fix 14) -----
     wire [63:0] all_drain;
     // [DW-ENGINE EXT] renumbered for 46 dispatches (DW inserts: 824@4, 836@9, 842@12, 854@17, 860@20, 866@23, 872@26, 878@29, 884@32)
-    // [DW-QUARTET] renumbered for 50 dispatches (stride-2 DW inserts: 830@7, 848@16, 890@37)
+    // [DW-QUARTET] renumbered for 51 dispatches (stride-2 DW inserts: 818@2, 830@8, 848@17, 890@38)
     assign all_drain[0] = u_engine_out_node_conv_814_drain_complete;
     assign all_drain[1] = u_engine_out_node_conv_816_drain_complete;
-    assign all_drain[2] = u_engine_out_node_conv_820_drain_complete;
-    assign all_drain[3] = u_engine_out_node_conv_822_drain_complete;
-    assign all_drain[4] = u_engine_out_node_conv_824_drain_complete;
-    assign all_drain[5] = u_engine_out_node_conv_826_drain_complete;
-    assign all_drain[6] = u_engine_out_node_conv_828_drain_complete;
-    assign all_drain[7] = u_engine_out_node_conv_830_drain_complete;
-    assign all_drain[8] = u_engine_out_node_conv_832_drain_complete;
-    assign all_drain[9] = u_engine_out_node_conv_834_drain_complete;
-    assign all_drain[10] = u_engine_out_node_conv_836_drain_complete;
-    assign all_drain[11] = u_engine_out_node_conv_838_drain_complete;
-    assign all_drain[12] = u_engine_out_node_conv_840_drain_complete;
-    assign all_drain[13] = u_engine_out_node_conv_842_drain_complete;
-    assign all_drain[14] = u_engine_out_node_conv_844_drain_complete;
-    assign all_drain[15] = u_engine_out_node_conv_846_drain_complete;
-    assign all_drain[16] = u_engine_out_node_conv_848_drain_complete;
-    assign all_drain[17] = u_engine_out_node_conv_850_drain_complete;
-    assign all_drain[18] = u_engine_out_node_conv_852_drain_complete;
-    assign all_drain[19] = u_engine_out_node_conv_854_drain_complete;
-    assign all_drain[20] = u_engine_out_node_conv_856_drain_complete;
-    assign all_drain[21] = u_engine_out_node_conv_858_drain_complete;
-    assign all_drain[22] = u_engine_out_node_conv_860_drain_complete;
-    assign all_drain[23] = u_engine_out_node_conv_862_drain_complete;
-    assign all_drain[24] = u_engine_out_node_conv_864_drain_complete;
-    assign all_drain[25] = u_engine_out_node_conv_866_drain_complete;
-    assign all_drain[26] = u_engine_out_node_conv_868_drain_complete;
-    assign all_drain[27] = u_engine_out_node_conv_870_drain_complete;
-    assign all_drain[28] = u_engine_out_node_conv_872_drain_complete;
-    assign all_drain[29] = u_engine_out_node_conv_874_drain_complete;
-    assign all_drain[30] = u_engine_out_node_conv_876_drain_complete;
-    assign all_drain[31] = u_engine_out_node_conv_878_drain_complete;
-    assign all_drain[32] = u_engine_out_node_conv_880_drain_complete;
-    assign all_drain[33] = u_engine_out_node_conv_882_drain_complete;
-    assign all_drain[34] = u_engine_out_node_conv_884_drain_complete;
-    assign all_drain[35] = u_engine_out_node_conv_886_drain_complete;
-    assign all_drain[36] = u_engine_out_node_conv_888_drain_complete;
-    assign all_drain[37] = u_engine_out_node_conv_890_drain_complete;
-    assign all_drain[38] = u_engine_out_node_conv_892_drain_complete;
-    assign all_drain[39] = u_engine_out_node_conv_894_drain_complete;
-    assign all_drain[40] = u_engine_out_node_conv_896_drain_complete;
-    assign all_drain[41] = u_engine_out_node_conv_898_drain_complete;
-    assign all_drain[42] = u_engine_out_node_conv_900_drain_complete;
-    assign all_drain[43] = u_engine_out_node_conv_902_drain_complete;
-    assign all_drain[44] = u_engine_out_node_conv_904_drain_complete;
-    assign all_drain[45] = u_engine_out_node_conv_906_drain_complete;
-    assign all_drain[46] = u_engine_out_node_conv_908_drain_complete;
-    assign all_drain[47] = u_engine_out_node_conv_910_drain_complete;
-    assign all_drain[48] = u_engine_out_node_conv_912_drain_complete;
-    assign all_drain[49] = u_engine_out_node_linear_drain_complete;
-    assign all_drain[50] = 1'b1;
+    assign all_drain[2] = u_engine_out_node_conv_818_drain_complete;
+    assign all_drain[3] = u_engine_out_node_conv_820_drain_complete;
+    assign all_drain[4] = u_engine_out_node_conv_822_drain_complete;
+    assign all_drain[5] = u_engine_out_node_conv_824_drain_complete;
+    assign all_drain[6] = u_engine_out_node_conv_826_drain_complete;
+    assign all_drain[7] = u_engine_out_node_conv_828_drain_complete;
+    assign all_drain[8] = u_engine_out_node_conv_830_drain_complete;
+    assign all_drain[9] = u_engine_out_node_conv_832_drain_complete;
+    assign all_drain[10] = u_engine_out_node_conv_834_drain_complete;
+    assign all_drain[11] = u_engine_out_node_conv_836_drain_complete;
+    assign all_drain[12] = u_engine_out_node_conv_838_drain_complete;
+    assign all_drain[13] = u_engine_out_node_conv_840_drain_complete;
+    assign all_drain[14] = u_engine_out_node_conv_842_drain_complete;
+    assign all_drain[15] = u_engine_out_node_conv_844_drain_complete;
+    assign all_drain[16] = u_engine_out_node_conv_846_drain_complete;
+    assign all_drain[17] = u_engine_out_node_conv_848_drain_complete;
+    assign all_drain[18] = u_engine_out_node_conv_850_drain_complete;
+    assign all_drain[19] = u_engine_out_node_conv_852_drain_complete;
+    assign all_drain[20] = u_engine_out_node_conv_854_drain_complete;
+    assign all_drain[21] = u_engine_out_node_conv_856_drain_complete;
+    assign all_drain[22] = u_engine_out_node_conv_858_drain_complete;
+    assign all_drain[23] = u_engine_out_node_conv_860_drain_complete;
+    assign all_drain[24] = u_engine_out_node_conv_862_drain_complete;
+    assign all_drain[25] = u_engine_out_node_conv_864_drain_complete;
+    assign all_drain[26] = u_engine_out_node_conv_866_drain_complete;
+    assign all_drain[27] = u_engine_out_node_conv_868_drain_complete;
+    assign all_drain[28] = u_engine_out_node_conv_870_drain_complete;
+    assign all_drain[29] = u_engine_out_node_conv_872_drain_complete;
+    assign all_drain[30] = u_engine_out_node_conv_874_drain_complete;
+    assign all_drain[31] = u_engine_out_node_conv_876_drain_complete;
+    assign all_drain[32] = u_engine_out_node_conv_878_drain_complete;
+    assign all_drain[33] = u_engine_out_node_conv_880_drain_complete;
+    assign all_drain[34] = u_engine_out_node_conv_882_drain_complete;
+    assign all_drain[35] = u_engine_out_node_conv_884_drain_complete;
+    assign all_drain[36] = u_engine_out_node_conv_886_drain_complete;
+    assign all_drain[37] = u_engine_out_node_conv_888_drain_complete;
+    assign all_drain[38] = u_engine_out_node_conv_890_drain_complete;
+    assign all_drain[39] = u_engine_out_node_conv_892_drain_complete;
+    assign all_drain[40] = u_engine_out_node_conv_894_drain_complete;
+    assign all_drain[41] = u_engine_out_node_conv_896_drain_complete;
+    assign all_drain[42] = u_engine_out_node_conv_898_drain_complete;
+    assign all_drain[43] = u_engine_out_node_conv_900_drain_complete;
+    assign all_drain[44] = u_engine_out_node_conv_902_drain_complete;
+    assign all_drain[45] = u_engine_out_node_conv_904_drain_complete;
+    assign all_drain[46] = u_engine_out_node_conv_906_drain_complete;
+    assign all_drain[47] = u_engine_out_node_conv_908_drain_complete;
+    assign all_drain[48] = u_engine_out_node_conv_910_drain_complete;
+    assign all_drain[49] = u_engine_out_node_conv_912_drain_complete;
+    assign all_drain[50] = u_engine_out_node_linear_drain_complete;
     assign all_drain[51] = 1'b1;
     assign all_drain[52] = 1'b1;
     assign all_drain[53] = 1'b1;
