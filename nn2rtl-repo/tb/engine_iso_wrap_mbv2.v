@@ -53,7 +53,11 @@ module engine_iso_wrap_mbv2 (
     wire [2047:0] eng_act_out_wr_data;
     wire [21:0]   eng_weight_rd_addr;
     wire          eng_weight_rd_en;
+`ifdef KPAR4
+    wire [8191:0] eng_weight_rd_data;     // [KPAR4] 4 tap-major 2048b words
+`else
     wire [2047:0] eng_weight_rd_data;     // 2048b = 256 INT8 weights (mbv2)
+`endif
     wire [21:0]   eng_bias_rd_addr;
     wire          eng_bias_rd_en;
     wire [8191:0] eng_bias_rd_data;
@@ -65,6 +69,26 @@ module engine_iso_wrap_mbv2 (
     // Mirrors nn2rtl_top.v: weight bus = concat of low 256 bits of each bank,
     // bank0 lowest. The engine consumes the full 2048-bit bus (WGT_W=8).
     wire [16:0]  wbank_addr = eng_weight_rd_addr[16:0];
+`ifdef KPAR4
+    // [KPAR4] repacked 4-taps-per-line banks (group-addressed by the engine).
+    wire [1151:0] b0,b1,b2,b3,b4,b5,b6,b7;
+    genvar kp_tap;
+    generate for (kp_tap = 0; kp_tap < 4; kp_tap = kp_tap + 1) begin : g_kpar_wbus
+        assign eng_weight_rd_data[kp_tap*2048 +: 2048] = {
+            b7[kp_tap*288 +: 256], b6[kp_tap*288 +: 256],
+            b5[kp_tap*288 +: 256], b4[kp_tap*288 +: 256],
+            b3[kp_tap*288 +: 256], b2[kp_tap*288 +: 256],
+            b1[kp_tap*288 +: 256], b0[kp_tap*288 +: 256]};
+    end endgenerate
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank0_kp4.mem")) u0(.clk(clk),.rd_addr(wbank_addr),.rd_data(b0),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank1_kp4.mem")) u1(.clk(clk),.rd_addr(wbank_addr),.rd_data(b1),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank2_kp4.mem")) u2(.clk(clk),.rd_addr(wbank_addr),.rd_data(b2),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank3_kp4.mem")) u3(.clk(clk),.rd_addr(wbank_addr),.rd_data(b3),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank4_kp4.mem")) u4(.clk(clk),.rd_addr(wbank_addr),.rd_data(b4),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank5_kp4.mem")) u5(.clk(clk),.rd_addr(wbank_addr),.rd_data(b5),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank6_kp4.mem")) u6(.clk(clk),.rd_addr(wbank_addr),.rd_data(b6),.rd_en(eng_weight_rd_en));
+    iso_uram_bank #(.WORD_W(1152), .MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank7_kp4.mem")) u7(.clk(clk),.rd_addr(wbank_addr),.rd_data(b7),.rd_en(eng_weight_rd_en));
+`else
     wire [287:0] b0,b1,b2,b3,b4,b5,b6,b7;
     assign eng_weight_rd_data = {b7[255:0],b6[255:0],b5[255:0],b4[255:0],
                                  b3[255:0],b2[255:0],b1[255:0],b0[255:0]};
@@ -76,6 +100,7 @@ module engine_iso_wrap_mbv2 (
     iso_uram_bank #(.MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank5.mem")) u5(.clk(clk),.rd_addr(wbank_addr),.rd_data(b5),.rd_en(eng_weight_rd_en));
     iso_uram_bank #(.MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank6.mem")) u6(.clk(clk),.rd_addr(wbank_addr),.rd_data(b6),.rd_en(eng_weight_rd_en));
     iso_uram_bank #(.MEM_INIT_FILE("output/mobilenet-v2/weights/uram_weights_bank7.mem")) u7(.clk(clk),.rd_addr(wbank_addr),.rd_data(b7),.rd_en(eng_weight_rd_en));
+`endif
 
     // ---- bias + scale ROMs (8192-bit, 1-cycle) ----
     iso_bias_mem #(.MEM_INIT_FILE("output/mobilenet-v2/weights/bias.mem"))
@@ -95,7 +120,12 @@ module engine_iso_wrap_mbv2 (
     // ---- the REAL engine, parameterised for mbv2 INT8 weight slots ----
     shared_engine #(
         .WGT_W(8),
+`ifdef KPAR4
+        .URAM_DATA_W(8192),     // [KPAR4] 4 tap-major words per line
+        .K_PAR(4),
+`else
         .URAM_DATA_W(2048),
+`endif
         .MAX_IC(2048),
         .MAX_OC(2048),
         .MAX_IH(112),
@@ -123,12 +153,12 @@ endmodule
 
 // 288-bit URAM bank, READ_LATENCY via `WLAT (1 or 2). Mirrors nn2rtl_top.v
 // uram_weight_bank XPM READ_LATENCY_A=2 (2-stage). For WLAT1 collapse to 1.
-module iso_uram_bank #(parameter MEM_INIT_FILE="") (
+module iso_uram_bank #(parameter MEM_INIT_FILE="", parameter integer WORD_W=288) (
     input wire clk, input wire [16:0] rd_addr,
-    output wire [287:0] rd_data, input wire rd_en);
-    reg [287:0] mem [0:131071];
+    output wire [WORD_W-1:0] rd_data, input wire rd_en);
+    reg [WORD_W-1:0] mem [0:131071];
     initial if (MEM_INIT_FILE!="") $readmemh(MEM_INIT_FILE, mem);
-    reg [287:0] r1, r2;
+    reg [WORD_W-1:0] r1, r2;
     always @(posedge clk) begin
         if (rd_en) r1 <= mem[rd_addr];
         r2 <= r1;

@@ -81,7 +81,20 @@ module shared_engine #(
     // scheduler never writes 0x3C) is bit- and cycle-identical. Only the
     // MobileNetV2 engine top sets this to 1 so its scheduler can dispatch the
     // 3 wide depthwise convs (conv_896/902/908: C=960, 3x3, lanes==channels).
-    parameter integer ENABLE_DEPTHWISE = 0
+    parameter integer ENABLE_DEPTHWISE = 0,
+
+    // ---- K-tap parallelism (default 1 = bit/cycle-identical legacy) ----
+    // [KPAR4 2026-06-10] When 1 (DEFAULT) every K_PAR generate-if in this
+    // file and in mac_array/address_generator elaborates the ORIGINAL
+    // serial logic VERBATIM — ResNet (which never sets K_PAR) is provably
+    // unchanged. When 4 (MBV2 engine top + the KPAR4 iso build):
+    //   * URAM_DATA_W must be K_PAR*MAC_COUNT*WGT_W (4 tap-major words per
+    //     repacked bank line, tap0 lowest);
+    //   * weight_rd_addr exports the GROUP address (old word addr >> 2);
+    //   * FAST-eligible dense 1x1 layers run 4 taps/cycle; depthwise and
+    //     unaligned-base layers fall back to the serial walk through a
+    //     2-cycle-piped subword select (byte-exact, legacy-rate).
+    parameter integer K_PAR = 1
 ) (
     // ---- Clock + reset ----
     input  wire                          clk,
@@ -202,6 +215,7 @@ module shared_engine #(
     wire [15:0]                ag_k_index;
     wire                       ag_mac_done;
     wire                       ag_pixel_done;
+    wire [3:0]                 ag_k_tap_mask;   // [KPAR4] per-tap valid of the issued group
 
     // -- bram_to_stream_bridge wires (act_in side) --
     wire [ACT_W-1:0]           mac_act_byte;
@@ -212,7 +226,7 @@ module shared_engine #(
     // -- mac_array <-> requant_pipeline path --
     wire                              mac_clear;
     wire                              mac_valid_in;
-    wire [MAC_COUNT*WGT_W-1:0]        mac_weight_bus;       // 2048 b
+    wire [K_PAR*MAC_COUNT*WGT_W-1:0]  mac_weight_bus;       // [KPAR4] K_PAR taps x (MAC_COUNT*WGT_W); 2048 b at K_PAR=1
     wire [MAC_COUNT*ACC_W-1:0]        mac_acc_out;          // 8192 b
     wire                              mac_busy;
 
@@ -228,7 +242,14 @@ module shared_engine #(
     // the BRAM read/write address paths. config_register_block owns the
     // AXI4-Lite slave. The FSM owns engine_busy/engine_done.
 
-    assign weight_rd_addr  = ag_weight_rd_addr;
+    // [KPAR4] K_PAR>1 exports the GROUP address (old word addr >> 2): the
+    // MBV2 banks are repacked 4-taps-per-line (repack_mbv2_kpar4_banks.py).
+    // K_PAR==1 is the verbatim legacy passthrough.
+    generate if (K_PAR == 1) begin : g_waddr_legacy
+        assign weight_rd_addr  = ag_weight_rd_addr;
+    end else begin : g_waddr_kpar
+        assign weight_rd_addr  = {2'b00, ag_weight_rd_addr[21:2]};
+    end endgenerate
     assign weight_rd_en    = ag_weight_rd_en;
     assign act_in_rd_addr  = ag_act_in_rd_addr;
     assign act_in_rd_en    = ag_act_in_rd_en;
@@ -462,9 +483,59 @@ module shared_engine #(
     // held activation is realigned to the same read N.
     assign mac_valid_in = ag_weight_rd_en_d2 & ag_act_in_rd_en_d2;
 
-    // mac_weight_bus is the full URAM-wide weight read; at N+2 it carries the
-    // weights requested at read N (one URAM word = MAC_COUNT INT8 weights = 2048b).
-    assign mac_weight_bus = weight_rd_data[MAC_COUNT*WGT_W-1:0];
+    // [KPAR4] K_PAR==1 (DEFAULT): the ORIGINAL single-tap hookup, verbatim.
+    // K_PAR==4: weight_rd_data carries 4 tap-major words per (group-
+    // addressed) line. Tap0 is selected by the OLD address's [1:0], piped
+    // 2 cycles exactly like ..._rd_en_d/_d2 to meet the URAM READ_LATENCY=2
+    // data: FAST dense groups are 4-aligned so the subsel is 0 and tap0 ==
+    // slice0; SERIAL dispatches (depthwise, FC base 13413%4==1) walk one
+    // old word/cycle with mask 4'b0001, so tap0 tracks the subword and
+    // taps 1..3 are masked dead inside mac_array.
+    wire [3:0]  mac_tap_mask;
+    wire [23:0] mac_act_bytes_ext;
+    generate if (K_PAR == 1) begin : g_ktap_legacy
+        // mac_weight_bus is the full URAM-wide weight read; at N+2 it carries the
+        // weights requested at read N (one URAM word = MAC_COUNT INT8 weights = 2048b).
+        assign mac_weight_bus = weight_rd_data[MAC_COUNT*WGT_W-1:0];
+        assign mac_tap_mask      = 4'b0001;
+        assign mac_act_bytes_ext = 24'd0;
+        /* verilator lint_off UNUSED */
+        wire _unused_kpar_skel = &{1'b0, ag_k_tap_mask};
+        /* verilator lint_on UNUSED */
+    end else begin : g_ktap_kpar
+        // subword + mask pipes (2-cycle, mirroring ag_weight_rd_en_d/_d2).
+        reg [1:0] wsub_d1, wsub_d2;
+        reg [3:0] ktap_d1, ktap_d2;
+        always @(posedge clk or negedge rst_n) begin
+            if (!rst_n) begin
+                wsub_d1 <= 2'd0;    wsub_d2 <= 2'd0;
+                ktap_d1 <= 4'b0001; ktap_d2 <= 4'b0001;
+            end else begin
+                wsub_d1 <= ag_weight_rd_addr[1:0]; wsub_d2 <= wsub_d1;
+                ktap_d1 <= ag_k_tap_mask;          ktap_d2 <= ktap_d1;
+            end
+        end
+        // tap0 = subword-selected old word (slice 0 for aligned fast groups).
+        assign mac_weight_bus[MAC_COUNT*WGT_W-1:0] =
+            weight_rd_data[wsub_d2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[1*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[1*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_weight_bus[3*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
+            weight_rd_data[3*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        assign mac_tap_mask = ktap_d2;
+        // dense taps 1..3 act bytes: consecutive ic bytes of the HELD act
+        // word. Fast groups are 4-aligned (idx%4==0 and 256%4==0) so idx+3
+        // never crosses the word; the +j adds use 8-bit WRAP intermediates
+        // so a serial-mode idx=255 stays an in-range (masked-dead) select.
+        wire [7:0] kidx1 = ag_act_in_ic_byte_idx_d2 + 8'd1;
+        wire [7:0] kidx2 = ag_act_in_ic_byte_idx_d2 + 8'd2;
+        wire [7:0] kidx3 = ag_act_in_ic_byte_idx_d2 + 8'd3;
+        assign mac_act_bytes_ext[7:0]   = act_in_rd_data_d[kidx1*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[15:8]  = act_in_rd_data_d[kidx2*ACT_W +: ACT_W];
+        assign mac_act_bytes_ext[23:16] = act_in_rd_data_d[kidx3*ACT_W +: ACT_W];
+    end endgenerate
 
     // Select the input-channel byte from the HELD activation word using the
     // twice-pipelined ic_byte index (both aligned to read N at cycle N+2).
@@ -637,7 +708,7 @@ module shared_engine #(
     // weights, and ag_pixel_done when all OH*OW output pixels have been
     // emitted.
     // ====================================================================
-    address_generator u_address_generator (
+    address_generator #(.K_PAR(K_PAR)) u_address_generator (
         .clk                   (clk),
         .rst_n                 (rst_n),
         .run_active            (run_active),
@@ -671,7 +742,8 @@ module shared_engine #(
         .act_out_wr_addr       (ag_act_out_wr_addr),
         .k_index               (ag_k_index),
         .mac_done              (ag_mac_done),
-        .pixel_done            (ag_pixel_done)
+        .pixel_done            (ag_pixel_done),
+        .k_tap_mask            (ag_k_tap_mask)
     );
 
     // ====================================================================
@@ -729,13 +801,16 @@ module shared_engine #(
     // [INT3-MIXED] forward WGT_W so the lane weight slice width matches the
     // engine's bit-width (4=INT4 default, 3=INT3). mac_weight_bus is already
     // MAC_COUNT*WGT_W wide, so this stays consistent at either width.
-    mac_array #(.WGT_W(WGT_W)) u_mac_array (
+    mac_array #(.WGT_W(WGT_W), .K_PAR(K_PAR)) u_mac_array (
         .clk           (clk),
         .rst_n         (rst_n),
         .mac_clear     (mac_clear),
         .mac_valid_in  (mac_valid_in & mac_act_byte_valid),
         .act_byte      (mac_act_byte),
         .weight_bus    (mac_weight_bus),
+        // [KPAR4] taps 1..3 act bytes + per-tap mask (legacy-inert ties).
+        .act_bytes_ext (mac_act_bytes_ext),
+        .tap_mask      (mac_tap_mask),
         // [DW-ENGINE P1] per-lane act source for depthwise mode: the HELD
         // activation word (same N+2 alignment as the dense byte select above).
         // dw_mode is a hard 0 unless ENABLE_DEPTHWISE — legacy bit-identical.
@@ -797,13 +872,18 @@ endmodule
 
 `ifndef NN2RTL_ENGINE_SUBBLOCKS_PROVIDED
 
-module mac_array (
+module mac_array #(
+    parameter integer WGT_W = 4,
+    parameter integer K_PAR = 1
+) (
     input  wire         clk,
     input  wire         rst_n,
     input  wire         mac_clear,
     input  wire         mac_valid_in,
     input  wire [7:0]   act_byte,
-    input  wire [2047:0] weight_bus,
+    input  wire [K_PAR*256*WGT_W-1:0] weight_bus,
+    input  wire [23:0]  act_bytes_ext, // [KPAR4]
+    input  wire [3:0]   tap_mask,      // [KPAR4]
     input  wire         dw_mode,      // [DW-ENGINE P1]
     input  wire [2047:0] act_word,    // [DW-ENGINE P1]
     output wire [8191:0] acc_out,
@@ -837,7 +917,9 @@ module requant_pipeline (
 endmodule
 
 
-module address_generator (
+module address_generator #(
+    parameter integer K_PAR = 1
+) (
     input  wire         clk,
     input  wire         rst_n,
     input  wire         run_active,
@@ -871,7 +953,8 @@ module address_generator (
     output wire [15:0]  act_out_wr_addr,
     output wire [15:0]  k_index,
     output wire         mac_done,
-    output wire         pixel_done
+    output wire         pixel_done,
+    output wire [3:0]   k_tap_mask     // [KPAR4]
 );
     assign weight_rd_addr     = 22'd0;
     assign weight_rd_en       = 1'b0;
@@ -884,6 +967,7 @@ module address_generator (
     assign k_index            = 16'd0;
     assign mac_done           = 1'b1;
     assign pixel_done         = 1'b1;
+    assign k_tap_mask         = 4'b0001;   // [KPAR4]
 endmodule
 
 

@@ -31,14 +31,31 @@ module mac_array #(
     // [INT3-MIXED] engine weight bit-width. 4 = INT4 (default, nibble-packed),
     // 3 = INT3. weight_bus packs 256 lanes * WGT_W bits. The shared engine
     // serves all 14 dispatched convs, so WGT_W is UNIFORM across them.
-    parameter integer WGT_W = 4
+    parameter integer WGT_W = 4,
+    // [KPAR4 2026-06-10] K-tap parallelism. 1 (DEFAULT) elaborates the
+    // ORIGINAL serial datapath via generate-if — every legacy instance
+    // (all ResNet tops/harnesses never set K_PAR) is bit- and
+    // cycle-identical. 4 = MBV2 engine top: 4 taps/cycle/lane; the 4
+    // products are summed by a COMBINATIONAL 4:1 tree into the same 32b
+    // accumulator (INT8xINT8 -> 32b accumulation is exact and
+    // order-independent), so the accumulate latency — and the skeleton's
+    // d5 requant drain — is UNCHANGED (TREE_STAGES=0).
+    parameter integer K_PAR = 1
 ) (
     input  wire          clk,
     input  wire          rst_n,
     input  wire          mac_clear,
     input  wire          mac_valid_in,
     input  wire [7:0]    act_byte,
-    input  wire [256*WGT_W-1:0] weight_bus,  // WGT_W-packed: 256 lanes * WGT_W bits
+    input  wire [K_PAR*256*WGT_W-1:0] weight_bus,  // WGT_W-packed: K_PAR taps x 256 lanes (tap-major, tap0 lowest)
+    // [KPAR4] taps 1..3 broadcast act bytes (dense mode; tap0 reuses the
+    // legacy act_byte port). The skeleton ties this 24'd0 when K_PAR==1.
+    input  wire [23:0]   act_bytes_ext,
+    // [KPAR4] per-tap valid mask aligned with weight_bus/act bytes
+    // (fast group: 1111 / partial; serial fallback: 0001). The skeleton
+    // ties 4'b0001 when K_PAR==1. A masked tap's act byte is zeroed before
+    // the multiply, so its contribution is EXACTLY 0.
+    input  wire [3:0]    tap_mask,
     // [DW-ENGINE P1 2026-06-10] per-lane activation mode (MobileNetV2 wide
     // depthwise convs). dw_mode=1: lane L multiplies its OWN byte of the
     // already-aligned activation word (act_word[L*8 +: 8], channels map 1:1
@@ -86,6 +103,8 @@ module mac_array #(
     // ----------------------------------------------------------------------
     genvar lane;
     generate
+    if (K_PAR == 1) begin : g_p1
+        // ---- [KPAR4] ORIGINAL serial datapath, VERBATIM (legacy default) ----
         for (lane = 0; lane < 256; lane = lane + 1) begin : g_mac
             wire signed [WGT_W-1:0]  w_byte;   // WGT_W-bit weight (sign-extended in the multiply)
             wire signed [7:0]  a_byte;
@@ -125,6 +144,60 @@ module mac_array #(
 
             assign acc_out[lane*32 +: 32] = acc;
         end
+        // [KPAR4] lint tie: ext ports are consumed only by the K_PAR>1 branch.
+        /* verilator lint_off UNUSED */
+        wire _unused_kpar_ext = &{1'b0, act_bytes_ext, tap_mask};
+        /* verilator lint_on UNUSED */
+    end else begin : g_p4
+        // ---- [KPAR4] 4-tap datapath: 4 DSP products/lane/cycle + a
+        // COMBINATIONAL 4:1 adder tree into the 32b accumulator. The
+        // pipeline SHAPE matches the serial path exactly (stage-1 product
+        // regs, stage-2 gated accumulate), so mac_busy timing and the
+        // skeleton's d5 requant capture are unchanged.
+        for (lane = 0; lane < 256; lane = lane + 1) begin : g_mac
+            wire signed [7:0]  a_byte = $signed(act_byte);
+            // tap0: legacy broadcast byte (dense) or this lane's own
+            // channel byte (depthwise) — same select as the serial path.
+            wire signed [7:0]  a_lane0 = dw_mode ? $signed(act_word[lane*8 +: 8]) : a_byte;
+            // per-tap act bytes, ZEROED when the tap is masked (partial
+            // last group / serial-fallback dispatches): a 0 act byte makes
+            // the tap's product exactly 0, so masked taps cannot perturb acc.
+            wire signed [7:0]  a0 = tap_mask[0] ? a_lane0                       : 8'sd0;
+            wire signed [7:0]  a1 = tap_mask[1] ? $signed(act_bytes_ext[7:0])   : 8'sd0;
+            wire signed [7:0]  a2 = tap_mask[2] ? $signed(act_bytes_ext[15:8])  : 8'sd0;
+            wire signed [7:0]  a3 = tap_mask[3] ? $signed(act_bytes_ext[23:16]) : 8'sd0;
+            // tap-major weight slices: tap j's 256-lane word at [j*256*WGT_W].
+            wire signed [WGT_W-1:0] w0 = $signed(weight_bus[(0*256 + lane)*WGT_W +: WGT_W]);
+            wire signed [WGT_W-1:0] w1 = $signed(weight_bus[(1*256 + lane)*WGT_W +: WGT_W]);
+            wire signed [WGT_W-1:0] w2 = $signed(weight_bus[(2*256 + lane)*WGT_W +: WGT_W]);
+            wire signed [WGT_W-1:0] w3 = $signed(weight_bus[(3*256 + lane)*WGT_W +: WGT_W]);
+            (* use_dsp = "yes" *) reg signed [15:0] mul_q1_0;
+            (* use_dsp = "yes" *) reg signed [15:0] mul_q1_1;
+            (* use_dsp = "yes" *) reg signed [15:0] mul_q1_2;
+            (* use_dsp = "yes" *) reg signed [15:0] mul_q1_3;
+            reg signed [31:0] acc;
+
+            always @(posedge clk) begin
+                mul_q1_0 <= w0 * a0;
+                mul_q1_1 <= w1 * a1;
+                mul_q1_2 <= w2 * a2;
+                mul_q1_3 <= w3 * a3;
+            end
+
+            // [K1-FDCE] same no-reset accumulate as the serial path
+            // (mac_clear pulses on every ST_RUN entry). All operands are
+            // signed; the 4-way sum is sign-extended into the 32b acc —
+            // exact integer math, identical result to 4 serial adds.
+            always @(posedge clk) begin
+                if (mac_clear)
+                    acc <= 32'sd0;
+                else if (mac_valid_q1)
+                    acc <= acc + mul_q1_0 + mul_q1_1 + mul_q1_2 + mul_q1_3;
+            end
+
+            assign acc_out[lane*32 +: 32] = acc;
+        end
+    end
     endgenerate
 
 endmodule
