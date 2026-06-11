@@ -86,7 +86,7 @@ module node_conv_246 (
     wire [OC*8-1:0] dp_data_out; wire dp_valid_out;
     conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.IC(IC),.OC(OC),.KH(KH),.KW(KW),.K_TOTAL(K_TOTAL),.MP(MP),
         .MP_K(9),
-        .SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_246_weights_mp_k_9.hex"),.BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_246_bias.hex")) dp (.clk(clk),.rst_n(rst_n),.window_flat(window_flat),.start_mac(sched_output_fires),.valid_out(dp_valid_out),.data_out(dp_data_out),.mac_busy(mac_busy));
+        .SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_246_weights_mp_k_9.hex"),.BIAS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_246_bias.hex")) dp (.clk(clk),.rst_n(rst_n),.window_flat(window_flat),.start_mac(sched_output_fires),.valid_out(dp_valid_out),.data_out(dp_data_out),.mac_busy(mac_busy));
 
     reg [OC*8-1:0] out_buf; reg [3:0] out_beat_cnt; reg out_streaming;
     // [INVARIANT:VALID_OUT_LATENCY]

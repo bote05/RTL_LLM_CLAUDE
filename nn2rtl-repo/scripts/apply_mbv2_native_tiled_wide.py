@@ -43,7 +43,7 @@ import os
 import shutil
 import sys
 
-REPO = r"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo"
+REPO = r"D:/RTL_LLM_CLAUDE/nn2rtl-repo"
 RTL_DIR = os.path.join(REPO, "output", "mobilenet-v2", "rtl")
 DEFAULT_TOP = os.path.join(RTL_DIR, "nn2rtl_top_engine.v")
 BACKUP_DIR = os.path.join(REPO, "backups", "native_tiled_wide")

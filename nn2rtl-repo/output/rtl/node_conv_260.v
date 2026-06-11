@@ -150,8 +150,8 @@ module node_conv_260 (
     conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.IC(IC), .OC(OC), .KH(KH), .KW(KW), .K_TOTAL(K_TOTAL), .MP(MP),
         .MP_K(9),
         .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_260_weights_mp_k_9.hex"),
-        .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_260_bias.hex")
+        .WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_260_weights_mp_k_9.hex"),
+        .BIAS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_260_bias.hex")
     ) dp (
         .clk(clk), .rst_n(rst_n), .window_flat(window_flat),
         .start_mac(sched_output_fires),

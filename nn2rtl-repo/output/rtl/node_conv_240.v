@@ -131,9 +131,9 @@ module node_conv_240 (
         .valid_in(lib_valid_in_w),.data_in(lib_data_in_w),.window_flat(window_flat),
         .channel_select(dp_channel_select),.chan_window_flat(chan_window_flat_w));
     conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.TAIL_PIPE(1),.IC(IC),.OC(OC),.KH(KH),.KW(KW),.K_TOTAL(K_TOTAL),.MP(MP),.USE_CHAN_WINDOW(1),
-        .MP_K(MP_K),.SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.SCALE_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_240_scale.mem"),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_240_weights_mp_k_9.hex"),
-        .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_240_bias.hex")) dp (
+        .MP_K(MP_K),.SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.SCALE_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_240_scale.mem"),
+        .WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_240_weights_mp_k_9.hex"),
+        .BIAS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_240_bias.hex")) dp (
         .clk(clk),.rst_n(rst_n),.window_flat(window_flat),
         .chan_window_flat(chan_window_flat_w),.channel_select(dp_channel_select),
         .start_mac(sched_output_fires),

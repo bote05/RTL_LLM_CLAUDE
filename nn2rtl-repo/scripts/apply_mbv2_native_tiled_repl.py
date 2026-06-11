@@ -35,7 +35,7 @@ import re
 import shutil
 import sys
 
-REPO = r"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo"
+REPO = r"D:/RTL_LLM_CLAUDE/nn2rtl-repo"
 RTL_DIR = os.path.join(REPO, "output", "mobilenet-v2", "rtl")
 DEFAULT_TOP = os.path.join(RTL_DIR, "nn2rtl_top_engine.v")
 BACKUP_DIR = os.path.join(REPO, "backups", "native_tiled_repl")
@@ -430,12 +430,12 @@ MODULE_MARK = "// PARAM-GATED NATIVE-256b-TILED RE-ARCHITECTURE (NATIVE_TILED, d
 
 
 def wpath(cid):
-    return (f"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/"
+    return (f"D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/"
             f"mobilenet-v2/weights/node_conv_{cid}_weights.hex")
 
 
 def bpath(cid):
-    return (f"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/"
+    return (f"D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/"
             f"mobilenet-v2/weights/node_conv_{cid}_bias.hex")
 
 

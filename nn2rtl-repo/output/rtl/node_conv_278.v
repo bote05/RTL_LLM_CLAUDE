@@ -198,8 +198,8 @@ module node_conv_278 (
         .K_TOTAL(K_TOTAL), .MP(MP),
         .MP_K(9),
         .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_278_weights_mp_k_9.hex"),
-        .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_278_bias.hex")
+        .WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_278_weights_mp_k_9.hex"),
+        .BIAS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_278_bias.hex")
     ) dp (
         .clk(clk), .rst_n(rst_n),
         .window_flat(window_flat),

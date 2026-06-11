@@ -77,8 +77,8 @@ module node_conv_290 (
     (* rom_style = "block", ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
 
     initial begin
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_290_weights_wide.hex", weights);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_290_bias.hex", biases);
+        $readmemh("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_290_weights_wide.hex", weights);
+        $readmemh("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_290_bias.hex", biases);
     end
 
     // ---- State and counters ----

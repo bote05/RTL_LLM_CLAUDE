@@ -58,7 +58,7 @@ import sys
 # Default target is the running BASELINE top (unchanged behavior).  The engine-
 # dispatched top (nn2rtl_top_engine.v) can be targeted via --top or the
 # NN2RTL_TOP env var WITHOUT changing the default.
-DEFAULT_TOP = r"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/rtl/nn2rtl_top.v"
+DEFAULT_TOP = r"D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/rtl/nn2rtl_top.v"
 TOP = DEFAULT_TOP
 
 # add_id -> (skip_source_module_id, skip_fifo_width_bits)

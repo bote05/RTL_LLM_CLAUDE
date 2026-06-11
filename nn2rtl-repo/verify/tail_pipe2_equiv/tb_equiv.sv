@@ -30,9 +30,9 @@ module tb_equiv #(parameter integer TB_PIXELS = 64);
     conv_datapath_mp_k #(
         .IC(IC), .OC(OC), .KH(KH), .KW(KW), .K_TOTAL(K_TOTAL),
         .MP(MP), .MP_K(MP_K), .DSP_INPUT_PIPE(1), .TAIL_PIPE(0),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_weights_mp_k_8.hex"),
-        .BIAS_PATH   ("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_bias.hex"),
-        .SCALE_PATH  ("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_scale.mem")
+        .WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_weights_mp_k_8.hex"),
+        .BIAS_PATH   ("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_bias.hex"),
+        .SCALE_PATH  ("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_scale.mem")
     ) u_ref (.clk(clk), .rst_n(rst_n), .window_flat(window_flat),
              .chan_window_flat(chan_window_flat), .channel_select(),
              .start_mac(start_mac), .valid_out(vo_ref), .data_out(do_ref),
@@ -41,9 +41,9 @@ module tb_equiv #(parameter integer TB_PIXELS = 64);
     conv_datapath_mp_k #(
         .IC(IC), .OC(OC), .KH(KH), .KW(KW), .K_TOTAL(K_TOTAL),
         .MP(MP), .MP_K(MP_K), .DSP_INPUT_PIPE(1), .TAIL_PIPE(1),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_weights_mp_k_8.hex"),
-        .BIAS_PATH   ("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_bias.hex"),
-        .SCALE_PATH  ("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_scale.mem")
+        .WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_weights_mp_k_8.hex"),
+        .BIAS_PATH   ("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_bias.hex"),
+        .SCALE_PATH  ("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_244_scale.mem")
     ) u_dut (.clk(clk), .rst_n(rst_n), .window_flat(window_flat),
              .chan_window_flat(chan_window_flat), .channel_select(),
              .start_mac(start_mac), .valid_out(vo_dut), .data_out(do_dut),

@@ -98,7 +98,7 @@ module node_conv_254 (
     line_buf_window #(.IC(IC),.IW(IW),.IH(IH),.KH(KH),.KW(KW),.PW(PW),.PH(PH)) lbw (.clk(clk),.rst_n(rst_n),.frame_start(start_pulse),.sched_in_row(sched_in_row),.sched_in_col(sched_in_col),.sched_needs_real_input(sched_needs_real_input),.sched_advance(sched_advance),.sched_output_fires(sched_output_fires),.valid_in(lib_valid_in),.data_in(gather_word),.window_flat(window_flat));
     conv_datapath_mp_k #(.DSP_INPUT_PIPE(1),.IC(IC),.OC(OC),.KH(KH),.KW(KW),.K_TOTAL(K_TOTAL),.MP(MP),
         .MP_K(9),
-        .SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_254_weights_mp_k_9.hex"),.BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_254_bias.hex")) dp (.clk(clk),.rst_n(rst_n),.window_flat(window_flat),.start_mac(sched_output_fires),.valid_out(lib_valid_out),.data_out(lib_data_out),.mac_busy(mac_busy));
+        .SCALE_MULT(SCALE_MULT),.SCALE_SHIFT(SCALE_SHIFT),.WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_254_weights_mp_k_9.hex"),.BIAS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_254_bias.hex")) dp (.clk(clk),.rst_n(rst_n),.window_flat(window_flat),.start_mac(sched_output_fires),.valid_out(lib_valid_out),.data_out(lib_data_out),.mac_busy(mac_busy));
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin out_pack <= 0; out_beat_idx <= 0; out_streaming <= 0; valid_out <= 0; data_out <= 0; end
         else begin

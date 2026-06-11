@@ -73,7 +73,7 @@ import re
 import shutil
 import sys
 
-DEFAULT_TOP = r"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/rtl/nn2rtl_top_engine.v"
+DEFAULT_TOP = r"D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/rtl/nn2rtl_top_engine.v"
 
 NATIVE_MARK = "// [NATIVE_TILED_878] node_conv_878 bridgeless native-256b re-arch applied"
 

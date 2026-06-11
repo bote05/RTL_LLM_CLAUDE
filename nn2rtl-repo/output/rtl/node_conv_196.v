@@ -131,9 +131,9 @@ module node_conv_196 (
         .IC(IC), .OC(OC), .KH(KH), .KW(KW),
         .K_TOTAL(K_TOTAL), .MP(MP),
         .MP_K(7),
-        .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT),.SCALE_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_196_scale.mem"),
-        .WEIGHTS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_196_weights_mp_k_7.hex"),
-        .BIAS_PATH("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_196_bias.hex")
+        .SCALE_MULT(SCALE_MULT), .SCALE_SHIFT(SCALE_SHIFT),.SCALE_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_196_scale.mem"),
+        .WEIGHTS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_196_weights_mp_k_7.hex"),
+        .BIAS_PATH("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_196_bias.hex")
     ) dp (
         .clk(clk), .rst_n(rst_n),
         .window_flat(window_flat),

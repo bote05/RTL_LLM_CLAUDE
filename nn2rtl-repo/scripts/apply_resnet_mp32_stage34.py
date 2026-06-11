@@ -161,7 +161,7 @@ def patch_conv(cid: int, dry: bool, skip_repack: bool, verify: bool) -> None:
         txt = replace_once(txt, old_lp, new_lp, "MP localparam", f.name)
         # header comment(s): remaining 'MP=16' occurrences are comments only now
         txt = txt.replace("MP=16", "MP=32")
-        old_wp = (f'"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/'
+        old_wp = (f'"D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/'
                   f'node_conv_{cid}_weights_mp_k_8.hex"')
         new_wp = f'"{ROOT.as_posix()}/output/weights/{new_hex}"'
         txt = replace_once(txt, old_wp, new_wp, "WEIGHTS_PATH", f.name)

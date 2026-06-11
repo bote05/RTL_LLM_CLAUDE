@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo")
+ROOT = Path("D:/RTL_LLM_CLAUDE/nn2rtl-repo")
 WDIR = ROOT / "output/weights"
 
 MODULE = "node_conv_246"

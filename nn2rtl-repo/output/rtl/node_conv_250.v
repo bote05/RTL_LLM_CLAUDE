@@ -80,8 +80,8 @@ module node_conv_250 (
     (* rom_style = "block", ram_style = "block" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];
     (* rom_style = "block", ram_style = "block" *) reg signed [31:0] biases  [0:OC-1];
     initial begin
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_250_weights_wide.hex", weights);
-        $readmemh("C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_250_bias.hex", biases);
+        $readmemh("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_250_weights_wide.hex", weights);
+        $readmemh("D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_250_bias.hex", biases);
     end
 
     reg signed [7:0]   in_latch [0:IC-1];
