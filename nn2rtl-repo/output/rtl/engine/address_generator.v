@@ -71,7 +71,13 @@ module address_generator #(
     // weight_base%4==0 — all 34 MBV2 pointwise dispatches); everything
     // else (depthwise, the FC dispatch at base 13413%4==1) keeps the
     // SERIAL walk and is served by the skeleton's subword select.
-    parameter integer K_PAR = 1
+    parameter integer K_PAR = 1,
+    // [WADDR-REP 2026-06-11] number of replicated copies of the
+    // weight_rd_addr register exported on weight_rd_addr_rep (per-bank
+    // fanout relief; see apply_resnet_waddr_rep.py). 1 (DEFAULT) =
+    // passthrough of the original register — zero new FFs, bit-identical
+    // for every legacy instance (MBV2, iso harnesses).
+    parameter integer WADDR_REP = 1
 ) (
     input  wire        clk,
     input  wire        rst_n,
@@ -136,7 +142,11 @@ module address_generator #(
     // old K-word k_cnt+j), registered in lockstep with weight_rd_addr/en.
     // Constant bit0-only when K_PAR==1 (legacy single-tap issue).
     // [KPAR8 2026-06-10] width = max(K_PAR,4): [3:0] at K_PAR<=4 (unchanged), [7:0] at 8.
-    output wire [((K_PAR > 4) ? K_PAR : 4)-1:0]  k_tap_mask
+    output wire [((K_PAR > 4) ? K_PAR : 4)-1:0]  k_tap_mask,
+
+    // [WADDR-REP 2026-06-11] replicated copies of weight_rd_addr (copy i at
+    // [i*22 +: 22]); equal to weight_rd_addr every cycle by construction.
+    output wire [WADDR_REP*22-1:0] weight_rd_addr_rep
 );
 
     // ----------------------------------------------------------------------
@@ -153,6 +163,9 @@ module address_generator #(
 
     // Latched layer-completion flag (pixel_done semantics — see header).
     reg        pixel_done_latch;
+
+    // [WADDR-REP 2026-06-11] genvar for the per-branch replica loops.
+    genvar wr_i;
 
     // ----------------------------------------------------------------------
     // Wide arithmetic helpers. K_TOTAL for the heavy engine layers fits in
@@ -399,6 +412,27 @@ module address_generator #(
     end
 
 
+    // [WADDR-REP 2026-06-11] per-bank replicas of the weight_rd_addr
+    // register: SAME D (weight_addr_next), same run_active
+    // enable, same reset -> every replica equals the original register
+    // every cycle. WADDR_REP==1 (default; MBV2 + iso harnesses) elaborates
+    // a passthrough of the original register: ZERO new FFs, bit-identical.
+    // (* dont_touch *) keeps Vivado from re-merging the copies; each copy
+    // feeds ONE weight bank in the ResNet top (1/8 the fanout, placeable
+    // next to its bank's BRAM column).
+    if (WADDR_REP == 1) begin : g_wrep1
+        assign weight_rd_addr_rep = weight_rd_addr;
+    end else begin : g_wrep
+        for (wr_i = 0; wr_i < WADDR_REP; wr_i = wr_i + 1) begin : g_r
+            (* dont_touch = "true" *) reg [21:0] waddr_rep_q;
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n)          waddr_rep_q <= 22'd0;
+                else if (run_active) waddr_rep_q <= weight_addr_next;
+            end
+            assign weight_rd_addr_rep[wr_i*22 +: 22] = waddr_rep_q;
+        end
+    end
+
     end else if (K_PAR == 8) begin : g_walk_kpar8
     // [KPAR8 2026-06-10] FAST eligibility (all per-layer constants): dense with
     // 8-aligned IC and an 8-aligned weight base (and IC>=8). Every MBV2
@@ -613,6 +647,27 @@ module address_generator #(
     end
 
 
+    // [WADDR-REP 2026-06-11] per-bank replicas of the weight_rd_addr
+    // register: SAME D (kpar_fast ? weight_addr_next_fast : weight_addr_next), same run_active
+    // enable, same reset -> every replica equals the original register
+    // every cycle. WADDR_REP==1 (default; MBV2 + iso harnesses) elaborates
+    // a passthrough of the original register: ZERO new FFs, bit-identical.
+    // (* dont_touch *) keeps Vivado from re-merging the copies; each copy
+    // feeds ONE weight bank in the ResNet top (1/8 the fanout, placeable
+    // next to its bank's BRAM column).
+    if (WADDR_REP == 1) begin : g_wrep1
+        assign weight_rd_addr_rep = weight_rd_addr;
+    end else begin : g_wrep
+        for (wr_i = 0; wr_i < WADDR_REP; wr_i = wr_i + 1) begin : g_r
+            (* dont_touch = "true" *) reg [21:0] waddr_rep_q;
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n)          waddr_rep_q <= 22'd0;
+                else if (run_active) waddr_rep_q <= kpar_fast ? weight_addr_next_fast : weight_addr_next;
+            end
+            assign weight_rd_addr_rep[wr_i*22 +: 22] = waddr_rep_q;
+        end
+    end
+
     end else begin : g_walk_kpar
     // [KPAR4] FAST eligibility (all per-layer constants): dense 1x1 with
     // 4-aligned IC and a 4-aligned weight base (and IC>=4). Every MBV2
@@ -821,6 +876,27 @@ module address_generator #(
         end
     end
 
+
+    // [WADDR-REP 2026-06-11] per-bank replicas of the weight_rd_addr
+    // register: SAME D (kpar_fast ? weight_addr_next_fast : weight_addr_next), same run_active
+    // enable, same reset -> every replica equals the original register
+    // every cycle. WADDR_REP==1 (default; MBV2 + iso harnesses) elaborates
+    // a passthrough of the original register: ZERO new FFs, bit-identical.
+    // (* dont_touch *) keeps Vivado from re-merging the copies; each copy
+    // feeds ONE weight bank in the ResNet top (1/8 the fanout, placeable
+    // next to its bank's BRAM column).
+    if (WADDR_REP == 1) begin : g_wrep1
+        assign weight_rd_addr_rep = weight_rd_addr;
+    end else begin : g_wrep
+        for (wr_i = 0; wr_i < WADDR_REP; wr_i = wr_i + 1) begin : g_r
+            (* dont_touch = "true" *) reg [21:0] waddr_rep_q;
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n)          waddr_rep_q <= 22'd0;
+                else if (run_active) waddr_rep_q <= kpar_fast ? weight_addr_next_fast : weight_addr_next;
+            end
+            assign weight_rd_addr_rep[wr_i*22 +: 22] = waddr_rep_q;
+        end
+    end
 
     end endgenerate
 

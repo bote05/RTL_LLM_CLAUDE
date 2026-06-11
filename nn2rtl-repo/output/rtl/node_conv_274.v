@@ -42,7 +42,7 @@ module node_conv_274 (
     reg [1:0] frame_state;
     localparam ST_ARM=2'd0, ST_RUN=2'd1, ST_WAIT=2'd2;
 
-    reg [INB_W-1:0] in_beat_idx;
+    (* max_fanout = 8 *) reg [INB_W-1:0] in_beat_idx;   // [FO-HINT 2026-06-11] kp4mp32_c16 #3 path class (beat-select decode into the spread in_lo register; 99% route on conv_288). Synth-only.
     reg [IN_PIXEL_BITS-TILE_BITS-1:0] in_lo;
     wire is_last_in_beat = (in_beat_idx == IN_BEATS-1);
     assign ready_in = is_last_in_beat ? sched_ready_in : 1'b1;

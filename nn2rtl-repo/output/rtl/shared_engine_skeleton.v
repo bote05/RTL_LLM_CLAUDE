@@ -106,7 +106,15 @@ module shared_engine #(
     // in parallel off per-pass capture registers (acc/bias/scale/wr-addr):
     // per-pass issue bubble 12 (pixel) / 10 (intermediate) -> 3. Schedule
     // table + hazard proofs: docs/agent_tasks/ENG_PIPE_ANALYSIS.md.
-    parameter integer ENG_PIPE = 0
+    parameter integer ENG_PIPE = 0,
+
+    // ---- weight-address replication (default 1 = bit/FF-identical) ----
+    // [WADDR-REP 2026-06-11] forwarded to address_generator; the ResNet top
+    // sets 8 so each uram_weight_bank gets its own (* dont_touch *) copy of
+    // the weight address register (post-route fanout fix; see
+    // apply_resnet_waddr_rep.py). weight_rd_addr_rep carries the copies,
+    // group-shifted per K_PAR exactly like the scalar weight_rd_addr.
+    parameter integer WADDR_REP = 1
 ) (
     // ---- Clock + reset ----
     input  wire                          clk,
@@ -156,6 +164,9 @@ module shared_engine #(
 
     // ---- URAM weight read port ----
     output wire [URAM_ADDR_W-1:0]        weight_rd_addr,
+    // [WADDR-REP 2026-06-11] replicated weight addresses (copy i at
+    // [i*URAM_ADDR_W +: URAM_ADDR_W]), each == weight_rd_addr every cycle.
+    output wire [WADDR_REP*URAM_ADDR_W-1:0] weight_rd_addr_rep,
     output wire                          weight_rd_en,
     input  wire [URAM_DATA_W-1:0]        weight_rd_data,
 
@@ -217,6 +228,7 @@ module shared_engine #(
 
     // -- address_generator outputs --
     wire [URAM_ADDR_W-1:0]     ag_weight_rd_addr;
+    wire [WADDR_REP*22-1:0]    ag_weight_rd_addr_rep;   // [WADDR-REP 2026-06-11]
     wire                       ag_weight_rd_en;
     wire [URAM_ADDR_W-1:0]     ag_bias_rd_addr;
     wire                       ag_bias_rd_en;
@@ -263,6 +275,25 @@ module shared_engine #(
         assign weight_rd_addr  = {3'b000, ag_weight_rd_addr[21:3]};   // [KPAR8 2026-06-10] GROUP addr = old>>3
     end else begin : g_waddr_kpar
         assign weight_rd_addr  = {2'b00, ag_weight_rd_addr[21:2]};
+    end endgenerate
+    // [WADDR-REP 2026-06-11] per-replica export, group-shifted exactly like
+    // the scalar weight_rd_addr above (same K_PAR generate split).
+    genvar wrp;
+    generate if (K_PAR == 1) begin : g_waddr_rep_legacy
+        for (wrp = 0; wrp < WADDR_REP; wrp = wrp + 1) begin : g_w
+            assign weight_rd_addr_rep[wrp*URAM_ADDR_W +: URAM_ADDR_W]
+                 = ag_weight_rd_addr_rep[wrp*22 +: 22];
+        end
+    end else if (K_PAR == 8) begin : g_waddr_rep_kpar8
+        for (wrp = 0; wrp < WADDR_REP; wrp = wrp + 1) begin : g_w
+            assign weight_rd_addr_rep[wrp*URAM_ADDR_W +: URAM_ADDR_W]
+                 = {3'b000, ag_weight_rd_addr_rep[wrp*22+3 +: 19]};
+        end
+    end else begin : g_waddr_rep_kpar
+        for (wrp = 0; wrp < WADDR_REP; wrp = wrp + 1) begin : g_w
+            assign weight_rd_addr_rep[wrp*URAM_ADDR_W +: URAM_ADDR_W]
+                 = {2'b00, ag_weight_rd_addr_rep[wrp*22+2 +: 20]};
+        end
     end endgenerate
     assign weight_rd_en    = ag_weight_rd_en;
     assign act_in_rd_addr  = ag_act_in_rd_addr;
@@ -822,7 +853,7 @@ module shared_engine #(
     // weights, and ag_pixel_done when all OH*OW output pixels have been
     // emitted.
     // ====================================================================
-    address_generator #(.K_PAR(K_PAR)) u_address_generator (
+    address_generator #(.K_PAR(K_PAR), .WADDR_REP(WADDR_REP)) u_address_generator (
         .clk                   (clk),
         .rst_n                 (rst_n),
         .run_active            (run_active),
@@ -847,6 +878,7 @@ module shared_engine #(
         .pixel_h               (pixel_h),
         .pixel_w               (pixel_w),
         .weight_rd_addr        (ag_weight_rd_addr),
+        .weight_rd_addr_rep    (ag_weight_rd_addr_rep),   // [WADDR-REP 2026-06-11]
         .weight_rd_en          (ag_weight_rd_en),
         .bias_rd_addr          (ag_bias_rd_addr),
         .bias_rd_en            (ag_bias_rd_en),
@@ -1241,7 +1273,8 @@ endmodule
 
 
 module address_generator #(
-    parameter integer K_PAR = 1
+    parameter integer K_PAR = 1,
+    parameter integer WADDR_REP = 1   // [WADDR-REP 2026-06-11]
 ) (
     input  wire         clk,
     input  wire         rst_n,
@@ -1277,7 +1310,8 @@ module address_generator #(
     output wire [15:0]  k_index,
     output wire         mac_done,
     output wire         pixel_done,
-    output wire [((K_PAR > 4) ? K_PAR : 4)-1:0] k_tap_mask  // [KPAR4] ([KPAR8 2026-06-10] max(K_PAR,4) wide)
+    output wire [((K_PAR > 4) ? K_PAR : 4)-1:0] k_tap_mask,  // [KPAR4] ([KPAR8 2026-06-10] max(K_PAR,4) wide)
+    output wire [WADDR_REP*22-1:0] weight_rd_addr_rep   // [WADDR-REP 2026-06-11]
 );
     assign weight_rd_addr     = 22'd0;
     assign weight_rd_en       = 1'b0;
@@ -1291,6 +1325,7 @@ module address_generator #(
     assign mac_done           = 1'b1;
     assign pixel_done         = 1'b1;
     assign k_tap_mask         = {{(((K_PAR > 4) ? K_PAR : 4)-1){1'b0}}, 1'b1};   // [KPAR4]/[KPAR8 2026-06-10]
+    assign weight_rd_addr_rep = {WADDR_REP{22'd0}};   // [WADDR-REP 2026-06-11]
 endmodule
 
 

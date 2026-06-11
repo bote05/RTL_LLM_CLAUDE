@@ -56,7 +56,9 @@ module engine_iso_wrap_resnet (
     wire [2047:0] eng_act_out_wr_data;
     wire [21:0]   eng_weight_rd_addr;
     wire          eng_weight_rd_en;
-`ifdef KPAR4
+`ifdef KPAR8
+    wire [6143:0] eng_weight_rd_data;     // [KPAR8-RN] 8 tap-major 768b words
+`elsif KPAR4
     wire [3071:0] eng_weight_rd_data;     // [KPAR4-RN] 4 tap-major 768b words
 `else
     wire [767:0]  eng_weight_rd_data;     // 768b = 256 INT3 weights (resnet)
@@ -71,7 +73,28 @@ module engine_iso_wrap_resnet (
     // ---- 8 weight banks (INT3 96-bit lines, all bits real), 2-cycle read ----
     // Mirrors output/rtl/nn2rtl_top.v: weight bus = concat of each bank's
     // ENGINE_LANE_B=96 real bits, bank0 lowest.
-`ifdef KPAR4
+`ifdef KPAR8
+    // [KPAR8-RN] repacked 8-taps-per-line banks; the ENGINE exports the
+    // GROUP address (old>>3), so the bank addr is just the low bits.
+    wire [13:0]  wbank_addr = eng_weight_rd_addr[13:0];
+    wire [767:0] b0,b1,b2,b3,b4,b5,b6,b7;
+    genvar kp_tap;
+    generate for (kp_tap = 0; kp_tap < 8; kp_tap = kp_tap + 1) begin : g_kpar_wbus
+        assign eng_weight_rd_data[kp_tap*768 +: 768] = {
+            b7[kp_tap*96 +: 96], b6[kp_tap*96 +: 96],
+            b5[kp_tap*96 +: 96], b4[kp_tap*96 +: 96],
+            b3[kp_tap*96 +: 96], b2[kp_tap*96 +: 96],
+            b1[kp_tap*96 +: 96], b0[kp_tap*96 +: 96]};
+    end endgenerate
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank0_kp8.mem")) u0(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b0),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank1_kp8.mem")) u1(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b1),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank2_kp8.mem")) u2(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b2),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank3_kp8.mem")) u3(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b3),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank4_kp8.mem")) u4(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b4),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank5_kp8.mem")) u5(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b5),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank6_kp8.mem")) u6(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b6),.rd_en(eng_weight_rd_en));
+    iso_uram_bank_rn #(.WORD_W(768), .MEM_INIT_FILE("output/weights/uram_weights_bank7_kp8.mem")) u7(.clk(clk),.rd_addr({3'b0,wbank_addr}),.rd_data(b7),.rd_en(eng_weight_rd_en));
+`elsif KPAR4
     // [KPAR4-RN] repacked 4-taps-per-line banks; the ENGINE exports the
     // GROUP address (old>>2), so the bank addr is just the low bits.
     wire [14:0]  wbank_addr = eng_weight_rd_addr[14:0];
@@ -126,11 +149,19 @@ module engine_iso_wrap_resnet (
     // and all MAX_* keep their defaults there too.)
     shared_engine #(
         .WGT_W(3),
-`ifdef KPAR4
+`ifdef KPAR8
+        .URAM_DATA_W(6144),     // [KPAR8-RN] 8 tap-major 768b words per line
+        .K_PAR(8)
+`elsif KPAR4
         .URAM_DATA_W(3072),     // [KPAR4-RN] 4 tap-major 768b words per line
         .K_PAR(4)
 `else
         .URAM_DATA_W(768)
+`endif
+`ifdef ENG_PIPE
+        // [ENG-PIPE-RN] pipelined (pixel, oc_pass) issue — mirrors the
+        // deployed ResNet top's .ENG_PIPE(1) (apply_resnet_engpipe.py).
+        , .ENG_PIPE(1)
 `endif
     ) u_engine(
         .clk(clk), .rst_n(rst_n),
