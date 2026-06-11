@@ -178,6 +178,16 @@ the same byte- AND cycle-exact e2e anyway.
 **FINAL FRAME: 5,664,715 → 5,299,588 (−365,127, −6.4%), byte-exact on
 vec0+vec1**, plus the route-class fixes riding into the final synth.
 
+## REPRODUCTION PROOF
+
+Pristine `git archive 2e639df -- output/rtl` extraction + the four appliers
+(in bundle order) reproduces EVERY deployed RTL file **byte-exactly**
+(`cmp` on nn2rtl_top.v, shared_engine_skeleton.v, nn2rtl_scheduler.v,
+engine/address_generator.v and all 38 hinted node_conv files). Each applier
+is also a proven no-op on re-run over the full bundle (idempotency probes
+account for later appliers rewriting earlier hunks' surroundings —
+`probe=` args in apply_resnet_engpipe.py / apply_resnet_kpar8.py).
+
 ## PROMOTION CHECKLIST
 
 1. On the target tree (2e639df lineage), in order:
