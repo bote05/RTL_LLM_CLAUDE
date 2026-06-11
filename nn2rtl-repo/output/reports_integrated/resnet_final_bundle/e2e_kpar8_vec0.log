@@ -1,0 +1,6 @@
+[fifo-peak] TOP.nn2rtl_top.u_skip_node_add_15 DEPTH=4096 peak=3135
+[tb][value] frame done: first_input_cycle=18 last_output_cycle=5299606 e2e_cycles=5299588 beats=3136
+[tb][value] total mismatching bytes = 0 / 100352
+[tb][value][summary] result=PASS beats=3136/3136 mismatch_bytes=0 first_mismatch_beat=-1
+[result] {"result":"PASS","beats_seen":3136,"beats_expected":3136,"mismatch_bytes":0,"first_mismatch_beat":-1,"vector_idx":0,"sim_elapsed_s":214.447,"goldin":"output\\goldens\\contracts\\node_conv_196_tiled-streaming_conv2d_3x64x7x7_s224x224_st2x2_p3x3_d1x1_g1_mp4_i2\\node_conv_196.goldin","goldout":"output\\goldens\\contracts\\node_relu_48_tiled-streaming_relu_2048x2048_s7x7_i256_o256_iotiled-streaming_til\\node_relu_48.goldout"}
+[result] wrote output\reports_integrated\verilator_nn2rtl_top_value\result.json

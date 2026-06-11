@@ -1,0 +1,33 @@
+[kpar8-rn-iso] === building + running 3 builds (3 convs x 2 vecs) ===
+  kp8/246 vec0: [wrap] done=1 took=58802 cycles bytes=50176 mismatch=36041 max|err|=16 firstbad_pixel=0 
+  kp8ep/246 vec0: [wrap] done=1 took=57048 cycles bytes=50176 mismatch=36041 max|err|=16 firstbad_pixel=0 
+  leg/246 vec0: [wrap] done=1 took=453938 cycles bytes=50176 mismatch=36041 max|err|=16 firstbad_pixel=0 
+  kp8/250 vec0: [wrap] done=1 took=58410 cycles bytes=200704 mismatch=82567 max|err|=10 firstbad_pixel=0 
+  kp8ep/250 vec0: [wrap] done=1 took=52540 cycles bytes=200704 mismatch=82567 max|err|=10 firstbad_pixel=0 
+  leg/250 vec0: [wrap] done=1 took=409642 cycles bytes=200704 mismatch=82567 max|err|=10 firstbad_pixel=0 
+  kp8/284 vec0: [wrap] done=1 took=57528 cycles bytes=25088 mismatch=19333 max|err|=18 firstbad_pixel=0 
+  kp8ep/284 vec0: [wrap] done=1 took=56754 cycles bytes=25088 mismatch=19333 max|err|=18 firstbad_pixel=0 
+  leg/284 vec0: [wrap] done=1 took=452664 cycles bytes=25088 mismatch=19333 max|err|=18 firstbad_pixel=0 
+  kp8/246 vec1: [wrap] done=1 took=58802 cycles bytes=50176 mismatch=36010 max|err|=18 firstbad_pixel=0 
+  kp8ep/246 vec1: [wrap] done=1 took=57048 cycles bytes=50176 mismatch=36010 max|err|=18 firstbad_pixel=0 
+  leg/246 vec1: [wrap] done=1 took=453938 cycles bytes=50176 mismatch=36010 max|err|=18 firstbad_pixel=0 
+  kp8/250 vec1: [wrap] done=1 took=58410 cycles bytes=200704 mismatch=80999 max|err|=8 firstbad_pixel=0 
+  kp8ep/250 vec1: [wrap] done=1 took=52540 cycles bytes=200704 mismatch=80999 max|err|=8 firstbad_pixel=0 
+  leg/250 vec1: [wrap] done=1 took=409642 cycles bytes=200704 mismatch=80999 max|err|=8 firstbad_pixel=0 
+  kp8/284 vec1: [wrap] done=1 took=57528 cycles bytes=25088 mismatch=19948 max|err|=14 firstbad_pixel=0 
+  kp8ep/284 vec1: [wrap] done=1 took=56754 cycles bytes=25088 mismatch=19948 max|err|=14 firstbad_pixel=0 
+  leg/284 vec1: [wrap] done=1 took=452664 cycles bytes=25088 mismatch=19948 max|err|=14 firstbad_pixel=0 
+[kpar8-rn-iso] === A/B equivalence (KP8 / KP8EP output bytes == LEGACY) ===
+  kp8/246 vec0: IDENTICAL (50176 bytes)
+  kp8ep/246 vec0: IDENTICAL (50176 bytes)
+  kp8/250 vec0: IDENTICAL (200704 bytes)
+  kp8ep/250 vec0: IDENTICAL (200704 bytes)
+  kp8/284 vec0: IDENTICAL (25088 bytes)
+  kp8ep/284 vec0: IDENTICAL (25088 bytes)
+  kp8/246 vec1: IDENTICAL (50176 bytes)
+  kp8ep/246 vec1: IDENTICAL (50176 bytes)
+  kp8/250 vec1: IDENTICAL (200704 bytes)
+  kp8ep/250 vec1: IDENTICAL (200704 bytes)
+  kp8/284 vec1: IDENTICAL (25088 bytes)
+  kp8ep/284 vec1: IDENTICAL (25088 bytes)
+[kpar8-rn-iso] RESULT: PASS (KP8 and KP8EP == LEGACY byte-identical on all cases)
