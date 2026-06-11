@@ -45,7 +45,11 @@ module nn2rtl_scheduler (
     output reg  [5:0] skip_bank_reserved_mask,
     // Dataflow chain handshake
     output reg         spatial_stall,
-    output reg         engine_output_ready
+    // [FINAL-BUNDLE RDY-CAP 2026-06-11] broadcast to all 51 bridges'
+    // start/dispatch_count (fo=271 even after Vivado's own FSM-state
+    // replica; 1.569ns segment of the -4.010ns route path). max_fanout
+    // replicates the decode LUT so copies place near bridge clusters.
+    (* max_fanout = 64 *) output reg engine_output_ready
 );
 
     // ------------------------------------------------------------

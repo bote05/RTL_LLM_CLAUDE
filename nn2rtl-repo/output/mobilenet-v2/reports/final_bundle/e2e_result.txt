@@ -1,0 +1,13 @@
+MBV2 FINAL-BUNDLE e2e gate (2026-06-11):
+RESULT: PASS (8/8 byte-exact, TOTAL mismatch = 0)
+[tb][mbv2][vec0] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec1] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec2] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec3] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec4] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec5] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec6] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+[tb][mbv2][vec7] frame done: first_input_cycle=18 last_output_cycle=1184749 e2e_cycles=1184731 out_beats=32
+
+cycle gate: e2e_cycles == 1,184,731 EXACTLY on all 8 vectors (== 2e639df baseline);
+vec*.log are byte-identical to the committed baseline logs (git shows no modification).

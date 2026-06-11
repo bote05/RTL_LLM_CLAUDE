@@ -4658,7 +4658,14 @@ module engine_output_fifo #(
     input  wire [DATA_W-1:0] in_data,
     output wire             in_ready,
     output reg              out_valid,
-    output reg  [DATA_W-1:0] out_data,
+    // [FINAL-BUNDLE OREG-REP 2026-06-11] out_data was absorbed into the URAM
+    // output register, so the macro pin drove all 51 bridge beat_bufs
+    // directly (fo=57-63/bit, 0 logic levels, 10.8ns pure route = the
+    // -4.003/-3.963ns paths). max_fanout=16 asks synth to replicate the skid
+    // register into fabric FF copies placeable near bridge clusters. Same
+    // RTL register either way => cycle count unchanged; attribute-only and
+    // invisible to the simulator. If synthesis declines, it is a no-op.
+    (* max_fanout = 16 *) output reg  [DATA_W-1:0] out_data,
     input  wire             out_ready
 );
     (* ram_style = "ultra" *) reg [DATA_W-1:0] mem [0:DEPTH-1];
@@ -4669,7 +4676,9 @@ module engine_output_fifo #(
     wire fifo_full  = (wr_ptr[ADDR_W-1:0] == rd_ptr[ADDR_W-1:0])
                     && (wr_ptr[ADDR_W] != rd_ptr[ADDR_W]);
     wire wr_fire = in_valid && !fifo_full;
-    wire load_skid = !fifo_empty && (!out_valid || (out_valid && out_ready));
+    // [FINAL-BUNDLE EN-CAP 2026-06-11] load_skid drives the EN of every URAM
+    // macro of mem (fo=53; the 2.112ns tail segment of the -4.010ns path).
+    (* max_fanout = 16 *) wire load_skid = !fifo_empty && (!out_valid || (out_valid && out_ready));
     assign in_ready = !fifo_full;
 
     // [K1-MBV2] out_data is FIFO DATA: sampled only under out_valid (kept
@@ -4780,7 +4789,11 @@ module engine_output_bridge #(
         end else begin : g_slice
             assign current_tile = beat_buf[tile_idx * DATA_W +: DATA_W];
         end
-        wire emit_ready = active_slot && (!valid_out || ready_out)
+        // [FINAL-BUNDLE CE-CAP 2026-06-11] emit_ready is the data_out clock
+        // enable: one LUT drove up to DATA_W+1 FF CE pins (fo=1573 on the
+        // conv_836 DATA_W=1536 instance, inside the -4.010ns route path).
+        // max_fanout lets synth replicate the CE LUT per FF cluster.
+        (* max_fanout = 128 *) wire emit_ready = active_slot && (!valid_out || ready_out)
                         && !drain_complete && buf_valid;
         wire last_tile  = (tile_idx == (TILES_PER_BEAT[TILE_IDX_W:0] - 1'b1));
         wire need_new_beat = !buf_valid || (emit_ready && last_tile);
@@ -4850,8 +4863,11 @@ module engine_output_bridge #(
         reg [31:0]      tiles_emitted;
         wire is_last_beat = (beat_in_pos == (BEATS_PER_POS-1));
         wire [6:0] real_tiles = is_last_beat ? TILES_LAST[6:0] : TILES_FULL[6:0];
-        wire [DATA_W-1:0] current_tile = beat_buf[tile_idx*256 +: 256];
-        wire emit_ready = active_slot && (!valid_out || ready_out)
+        // [FINAL-BUNDLE TIDX-REP 2026-06-11] monolithic current_tile mux
+        // removed -- data_out is now loaded per 32b slice from dont_touch
+        // tile_idx shadow replicas (see g_tidx_rep below). max_fanout caps
+        // the emit_ready clock-enable net (route-report CE-net class).
+        (* max_fanout = 128 *) wire emit_ready = active_slot && (!valid_out || ready_out)
                         && !drain_complete && buf_valid;
         wire last_tile  = (tile_idx == (real_tiles - 7'd1));
         wire need_new_beat = !buf_valid || (emit_ready && last_tile);
@@ -4861,8 +4877,37 @@ module engine_output_bridge #(
         // consumed only under buf_valid/valid_out (reset-kept). beat_in_pos/
         // pull_idx/tile_idx are position CONTROL and keep their reset.
         always @(posedge clk) begin
-            if (emit_ready) data_out <= current_tile;
             if (fifo_out_ready && fifo_out_valid) beat_buf <= fifo_out_data;
+        end
+        // [FINAL-BUNDLE TIDX-REP 2026-06-11] route-WNS class fix (top paths
+        // -4.019/-4.017/-3.975ns, 98.4% ROUTE): tile_idx_reg fo~518 fanning
+        // into the 256b 8:1 beat_buf output mux stretched ~11.5ns across the
+        // die. Split data_out into 32b slices, each loaded through its own
+        // dont_touch SHADOW copy of tile_idx: identical reset + update logic
+        // (pull-clear wins over emit-increment, exactly like the master), so
+        // every replica equals tile_idx on every cycle => byte- AND cycle-
+        // exact by construction. fo per replica <= ~72; the placer can park
+        // each replica beside its 32 slice FFs. Cost: +(DATA_W/32)x7 FF per
+        // OUT_KIND=1 bridge (8x7=56 FF for the 13 DATA_W=256 instances).
+        genvar ts;
+        for (ts = 0; ts < (DATA_W + 31) / 32; ts = ts + 1) begin : g_tidx_rep
+            localparam integer LO = ts * 32;
+            localparam integer SW = (DATA_W - LO < 32) ? (DATA_W - LO) : 32;
+            (* dont_touch = "true" *) reg [6:0] tile_idx_rep;
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n) tile_idx_rep <= 7'd0;
+                else begin
+                    if (emit_ready) begin
+                        if (last_tile) tile_idx_rep <= 7'd0;
+                        else           tile_idx_rep <= tile_idx_rep + 7'd1;
+                    end
+                    if (fifo_out_ready && fifo_out_valid) tile_idx_rep <= 7'd0;
+                end
+            end
+            always @(posedge clk) begin
+                if (emit_ready)
+                    data_out[LO +: SW] <= beat_buf[tile_idx_rep*256 + LO +: SW];
+            end
         end
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
@@ -4899,7 +4944,9 @@ module engine_output_bridge #(
         reg           buf_full;
         reg [31:0]    tiles_emitted;
         wire [DATA_W-1:0] current_tile = gather_buf[DATA_W-1:0];   // low OC*8 bits = contiguous channels
-        wire emit_ready = active_slot && (!valid_out || ready_out)
+        // [FINAL-BUNDLE CE-CAP 2026-06-11] same CE-net class as g_legacy;
+        // DATA_W is 3072 (conv_852/854) / 8000 (node_linear) here.
+        (* max_fanout = 128 *) wire emit_ready = active_slot && (!valid_out || ready_out)
                         && !drain_complete && buf_full;
         assign fifo_out_ready = active_slot && fifo_out_valid
                               && !buf_full && !drain_complete;
