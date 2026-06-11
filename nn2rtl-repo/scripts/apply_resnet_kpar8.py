@@ -40,10 +40,13 @@ TOP = REPO / "output" / "rtl" / "nn2rtl_top.v"
 _backed_up: set[Path] = set()
 
 
-def patch(path: Path, old: str, new: str, tag: str, count: int = 1) -> None:
-    """Anchor-asserted replace. Idempotent: presence of `new` == applied."""
+def patch(path: Path, old: str, new: str, tag: str, count: int = 1,
+          probe: str | None = None) -> None:
+    """Anchor-asserted replace. Idempotent: presence of `probe` (or `new`)
+    == applied. `probe` is needed where a LATER bundle applier
+    (apply_resnet_waddr_rep.py) rewrites this hunk's text."""
     text = path.read_text(encoding="utf-8")
-    if new in text:
+    if (probe or new) in text:
         print(f"  [skip] {path.name}: {tag} already applied")
         return
     n = text.count(old)
@@ -87,7 +90,7 @@ def main() -> int:
     # 2. GROUP addressing: engine exports old>>3; 8384 lines need 14 bits.
     patch(TOP, """    wire [14:0] weight_bank_rd_addr = engine_weight_rd_addr[14:0];  // [KPAR4-RN] GROUP address (engine exports old>>2; 16768 wide lines)
 """, """    wire [13:0] weight_bank_rd_addr = engine_weight_rd_addr[13:0];  // [KPAR8-RN] GROUP address (engine exports old>>3; 8384 wide lines)
-""", "group address 15b -> 14b")
+""", "group address 15b -> 14b", probe="engine exports old>>3; 8384 wide lines")
 
     # 3. bank rd_data wire comments (8 occurrences; width expr is generic).
     patch(TOP, "_rd_data;  // [KPAR4-RN] 4 x 96b tap-major\n",

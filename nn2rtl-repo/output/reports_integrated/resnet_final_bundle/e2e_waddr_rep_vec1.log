@@ -1,0 +1,2 @@
+[tb][value] frame done: first_input_cycle=18 last_output_cycle=5299606 e2e_cycles=5299588 beats=3136
+[tb][value][summary] result=PASS beats=3136/3136 mismatch_bytes=0 first_mismatch_beat=-1

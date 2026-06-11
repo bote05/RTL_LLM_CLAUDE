@@ -46,7 +46,7 @@ module node_conv_224 (
     localparam ST_ARM=2'd0, ST_RUN=2'd1, ST_WAIT=2'd2;
 
     // ---- input beat aggregation + even/even decimation over 56x56 ----
-    reg [INB_W-1:0] in_beat_idx;
+    (* max_fanout = 8 *) reg [INB_W-1:0] in_beat_idx;   // [FO-HINT 2026-06-11] kp4mp32_c16 #3 path class (beat-select decode into the spread in_lo register; 99% route on conv_288). Synth-only.
     reg [IN_PIXEL_BITS-TILE_BITS-1:0] in_lo;
     reg [ROW_W-1:0] irow;
     reg [COL_W-1:0] icol;

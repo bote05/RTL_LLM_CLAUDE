@@ -64,7 +64,14 @@ module nn2rtl_scheduler (
 
     reg aw_acked_r, w_acked_r;
 
-    reg [3:0]           state, next_state;
+    // [FO-HINT 2026-06-11] state feeds the spatial_stall Moore output whose
+    // top-level spatial_run replicas (already max_fanout=32) all converge on
+    // these 4 FFs — the kp4mp32_c16 post-route report's #2 path class
+    // (FSM_onehot_state_reg -> conv_276 out_pix CE, 13/40 worst paths).
+    // Hint synthesis to clone the state bits per consumer region. Synth-only
+    // attribute: Verilator/iverilog ignore it -> byte- and cycle-exact.
+    (* max_fanout = 16 *) reg [3:0] state;
+    reg [3:0]           next_state;
     reg [4:0] dispatch_idx;
     assign dispatch_idx_out = dispatch_idx;
     reg [3:0] write_step;

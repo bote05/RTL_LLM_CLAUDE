@@ -45,10 +45,14 @@ TOP = REPO / "output" / "rtl" / "nn2rtl_top.v"
 _backed_up: set[Path] = set()
 
 
-def patch(path: Path, old: str, new: str, tag: str, count: int = 1) -> None:
-    """Anchor-asserted replace. Idempotent: presence of `new` == applied."""
+def patch(path: Path, old: str, new: str, tag: str, count: int = 1,
+          probe: str | None = None) -> None:
+    """Anchor-asserted replace. Idempotent: presence of `probe` (or `new`)
+    == applied. `probe` must be a marker LATER appliers cannot disturb
+    (apply_resnet_waddr_rep.py appends a parameter right after this hunk,
+    so the full `new` text does not survive the rest of the bundle)."""
     text = path.read_text(encoding="utf-8")
-    if new in text:
+    if (probe or new) in text:
         print(f"  [skip] {path.name}: {tag} already applied")
         return
     n = text.count(old)
@@ -78,7 +82,7 @@ def main() -> int:
         // (eff_out_ready==1) and drains via the 4096-deep engine FIFO.
         .ENG_PIPE(1)
     ) u_shared_engine (
-""", "ENG_PIPE=1 on u_shared_engine")
+""", "ENG_PIPE=1 on u_shared_engine", probe=".ENG_PIPE(1)")
     print("[engpipe-rn] done. Backup: nn2rtl_top.v.preengpiper. Re-run is a no-op.")
     return 0
 

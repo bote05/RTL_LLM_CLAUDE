@@ -456,6 +456,12 @@ module nn2rtl_top (
     localparam integer ENGINE_K_PAR  = 8;
     localparam integer ENGINE_WBUS_W = ENGINE_K_PAR * 8 * ENGINE_LANE_B;  // weight bus width (8 taps x 768)
     wire [ENGINE_WBUS_W-1:0]   engine_weight_rd_data;   // WGT-packed: 256 lanes * ENGINE_WGT_W b
+    // [WADDR-REP 2026-06-11] one (* dont_touch *) copy of the engine weight
+    // address register PER BANK (post-route fanout fix: the single register
+    // fanning to 8 banks x ~200 cascaded RAMB36s was the design's worst
+    // routed path class, 98.9% route delay). Replica b feeds bank b only.
+    localparam integer ENGINE_WADDR_REP = 8;
+    wire [ENGINE_WADDR_REP*22-1:0] engine_weight_rd_addr_rep;
     wire [21:0]                engine_bias_rd_addr;
     wire                       engine_bias_rd_en;
     wire [8191:0]              engine_bias_rd_data;
@@ -3116,7 +3122,9 @@ node_relu_48 u_node_relu_48 (
     // ----- URAM-resident weight memory subsystem (Path D: 8 parallel banks) -----
     // Total MAC cycles = 96659; per-bank depth = 96659.
     // Address path: engine_weight_rd_addr[16:0] -> each bank's rd_addr.
-    wire [13:0] weight_bank_rd_addr = engine_weight_rd_addr[13:0];  // [KPAR8-RN] GROUP address (engine exports old>>3; 8384 wide lines)
+    // [WADDR-REP 2026-06-11] the shared weight_bank_rd_addr wire is GONE:
+    // bank b's address is its own replica engine_weight_rd_addr_rep[b*22+:14]
+    // ([KPAR8-RN] GROUP address, engine exports old>>3; 8384 wide lines).
     wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank0_rd_data;  // [KPAR8-RN] 8 x 96b tap-major
     wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank1_rd_data;  // [KPAR8-RN] 8 x 96b tap-major
     wire [ENGINE_K_PAR*ENGINE_BANK_W-1:0] uram_bank2_rd_data;  // [KPAR8-RN] 8 x 96b tap-major
@@ -3150,7 +3158,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank0_kp8.mem")
     ) u_uram_weight_bank0 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[0*22 +: 14]),   // [WADDR-REP] replica 0
         .rd_data(uram_bank0_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3161,7 +3169,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank1_kp8.mem")
     ) u_uram_weight_bank1 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[1*22 +: 14]),   // [WADDR-REP] replica 1
         .rd_data(uram_bank1_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3172,7 +3180,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank2_kp8.mem")
     ) u_uram_weight_bank2 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[2*22 +: 14]),   // [WADDR-REP] replica 2
         .rd_data(uram_bank2_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3183,7 +3191,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank3_kp8.mem")
     ) u_uram_weight_bank3 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[3*22 +: 14]),   // [WADDR-REP] replica 3
         .rd_data(uram_bank3_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3194,7 +3202,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank4_kp8.mem")
     ) u_uram_weight_bank4 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[4*22 +: 14]),   // [WADDR-REP] replica 4
         .rd_data(uram_bank4_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3205,7 +3213,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank5_kp8.mem")
     ) u_uram_weight_bank5 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[5*22 +: 14]),   // [WADDR-REP] replica 5
         .rd_data(uram_bank5_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3216,7 +3224,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank6_kp8.mem")
     ) u_uram_weight_bank6 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[6*22 +: 14]),   // [WADDR-REP] replica 6
         .rd_data(uram_bank6_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3227,7 +3235,7 @@ node_relu_48 u_node_relu_48 (
         .MEM_INIT_FILE("output/weights/uram_weights_bank7_kp8.mem")
     ) u_uram_weight_bank7 (
         .clk(clk),
-        .rd_addr(weight_bank_rd_addr),
+        .rd_addr(engine_weight_rd_addr_rep[7*22 +: 14]),   // [WADDR-REP] replica 7
         .rd_data(uram_bank7_rd_data),
         .rd_en(engine_weight_rd_en)
     );
@@ -3735,7 +3743,9 @@ node_relu_48 u_node_relu_48 (
         // bubble 12 (pixel) / 10 (intermediate) -> 3. Machinery proven on
         // MBV2 (ENG_PIPE_ANALYSIS.md); ResNet keeps backpressure disabled
         // (eff_out_ready==1) and drains via the 4096-deep engine FIFO.
-        .ENG_PIPE(1)
+        .ENG_PIPE(1),
+        // [WADDR-REP 2026-06-11] one weight-address register copy per bank.
+        .WADDR_REP(ENGINE_WADDR_REP)
     ) u_shared_engine (
         .clk(clk), .rst_n(rst_n),
         .s_axil_awvalid(sched_axil_awvalid), .s_axil_awready(sched_axil_awready), .s_axil_awaddr(sched_axil_awaddr),
@@ -3753,6 +3763,7 @@ node_relu_48 u_node_relu_48 (
         .act_out_wr_en(engine_act_out_wr_en),
         .act_out_wr_data(engine_act_out_wr_data),
         .weight_rd_addr(engine_weight_rd_addr),
+        .weight_rd_addr_rep(engine_weight_rd_addr_rep),   // [WADDR-REP 2026-06-11]
         .weight_rd_en(engine_weight_rd_en),
         .weight_rd_data(engine_weight_rd_data),
         .bias_rd_addr(engine_bias_rd_addr),
