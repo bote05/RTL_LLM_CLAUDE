@@ -46,3 +46,9 @@ imagenet/
 **/imagenet-val/
 *.tar
 *.tar.gz
+
+# agent memory/handoff artifacts (session-generated, not project code)
+AGENT_MEMORY_EXPORT/
+AGENT_HANDOFF.md
+zcu104.zip
+zcu104_finn.zip

@@ -157,3 +157,8 @@ tb/priv*/
 tb/*_BROKEN.*
 tb/*.vlt
 tb/mbv2_engine_bp_probe*
+
+# session debris patterns
+*.prek1m
+_tmp_*.py
+verify/cyc_lbw_c960/
