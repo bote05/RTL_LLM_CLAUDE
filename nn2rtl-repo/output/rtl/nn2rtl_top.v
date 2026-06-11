@@ -3729,7 +3729,12 @@ node_relu_48 u_node_relu_48 (
         .URAM_DATA_W(ENGINE_WBUS_W),
         // [KPAR4-RN] 4 taps/cycle/lane on ALL 17 dispatches (8 dense 1x1 +
         // 9 dense 3x3 via the pos-major transposed _kp4 banks).
-        .K_PAR(ENGINE_K_PAR)
+        .K_PAR(ENGINE_K_PAR),
+        // [ENG-PIPE-RN 2026-06-11] pipelined (pixel, oc_pass) issue: per-pass
+        // bubble 12 (pixel) / 10 (intermediate) -> 3. Machinery proven on
+        // MBV2 (ENG_PIPE_ANALYSIS.md); ResNet keeps backpressure disabled
+        // (eff_out_ready==1) and drains via the 4096-deep engine FIFO.
+        .ENG_PIPE(1)
     ) u_shared_engine (
         .clk(clk), .rst_n(rst_n),
         .s_axil_awvalid(sched_axil_awvalid), .s_axil_awready(sched_axil_awready), .s_axil_awaddr(sched_axil_awaddr),
