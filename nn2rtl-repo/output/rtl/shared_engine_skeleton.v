@@ -533,7 +533,10 @@ module shared_engine #(
     localparam integer WEIGHT_RD_LATENCY = 2;
     reg ag_weight_rd_en_d, ag_weight_rd_en_d2;
     reg ag_act_in_rd_en_d, ag_act_in_rd_en_d2;
-    reg [7:0] ag_act_in_ic_byte_idx_d, ag_act_in_ic_byte_idx_d2;
+    // [FO-HINT 2026-06-11] mac_act_bytes_ext class: this index register's byte-select
+    // cone fans to all 256 MAC lanes (fo~2816, 28 of MBV2's top-30 routed paths, 98%+
+    // route delay). max_fanout makes synthesis replicate it - attribute-only, sim-invisible.
+    (* max_fanout = 64 *) reg [7:0] ag_act_in_ic_byte_idx_d, ag_act_in_ic_byte_idx_d2;
     reg [ACT_BUS_W-1:0] act_in_rd_data_d;   // activation word held one extra cycle
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
