@@ -54,6 +54,7 @@ function flag(name: string, fallback?: string): string | undefined {
 const part = flag("part") ?? "xcu250-figd2104-2L-e";
 const clockNs = Number(flag("clock-ns") ?? "20");
 const threads = Number(flag("threads") ?? "8");
+const placeDirective = flag("place-directive") ?? "Explore";
 const safeCheckpointDir = path.join(repoRoot, "output", "reports_integrated", "checkpoints");
 const inputRaw = flag("input") ?? path.join(safeCheckpointDir, "first_light_synth_URAM.dcp");
 const inputDcp = path.isAbsolute(inputRaw) ? inputRaw : path.resolve(repoRoot, inputRaw);
@@ -99,8 +100,10 @@ function buildTcl(input: {
     // HIGH-QUALITY directives only (user: no flags that reduce quality/Fmax).
     // place Explore (high-effort, timing-aware) -> phys_opt (timing closure, IMPROVES Fmax)
     // -> route Explore (high-effort, timing-aware). No RuntimeOptimized/Quick/timing-relaxation.
-    `puts "NN2RTL_INFO: starting place_design (directive=Explore)"`,
-    `place_design -directive Explore`,
+    // --place-directive overrides for congestion-targeted re-place rungs (e.g. SSI_SpreadSLLs
+    // against the measured SLR0-1 SLL 114%/104% oversubscription, 2026-06-12).
+    `puts "NN2RTL_INFO: starting place_design (directive=${placeDirective})"`,
+    `place_design -directive ${placeDirective}`,
     `write_checkpoint -force ${tclQuote(input.placedDcp)}`,
     `puts "NN2RTL_INFO: starting phys_opt_design (timing closure)"`,
     `phys_opt_design`,
