@@ -54,7 +54,11 @@ function flag(name: string, fallback?: string): string | undefined {
 }
 
 const part = flag("part") ?? "xcu250-figd2104-2L-e";
-const clockNs = Number(flag("clock-ns") ?? "20");
+// --clock-ns is an OVERRIDE: only applied to the design when explicitly passed (create_clock;
+// set_property PERIOD is a silent no-op — proven 2026-06-12). Without it the route runs at the
+// dcp's embedded clock, and reporting uses the EFFECTIVE period echoed by the TCL.
+const clockNsFlagRaw = flag("clock-ns");
+const clockNs = Number(clockNsFlagRaw ?? "20");
 const threads = Number(flag("threads") ?? "8");
 const checkpointRaw = flag("checkpoint") ?? path.join(repoRoot, "output", "reports_integrated", "checkpoints", "first_light_placed.dcp");
 const checkpointInput = path.isAbsolute(checkpointRaw) ? checkpointRaw : path.resolve(repoRoot, checkpointRaw);
@@ -85,6 +89,13 @@ function buildRouteTcl(input: {
     `puts "NN2RTL_INFO: requested general.maxThreads=${threads}, effective=[get_param general.maxThreads]"`,
     `puts "NN2RTL_INFO: opening placed/physopt checkpoint"`,
     `open_checkpoint ${tclQuote(input.placedCheckpointPath)}`,
+    ...(clockNsFlagRaw !== undefined
+      ? [
+          `puts "NN2RTL_INFO: overriding clock to ${clockNs}ns via create_clock"`,
+          `create_clock -name clk -period ${clockNs} [get_ports clk]`,
+        ]
+      : []),
+    `puts "NN2RTL_CLOCK_EFFECTIVE_NS: [get_property PERIOD [get_clocks clk]]"`,
     `puts "NN2RTL_INFO: starting route_design (directive=${routeDirective})"`,
     `route_design -directive ${routeDirective}`,
     `puts "NN2RTL_INFO: write routed checkpoint"`,
@@ -225,7 +236,13 @@ async function main(): Promise<void> {
     ].filter(Boolean).join("\n");
 
     await writeFile(logPath, combinedReport, "utf8");
-    const parsed = parseVivadoReport(combinedReport, clockNs, part);
+    // Fmax math must use the clock the router ACTUALLY saw, not the flag.
+    const effMatch = combinedReport.match(/NN2RTL_CLOCK_EFFECTIVE_NS:\s*([\d.]+)/);
+    const effectiveClockNs = effMatch ? Number(effMatch[1]) : clockNs;
+    if (effectiveClockNs !== clockNs) {
+      console.warn(`[route-only] effective clock ${effectiveClockNs}ns differs from flag ${clockNs}ns — reporting with effective`);
+    }
+    const parsed = parseVivadoReport(combinedReport, effectiveClockNs, part);
     parsed.success = exitOk && parsed.success;
     return { ...parsed, elapsed_s: elapsed };
   });

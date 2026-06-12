@@ -88,7 +88,11 @@ function buildTcl(input: {
     // synth dcp actually re-times (open_checkpoint inherits the synth-baked period otherwise).
     // Constraint-only -> byte-exact. Clock is named "clk" (run_first_light_synth.ts create_clock).
     `puts "NN2RTL_INFO: re-applying clock at resume target ${clockNs}ns"`,
-    `if {[llength [get_clocks -quiet clk]]} { set_property -quiet PERIOD ${clockNs} [get_clocks clk] } else { create_clock -name clk -period ${clockNs} [get_ports clk] }`,
+    // set_property PERIOD on a clock object is a SILENT NO-OP in Vivado (proven 2026-06-12:
+    // every "swept" rung actually ran at the dcp's embedded synth clock). create_clock on the
+    // same port legally OVERRIDES the existing primary clock and logs that it did so.
+    `create_clock -name clk -period ${clockNs} [get_ports clk]`,
+    `puts "NN2RTL_INFO: clock now [get_property PERIOD [get_clocks clk]]ns (create_clock override)"`,
     `puts "NN2RTL_INFO: starting opt_design"`,
     `opt_design`,
     `write_checkpoint -force ${tclQuote(input.optDcp)}`,
