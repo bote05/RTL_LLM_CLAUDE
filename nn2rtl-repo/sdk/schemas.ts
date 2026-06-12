@@ -173,6 +173,12 @@ export const layerIrBaseSchema = z
     runtime_layer_signature: z.record(z.string(), z.unknown()).optional(),
     signature_hash: z.string().optional(),
     exact_reference_key: z.string().nullable().optional(),
+    // Per-OC quantization metadata (generate_golden emits these since the
+    // INT8-per-channel era; MBV2/ResNet-50 generation predates them).
+    weight_bits: z.number().int().positive().optional(),
+    activation_bits: z.number().int().positive().optional(),
+    scale_factor_per_oc: z.array(z.number()).optional(),
+    weight_scale_per_oc: z.array(z.number()).optional(),
   })
   .strict();
 
