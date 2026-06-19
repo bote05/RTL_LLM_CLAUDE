@@ -7,6 +7,8 @@
 
 # Test and coverage artifacts
 node_modules/
+__pycache__/
+*.pyc
 .pytest_cache/
 .coverage
 .coverage.*
@@ -52,3 +54,10 @@ AGENT_MEMORY_EXPORT/
 AGENT_HANDOFF.md
 zcu104.zip
 zcu104_finn.zip
+
+# Thesis / paper writing (published separately as the thesis PDF, not in the code artifact)
+Paper template/
+nn2rtl_citation_plan*.md
+
+# Session-only helper scripts (not project code)
+scripts_session/
