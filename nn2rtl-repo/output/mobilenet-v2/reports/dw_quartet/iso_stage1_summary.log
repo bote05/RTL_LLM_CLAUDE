@@ -1,8 +1,0 @@
-[quartet-iso] === DEPLOYMENT config (K_PAR=8 + ENG_PIPE, WLAT=2) ===
-  830 vec0: rc=0  [wrap] done=1 took=9420 cycles bytes=112896 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
-  830 vec1: rc=0  [wrap] done=1 took=9420 cycles bytes=112896 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
-  848 vec0: rc=0  [wrap] done=1 took=2364 cycles bytes=37632 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
-  848 vec1: rc=0  [wrap] done=1 took=2364 cycles bytes=37632 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
-  890 vec0: rc=0  [wrap] done=1 took=1776 cycles bytes=28224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
-  890 vec1: rc=0  [wrap] done=1 took=1776 cycles bytes=28224 mismatch=0 max|err|=0 firstbad_pixel=-1 PASS: byte-exact 
-[quartet-iso] RESULT: PASS

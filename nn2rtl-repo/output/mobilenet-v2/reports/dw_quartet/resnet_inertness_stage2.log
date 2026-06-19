@@ -1,3 +1,0 @@
-[tb][value] frame done: first_input_cycle=18 last_output_cycle=5664733 e2e_cycles=5664715 beats=3136
-[tb][value] total mismatching bytes = 0 / 100352
-[tb][value][summary] result=PASS beats=3136/3136 mismatch_bytes=0 first_mismatch_beat=-1
