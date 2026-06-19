@@ -209,8 +209,8 @@ module conv_datapath_mp_k #(
     reg signed [7:0]    tap_q [0:MP_K-1];
     // [DSP-INPUT-PIPE] optional 2nd input-register stage. DSP_INPUT_PIPE=0 => these
     // alias q1 combinationally (zero-cost, exact behavior + latency).
-    reg [WIDE_W-1:0]    weight_word_q2;
-    reg signed [7:0]    tap_q2 [0:MP_K-1];
+    (* max_fanout = 64 *) reg [WIDE_W-1:0]    weight_word_q2;
+    (* max_fanout = 64 *) reg signed [7:0]    tap_q2 [0:MP_K-1];
     reg                    mac_valid_q1b;
     reg [OC_GROUP_W-1:0]   mac_oc_group_q1b;
     integer p2_i;

@@ -281,7 +281,12 @@ def build_deployed(base: nn.Module, refs):
                     f"layer_ir {tuple(int(s) for s in shape)} vs torchvision {tv_shape}"
                 )
 
-            int_w = _load_int_weights(Path(layer["weights_path"]), shape)
+            # weights_path may be a stale absolute path (Desktop, pre-D: migration);
+            # fall back to the layer_ir's sibling weights/ dir by basename.
+            _wp = Path(layer["weights_path"])
+            if not _wp.exists():
+                _wp = LAYER_IR.parent / "weights" / _wp.name
+            int_w = _load_int_weights(_wp, shape)
             Wf_np = Wf.detach().cpu().numpy().astype(np.float64)
 
             is_dw = (int(c.groups) == int(c.weight.shape[0])) and (int(c.weight.shape[1]) == 1)
@@ -336,7 +341,10 @@ def build_deployed(base: nn.Module, refs):
                 f"classifier shape mismatch: layer_ir {gshape} vs "
                 f"torchvision {tuple(lin.weight.shape)}"
             )
-        int_fc = _load_int_weights(Path(g["weights_path"]), gshape)
+        _gp = Path(g["weights_path"])
+        if not _gp.exists():
+            _gp = LAYER_IR.parent / "weights" / _gp.name
+        int_fc = _load_int_weights(_gp, gshape)
         W_fc = lin.weight.detach().cpu().numpy().astype(np.float64)  # no BN fold on fc
         fc_scale = _pertensor_scale(W_fc)
         float_fc = (int_fc.astype(np.float64) * fc_scale).astype(np.float32)

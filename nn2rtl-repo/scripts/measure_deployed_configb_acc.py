@@ -231,7 +231,12 @@ def build_deployed(base: nn.Module, refs):
             bits = int(layer["weight_bits"])
             qmin_exp, qmax_exp, gen_qmax = _RANGE_BY_BITS.get(bits, (-128, 127, 127))
 
-            int_w = _load_int_weights(Path(layer["weights_path"]), shape)
+            # weights_path may be a stale absolute path (Desktop, pre-D: migration);
+            # fall back to the current repo's output/weights/ by basename.
+            _wp = Path(layer["weights_path"])
+            if not _wp.exists():
+                _wp = Path("output/weights") / _wp.name
+            int_w = _load_int_weights(_wp, shape)
 
             # PROVEN-correct folded per-OC scale straight from layer_ir.
             scale_per_oc = np.asarray(layer["weight_scale_per_oc"], dtype=np.float64)

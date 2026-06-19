@@ -21,6 +21,16 @@
       "frontend": "onnx",
       "available": true,
       "description": "MobileNetV2 imported network"
+    },
+    {
+      "id": "resnet8",
+      "label": "Resnet8",
+      "modelName": "resnet8",
+      "outputDir": "output/resnet8",
+      "defaultCheckpointPath": "checkpoints/resnet8.onnx",
+      "frontend": "onnx",
+      "available": true,
+      "description": "Resnet8 imported network"
     }
   ]
 }

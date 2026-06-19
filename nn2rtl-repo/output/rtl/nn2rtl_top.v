@@ -3745,7 +3745,11 @@ node_relu_48 u_node_relu_48 (
         // (eff_out_ready==1) and drains via the 4096-deep engine FIFO.
         .ENG_PIPE(1),
         // [WADDR-REP 2026-06-11] one weight-address register copy per bank.
-        .WADDR_REP(ENGINE_WADDR_REP)
+        .WADDR_REP(ENGINE_WADDR_REP),
+        // [TAP0-HW 2026-06-12] hardwire the engine tap0 weight subword to
+        // slice 0 (route-congestion fix; all 17 dispatches fast-eligible,
+        // proof P0 in apply_resnet_tap0_hardwire.py + the kp8 repack).
+        .TAP0_HARDWIRE(1)
     ) u_shared_engine (
         .clk(clk), .rst_n(rst_n),
         .s_axil_awvalid(sched_axil_awvalid), .s_axil_awready(sched_axil_awready), .s_axil_awaddr(sched_axil_awaddr),

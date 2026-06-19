@@ -14,12 +14,14 @@ Used by:
 """
 from __future__ import annotations
 import io
+import os
 from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 
-IMAGENET_DIR = Path(r"C:\Users\User\Desktop\RTL_LLM_CLAUDE\imagenet-val\data")
+# Data migrated Desktop -> D: ; allow env override, default to the D: location.
+IMAGENET_DIR = Path(os.environ.get("NN2RTL_IMAGENET_DIR", r"D:\RTL_LLM_CLAUDE\imagenet-val\data"))
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 

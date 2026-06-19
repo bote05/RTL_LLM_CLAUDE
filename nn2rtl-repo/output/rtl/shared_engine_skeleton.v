@@ -114,7 +114,22 @@ module shared_engine #(
     // the weight address register (post-route fanout fix; see
     // apply_resnet_waddr_rep.py). weight_rd_addr_rep carries the copies,
     // group-shifted per K_PAR exactly like the scalar weight_rd_addr.
-    parameter integer WADDR_REP = 1
+    parameter integer WADDR_REP = 1,
+
+    // ---- tap0 weight-subword hardwire (default 0 = legacy mux verbatim) ----
+    // [TAP0-HW 2026-06-12] When 0 (DEFAULT) the K_PAR==8 tap0 hookup keeps
+    // the ORIGINAL wsub_d2-piped 8:1 weight-subword mux VERBATIM — MobileNetV2
+    // (whose 12 depthwise dispatches NEED the serial-walk subword select) is
+    // bit- and cycle-identical. When 1 (ResNet top ONLY) tap0 is HARDWIRED to
+    // weight slice 0: proof P0 (apply_resnet_tap0_hardwire.py, re-asserted on
+    // the deployed scheduler ROMs) shows every dispatch is fast-eligible
+    // (base%8==0, ic%8==0, ic>=8, depthwise off), so every issued weight
+    // address has [2:0]==0 and the mux select was 0 on EVERY cycle (reset
+    // value included). Deletes the 768b 8:1 mux + halves the weight-bus pin
+    // load in the SLR1 route hotspot (failed_route_final_c14: 8/10 top
+    // contended nodes = uram_weight_bank weight_bus nets). Only meaningful
+    // at K_PAR==8; other K_PAR branches ignore it.
+    parameter integer TAP0_HARDWIRE = 0
 ) (
     // ---- Clock + reset ----
     input  wire                          clk,
@@ -592,20 +607,49 @@ module shared_engine #(
         // SERIAL dispatches (the 12 depthwise) walk one old word/cycle with
         // mask bit0-only, tap0 tracking the 3-bit subword; taps 1..7 are
         // masked dead inside mac_array.
-        reg [2:0] wsub_d1, wsub_d2;
-        reg [7:0] ktap_d1, ktap_d2;
+        (* max_fanout = 64 *) reg [7:0] ktap_d1, ktap_d2;
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
-                wsub_d1 <= 3'd0;         wsub_d2 <= 3'd0;
                 ktap_d1 <= 8'b0000_0001; ktap_d2 <= 8'b0000_0001;
             end else begin
-                wsub_d1 <= ag_weight_rd_addr[2:0]; wsub_d2 <= wsub_d1;
                 ktap_d1 <= ag_k_tap_mask;          ktap_d2 <= ktap_d1;
             end
         end
-        // tap0 = subword-selected old word (slice 0 for aligned fast groups).
-        assign mac_weight_bus[MAC_COUNT*WGT_W-1:0] =
-            weight_rd_data[wsub_d2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        if (TAP0_HARDWIRE == 0) begin : g_tap0_mux
+            // [TAP0-HW 2026-06-12] DEFAULT: the ORIGINAL wsub-piped 8:1 tap0
+            // mux VERBATIM (wsub regs moved inside this branch: same FFs,
+            // same D / same reset / same update -> MBV2 bit- and
+            // cycle-identical; 8/8 inertness gate mandatory and run).
+            reg [2:0] wsub_d1, wsub_d2;
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n) begin
+                    wsub_d1 <= 3'd0;                   wsub_d2 <= 3'd0;
+                end else begin
+                    wsub_d1 <= ag_weight_rd_addr[2:0]; wsub_d2 <= wsub_d1;
+                end
+            end
+            // tap0 = subword-selected old word (slice 0 for aligned fast groups).
+            assign mac_weight_bus[MAC_COUNT*WGT_W-1:0] =
+                weight_rd_data[wsub_d2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
+        end else begin : g_tap0_hw
+            // [TAP0-HW 2026-06-12] ResNet route-congestion fix: tap0 HARDWIRED
+            // to weight slice 0 — deletes the 768b 8:1 wsub mux in the SLR1
+            // hotspot and halves the weight-bus pin load (12,288 -> 6,144
+            // weight-path pin connections). Proof P0 (re-asserted on the
+            // DEPLOYED scheduler ROMs by apply_resnet_tap0_hardwire.py):
+            // every dispatch is fast-eligible (base%8==0, ic%8==0, ic>=8,
+            // depthwise off) -> every issued weight address has [2:0]==0 ->
+            // the deleted mux's select wsub_d2 was 0 on EVERY cycle (reset
+            // value included) -> tap0 == slice0 unconditionally. The serial
+            // walk is NEVER exercised on this top (and stays wrong-by-design
+            // for the pos-major-transposed 3x3 bank regions — see
+            // scripts/repack_resnet_kpar8_banks.py header).
+            assign mac_weight_bus[MAC_COUNT*WGT_W-1:0] =
+                weight_rd_data[0 +: MAC_COUNT*WGT_W];
+            /* verilator lint_off UNUSED */
+            wire _unused_tap0_hw = &{1'b0, ag_weight_rd_addr[2:0]};
+            /* verilator lint_on UNUSED */
+        end
         assign mac_weight_bus[1*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
             weight_rd_data[1*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W];
         assign mac_weight_bus[2*(MAC_COUNT*WGT_W) +: MAC_COUNT*WGT_W] =
@@ -642,7 +686,7 @@ module shared_engine #(
     end else begin : g_ktap_kpar
         // subword + mask pipes (2-cycle, mirroring ag_weight_rd_en_d/_d2).
         reg [1:0] wsub_d1, wsub_d2;
-        reg [3:0] ktap_d1, ktap_d2;
+        (* max_fanout = 64 *) reg [3:0] ktap_d1, ktap_d2;
         always @(posedge clk or negedge rst_n) begin
             if (!rst_n) begin
                 wsub_d1 <= 2'd0;    wsub_d2 <= 2'd0;
