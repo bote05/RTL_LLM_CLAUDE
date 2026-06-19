@@ -1,0 +1,24 @@
+{
+  "network_id": "mobilenet-v2",
+  "output_root": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\mobilenet-v2",
+  "layers_total": 99,
+  "layers_measured": 97,
+  "layers_skipped": 2,
+  "skipped": [
+    {
+      "mid": "node_mean",
+      "why": "no results.json"
+    },
+    {
+      "mid": "node_linear",
+      "why": "no results.json"
+    }
+  ],
+  "network_bottleneck_module": "node_conv_912",
+  "network_bottleneck_op": "conv2d",
+  "network_bottleneck_fps": 10.142386925455368,
+  "network_steady_state_fps": 10.142386925455368,
+  "pipeline_fill_seconds_sum": 0.009279023465000001,
+  "one_frame_seconds": 0.09859612015887498,
+  "end_to_end_latency_seconds_one_image": 0.10787514362387499
+}

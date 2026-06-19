@@ -1,0 +1,40 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date         : Thu Jun  4 12:59:42 2026
+| Host         : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command      : report_design_analysis -congestion -complexity -file C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/congestion_analysis.rpt
+| Design       : nn2rtl_top
+| Device       : xcu250
+| Design State : Fully Placed
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Report Design Analysis
+
+Table of Contents
+-----------------
+1. Complexity Characteristics (Cells)
+2. Placer Final Level Congestion Reporting
+
+1. Complexity Characteristics (Cells)
+-------------------------------------
+
++--------+------+----------------+-----------------+-----------+------+------+------+------+------+------+------------+-----+------+------+------+-------------------+
+| Module | Rent | Average Fanout | Total Instances | Registers | LUT1 | LUT2 | LUT3 | LUT4 | LUT5 | LUT6 | Memory LUT | DSP | RAMB | MUXF | URAM | Hierarchical Name |
++--------+------+----------------+-----------------+-----------+------+------+------+------+------+------+------------+-----+------+------+------+-------------------+
+* No complexity report generated as cells satisfying given conditions are not present in the design.
+
+
+2. Placer Final Level Congestion Reporting
+------------------------------------------
+
++-----------+-------+-------+------------------------------------+---------------+----------------+-----+--------+------+------+------+------+-----+-------+-----+-----------------------------------------------------------------+
+| Direction |  Type | Level |               Window               | Combined LUTs | Avg LUT Inputs | LUT | LUTRAM | Flop | MUXF | RAMB | URAM | DSP | CARRY | SRL |                            Cell Names                           |
++-----------+-------+-------+------------------------------------+---------------+----------------+-----+--------+------+------+------+------+-----+-------+-----+-----------------------------------------------------------------+
+| East      | Short |     5 | (CLEL_R_X101Y230,LAG_LAG_X115Y261) |            1% |          3.706 | 67% | 6%     |  43% |  17% | 100% | NA   | 60% |   17% |  0% | u_node_conv_242/dp(19%),u_node_add_6(15%),u_node_relu_41(14%)   |
+| East      | Short |     6 | (CLEL_R_X2Y260,CLEM_X33Y323)       |            8% |          4.253 | 75% | 9%     |  45% |  26% | 100% | 93%  | 86% |    9% |  0% | u_node_add_15(42%),u_node_conv_220/lbw(25%),u_node_relu_48(12%) |
+| West      | Short |     5 | (CLEL_R_X87Y294,CLEL_R_X102Y325)   |            3% |          4.548 | 82% | 0%     |  39% |  28% | 100% | 100% | 67% |   11% |  0% | u_node_conv_240/lbw(38%),u_node_add_13(18%),u_node_relu_42(15%) |
+| West      | Short |     6 | (CLEL_R_X74Y270,CLEM_X105Y333)     |            3% |          4.251 | 76% | 0%     |  46% |  28% | 100% | 100% | 74% |    9% |  0% | u_node_conv_240/lbw(27%),u_node_add_13(19%),u_node_relu_42(15%) |
++-----------+-------+-------+------------------------------------+---------------+----------------+-----+--------+------+------+------+------+-----+-------+-----+-----------------------------------------------------------------+
+
+

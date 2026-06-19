@@ -1,0 +1,19 @@
+{
+  "success": false,
+  "tool": "vivado",
+  "part": "xcu250-figd2104-2L-e",
+  "stage": "synth",
+  "lut_count": 0,
+  "ff_count": 0,
+  "dsp_count": 0,
+  "bram18_count": 0,
+  "bram36_count": 0,
+  "bram18_equiv": 0,
+  "wns_ns": null,
+  "setup_wns_ns": null,
+  "hold_wns_ns": null,
+  "timing_met": false,
+  "fmax_mhz": 0,
+  "report": "--- timing ---",
+  "elapsed_s": 0.004
+}

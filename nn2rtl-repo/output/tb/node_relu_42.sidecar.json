@@ -1,0 +1,29 @@
+{
+  "module_name": "node_relu_42",
+  "module_id": "node_relu_42",
+  "clock_signal": "clk",
+  "reset_signal": "rst_n",
+  "valid_in_signal": "valid_in",
+  "valid_out_signal": "valid_out",
+  "ready_in_signal": "ready_in",
+  "data_in_signal": "data_in",
+  "data_out_signal": "data_out",
+  "bus_bytes_per_sample": 32,
+  "input_width_bits": 256,
+  "output_width_bits": 256,
+  "pipeline_latency_cycles": 64,
+  "clock_period_ns": 20,
+  "golden_inputs_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\goldens\\contracts\\node_relu_42_tiled-streaming_relu_2048x2048_s7x7_i256_o256_iotiled-streaming_til\\node_relu_42.goldin",
+  "golden_outputs_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\goldens\\contracts\\node_relu_42_tiled-streaming_relu_2048x2048_s7x7_i256_o256_iotiled-streaming_til\\node_relu_42.goldout",
+  "results_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\reports\\node_relu_42.results.json",
+  "testbench_template_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\contracts\\tiled-streaming\\testbench.cpp",
+  "contract_id": "tiled-streaming",
+  "contract_name": "Tiled Streaming",
+  "contract_metadata_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\contracts\\tiled-streaming\\metadata.json",
+  "beat_width_bits": 256,
+  "beats_per_input_sample": 64,
+  "beats_per_output_sample": 64,
+  "contract_params": {
+    "beat_width_bits": 256
+  }
+}

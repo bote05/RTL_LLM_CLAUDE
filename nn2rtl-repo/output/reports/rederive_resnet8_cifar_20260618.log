@@ -1,0 +1,21 @@
+===== nn2rtl ResNet-8 CIFAR-10 full-10k eval =====
+2026-06-18 11:42:27.079990: I tensorflow/core/util/port.cc:113] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-06-18 11:42:27.098377: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+test set: (10000, 32, 32, 3) float32 labels: (10000,) pixel range: [0, 255]
+ONNX model/resnet8_ref.onnx FULL-10000 top-1: 0.8719 (87.19%)
+ONNX model/resnet8_ref.onnx PERF-200 top-1: 0.8700 (87.00%)
+ONNX model/resnet8_folded.onnx FULL-10000 top-1: 0.8719 (87.19%)
+ONNX model/resnet8_folded.onnx PERF-200 top-1: 0.8700 (87.00%)
+H5 FULL-10000 top-1: 0.8719 (87.19%)
+H5 PERF-200 top-1: 0.8700 (87.00%)
+RESULTS: {'model/resnet8_ref.onnx': 0.8719, 'model/resnet8_folded.onnx': 0.8719, 'pretrainedResnet.h5': 0.8719}
+
+===== hls4ml QKeras nosoftmax score on full-10k TEST set =====
+[score] test set (10000, 32, 32, 3) labels (10000,)
+WARNING:tensorflow:No training configuration found in the save file, so the model was *not* compiled. Compile it manually.
+WARNING:tensorflow:No training configuration found in the save file, so the model was *not* compiled. Compile it manually.
+NOSOFTMAX_TOP1_10k=0.8910 (8910/10000)
+SOFTMAX_TOP1_10k=0.8910 (8910/10000)  argmax_match_nosm=10000/10000
+SCORE_DONE
+===== DONE =====

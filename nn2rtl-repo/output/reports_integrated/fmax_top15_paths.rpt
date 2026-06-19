@@ -1,0 +1,65 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date              : Mon Jun  1 12:23:58 2026
+| Host              : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command           : report_timing -max_paths 15 -nworst 15 -setup -path_type summary -file C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/fmax_top15_paths.rpt
+| Design            : nn2rtl_top
+| Device            : xcu250-figd2104
+| Speed File        : -2L  PRODUCTION 1.28 03-30-2022
+| Design State      : Fully Placed
+| Temperature Grade : E
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Startpoint                     Endpoint                       Slack(ns)     
+----------------------------------------------------------------------------
+u_scheduler/FSM_onehot_state_reg[5]/C
+                               u_node_add_1/FSM_sequential_state_reg[1]/CE
+                                                              22.461        
+u_scheduler/FSM_onehot_state_reg[5]/C
+                               u_node_add_1/FSM_sequential_state_reg[1]/CE
+                                                              22.461        
+u_scheduler/FSM_onehot_state_reg[3]/C
+                               u_node_add_1/FSM_sequential_state_reg[1]/CE
+                                                              22.544        
+u_scheduler/FSM_onehot_state_reg[3]/C
+                               u_node_add_1/FSM_sequential_state_reg[1]/CE
+                                                              22.544        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+u_node_conv_298/dp/k_group_reg[6]/C
+                               u_node_conv_298/dp/p_1_out__27/DSP_A_B_DATA_INST/A[2]
+                                                              22.621        
+
+
+

@@ -1,0 +1,434 @@
+{
+  "entry": {
+    "id": "node_conv2d_4__003__retrospector_surgeon_assayer__20260613T112815Z",
+    "created_at": "2026-06-13T11:28:15.664Z",
+    "network_id": "resnet8",
+    "model_name": "resnet8",
+    "module_id": "node_conv2d_4",
+    "stage": "retrospector_surgeon_assayer",
+    "attempt_index": 3,
+    "parent_id": "node_conv2d_4:attempt_2",
+    "op_type": "conv2d",
+    "contract_id": "flat-bus",
+    "spec_hash": "conv2d_16x32x4x4_s32x32_st2x2_p1x1_d1x1_g1_mp4_i128_o256",
+    "generated_by": "Surgeon",
+    "module_attempt": 3,
+    "rtl_path": "output/resnet8/failure_corpus/visible/node_conv2d_4/node_conv2d_4__003__retrospector_surgeon_assayer__20260613T112815Z/node_conv2d_4.v",
+    "failure_path": "output/resnet8/failure_corpus/visible/node_conv2d_4/node_conv2d_4__003__retrospector_surgeon_assayer__20260613T112815Z/failure.json",
+    "score": {
+      "syntax_ok": true,
+      "sim_completed": false,
+      "timing_delta_cycles": -8310,
+      "timing_abs_delta_cycles": 8310,
+      "outputs_received": null,
+      "outputs_expected": null,
+      "output_completion_ratio": null,
+      "first_mismatch_index": null,
+      "max_error": null,
+      "mean_error": null,
+      "exact_match_count": null,
+      "mismatch_count": null,
+      "signed_error_sum": null,
+      "positive_error_count": null,
+      "negative_error_count": null,
+      "axi_out_of_range_reads": null
+    },
+    "summary": {
+      "status": "fail",
+      "status_class": null,
+      "failure_class": "structural_preflight_failed",
+      "failure_category": "code_bug",
+      "timing_pass": false,
+      "timing_actual_cycles": 0,
+      "timing_expected_cycles": 8310,
+      "timing_delta_cycles": -8310,
+      "outputs_received": null,
+      "outputs_expected": null,
+      "output_completion_ratio": null,
+      "first_mismatch": {
+        "flat_index": null,
+        "vector_index": null,
+        "output_index": null,
+        "channel_index": null,
+        "expected": null,
+        "got": null
+      },
+      "error_stats": {
+        "max_error": null,
+        "mean_error": null,
+        "exact_match_count": null,
+        "mismatch_count": null,
+        "signed_error_sum": null,
+        "positive_error_count": null,
+        "negative_error_count": null
+      },
+      "gap": {
+        "missing_index_start": null,
+        "missing_index_end": null,
+        "output_gap_histogram": null,
+        "last_valid_out_cycle": null,
+        "simulation_end_cycle": null
+      },
+      "axi_weight_trace": {
+        "model_enabled": null,
+        "model_status": null,
+        "ar_handshakes": null,
+        "r_beats": null,
+        "completed_bursts": null,
+        "out_of_range_reads": null
+      },
+      "per_vector": null
+    },
+    "shape": {
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weight_shape": [
+        32,
+        16,
+        4,
+        4
+      ],
+      "input_width_bits": 128,
+      "output_width_bits": 256,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "io_mode": "packed_full",
+      "channel_tile": null
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        4,
+        4
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 16,
+      "output_channels": 32,
+      "input_width_bits": 128,
+      "output_width_bits": 256,
+      "bus_width_bits": 256,
+      "channel_tile": null,
+      "spatial_shape": [
+        16,
+        16
+      ],
+      "spatial_family": "small",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "3f687506c44960a2f4c898fa212d01c4",
+    "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor",
+    "applicability": {
+      "networks": [
+        "resnet8"
+      ],
+      "signature_hashes": [
+        "3f687506c44960a2f4c898fa212d01c4"
+      ],
+      "exact_reference_keys": [
+        "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor"
+      ],
+      "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor",
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        4,
+        4
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "bus_width_bits": 256,
+      "channel_tile": null,
+      "input_channels": 16,
+      "output_channels": 32,
+      "quantization_family": "int8_symmetric_per_tensor",
+      "spatial_family": "small"
+    },
+    "contraindications": []
+  },
+  "layer_ir": {
+    "module_id": "node_conv2d_4",
+    "op_type": "conv2d",
+    "input_shape": [
+      1,
+      16,
+      32,
+      32
+    ],
+    "output_shape": [
+      1,
+      32,
+      16,
+      16
+    ],
+    "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights.hex",
+    "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_bias.hex",
+    "weight_shape": [
+      32,
+      16,
+      4,
+      4
+    ],
+    "num_weights": 8192,
+    "scale_factor": 1.0396052608198756,
+    "zero_point": 0,
+    "quantization_family": "int8_symmetric_per_tensor",
+    "pipeline_latency_cycles": 8310,
+    "clock_period_ns": 20,
+    "input_width_bits": 128,
+    "output_width_bits": 256,
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+    "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_4.goldin",
+    "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_4.goldout",
+    "stride": [
+      2,
+      2
+    ],
+    "padding": [
+      1,
+      1
+    ],
+    "dilation": [
+      1,
+      1
+    ],
+    "groups": 1,
+    "mac_parallelism": 4,
+    "weight_bank_paths": [
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank0.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank1.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank2.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank3.hex"
+    ],
+    "contract_id": "flat-bus",
+    "io_mode": "packed_full",
+    "base_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        4,
+        4
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 16,
+      "output_channels": 32,
+      "input_width_bits": 128,
+      "output_width_bits": 256,
+      "bus_width_bits": 256,
+      "channel_tile": null,
+      "spatial_shape": [
+        16,
+        16
+      ],
+      "spatial_family": "small",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        4,
+        4
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 16,
+      "output_channels": 32,
+      "input_width_bits": 128,
+      "output_width_bits": 256,
+      "bus_width_bits": 256,
+      "channel_tile": null,
+      "spatial_shape": [
+        16,
+        16
+      ],
+      "spatial_family": "small",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "3f687506c44960a2f4c898fa212d01c4",
+    "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor",
+    "weight_bits": 8,
+    "activation_bits": 8,
+    "scale_factor_per_oc": [
+      0.0025628379441290103,
+      0.00344974562126737,
+      0.002281176841092947,
+      0.0019746969401308917,
+      0.0021600569439203616,
+      0.0027813731057293794,
+      0.002335873807055127,
+      0.0017959732749841966,
+      0.002823107462969361,
+      0.0020142373383871003,
+      0.0021849967678273644,
+      0.0035455260667436534,
+      0.0017375553652358234,
+      0.0017107508940393792,
+      0.0021247130005297397,
+      0.0020769329114343187,
+      0.002158790770107021,
+      0.0016813334719129006,
+      0.0023108976753538207,
+      0.001361310037519793,
+      0.001990341605618282,
+      0.001723684093448192,
+      0.0017854814116643443,
+      0.0022936948003609097,
+      0.0027488667374895486,
+      0.002768269380713322,
+      0.0021676334123836324,
+      0.0029934188542279213,
+      0.0026279291054443665,
+      0.0022288974901274487,
+      0.0017893556953684786,
+      0.0027428456949342354
+    ],
+    "weight_scale_per_oc": [
+      0.0024652029387652874,
+      0.003318322589620948,
+      0.002194272121414542,
+      0.0018994680140167475,
+      0.0020777664612978697,
+      0.0026754126884043217,
+      0.0022468853276222944,
+      0.0017275530844926834,
+      0.0027155571151524782,
+      0.0019375020638108253,
+      0.002101756166666746,
+      0.0034104541409760714,
+      0.001671360689215362,
+      0.001645577372983098,
+      0.002043768996372819,
+      0.0019978091586381197,
+      0.0020765485242009163,
+      0.0016172806499525905,
+      0.00222286069765687,
+      0.0013094489695504308,
+      0.0019145166734233499,
+      0.0016580178635194898,
+      0.0017174609238281846,
+      0.0022063131909817457,
+      0.0026441446971148252,
+      0.002662808168679476,
+      0.0020850542932748795,
+      0.0028793802484869957,
+      0.002527814358472824,
+      0.002143984427675605,
+      0.0017211876111105084,
+      0.0026383530348539352
+    ]
+  },
+  "module": {
+    "module_id": "node_conv2d_4",
+    "spec_hash": "conv2d_16x32x4x4_s32x32_st2x2_p1x1_d1x1_g1_mp4_i128_o256",
+    "generated_by": "Surgeon",
+    "attempt": 3,
+    "rtl_path": "output/resnet8/failure_corpus/visible/node_conv2d_4/node_conv2d_4__003__retrospector_surgeon_assayer__20260613T112815Z/node_conv2d_4.v"
+  },
+  "verif_result": {
+    "module_id": "node_conv2d_4",
+    "status": "fail",
+    "timing_pass": false,
+    "timing_actual_cycles": 0,
+    "timing_expected_cycles": 8310,
+    "failure_class": "structural_preflight_failed",
+    "fix_hint": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): readmemh_missing, readmemh_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [readmemh_missing] Weights must be loaded via $readmemh(\"<weights_path>\", weights) or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial block, OR the top-level must instantiate conv_datapath with WEIGHTS_PATH/BIAS_PATH parameters. None was found.\n- [readmemh_missing] Biases must be loaded via $readmemh(\"<bias_path>\", biases) or via conv_datapath's BIAS_PATH parameter. Neither was found.",
+    "iverilog_stderr": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): readmemh_missing, readmemh_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [readmemh_missing] Weights must be loaded via $readmemh(\"<weights_path>\", weights) or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial block, OR the top-level must instantiate conv_datapath with WEIGHTS_PATH/BIAS_PATH parameters. None was found.\n- [readmemh_missing] Biases must be loaded via $readmemh(\"<bias_path>\", biases) or via conv_datapath's BIAS_PATH parameter. Neither was found.",
+    "failure_category": "code_bug",
+    "classifier_reason": "Structural preflight caught missing $readmemh initializers for weights and biases. The contract, bus widths, and resources are all within limits. This is a straightforward omission in the generated RTL — adding the required initial blocks with $readmemh calls will satisfy the preflight rule and unblock iverilog/Verilator. No architectural change needed."
+  },
+  "logs": {
+    "iverilog_stderr": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): readmemh_missing, readmemh_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [readmemh_missing] Weights must be loaded via $readmemh(\"<weights_path>\", weights) or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial block, OR the top-level must instantiate conv_datapath with WEIGHTS_PATH/BIAS_PATH parameters. None was found.\n- [readmemh_missing] Biases must be loaded via $readmemh(\"<bias_path>\", biases) or via conv_datapath's BIAS_PATH parameter. Neither was found.",
+    "verilator_stderr": "",
+    "fix_hint": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): readmemh_missing, readmemh_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [readmemh_missing] Weights must be loaded via $readmemh(\"<weights_path>\", weights) or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial block, OR the top-level must instantiate conv_datapath with WEIGHTS_PATH/BIAS_PATH parameters. None was found.\n- [readmemh_missing] Biases must be loaded via $readmemh(\"<bias_path>\", biases) or via conv_datapath's BIAS_PATH parameter. Neither was found.",
+    "verif_result_json": {
+      "module_id": "node_conv2d_4",
+      "status": "fail",
+      "timing_pass": false,
+      "timing_actual_cycles": 0,
+      "timing_expected_cycles": 8310,
+      "failure_class": "structural_preflight_failed",
+      "fix_hint": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): readmemh_missing, readmemh_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [readmemh_missing] Weights must be loaded via $readmemh(\"<weights_path>\", weights) or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial block, OR the top-level must instantiate conv_datapath with WEIGHTS_PATH/BIAS_PATH parameters. None was found.\n- [readmemh_missing] Biases must be loaded via $readmemh(\"<bias_path>\", biases) or via conv_datapath's BIAS_PATH parameter. Neither was found.",
+      "iverilog_stderr": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): readmemh_missing, readmemh_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [readmemh_missing] Weights must be loaded via $readmemh(\"<weights_path>\", weights) or $readmemh(\"<bank_path>\", weights_bank<N>) inside an initial block, OR the top-level must instantiate conv_datapath with WEIGHTS_PATH/BIAS_PATH parameters. None was found.\n- [readmemh_missing] Biases must be loaded via $readmemh(\"<bias_path>\", biases) or via conv_datapath's BIAS_PATH parameter. Neither was found.",
+      "failure_category": "code_bug",
+      "classifier_reason": "Structural preflight caught missing $readmemh initializers for weights and biases. The contract, bus widths, and resources are all within limits. This is a straightforward omission in the generated RTL — adding the required initial blocks with $readmemh calls will satisfy the preflight rule and unblock iverilog/Verilator. No architectural change needed."
+    }
+  }
+}

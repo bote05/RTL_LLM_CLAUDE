@@ -1,0 +1,69 @@
+Deployed MobileNetV2 INT8 (BN-FOLD-AWARE) accuracy: n_val=1500 skip(calib)=256 dev=cuda (val DISJOINT from calib)
+
+-- per-conv deployed integer-range + requant round-trip sanity (52 convs, all expect int8 [-128,127]) --
+  [OK ]    node_conv_810  INT8  on-disk[min=-109, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_812  INT8  on-disk[min=-121, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_814  INT8  on-disk[min=-127, max= 109]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_816  INT8  on-disk[min=-127, max=  92]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_818  INT8  on-disk[min=-108, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_820  INT8  on-disk[min=-117, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_822  INT8  on-disk[min= -93, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_824  INT8  on-disk[min=-117, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_826  INT8  on-disk[min=-110, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_828  INT8  on-disk[min=-127, max= 114]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_830  INT8  on-disk[min=-127, max=  87]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_832  INT8  on-disk[min=-100, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_834  INT8  on-disk[min=-102, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_836  INT8  on-disk[min= -43, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_838  INT8  on-disk[min= -65, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_840  INT8  on-disk[min=-109, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_842  INT8  on-disk[min=-127, max= 109]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_844  INT8  on-disk[min=-127, max=  89]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_846  INT8  on-disk[min=-127, max= 100]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_848  INT8  on-disk[min= -95, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_850  INT8  on-disk[min=-122, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_852  INT8  on-disk[min=-114, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_854  INT8  on-disk[min= -97, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_856  INT8  on-disk[min=-127, max= 113]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_858  INT8  on-disk[min=-125, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_860  INT8  on-disk[min=-107, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_862  INT8  on-disk[min=-127, max= 119]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_864  INT8  on-disk[min=-127, max= 113]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_866  INT8  on-disk[min=-127, max=  46]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_868  INT8  on-disk[min=-127, max=  65]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_870  INT8  on-disk[min=-127, max= 123]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_872  INT8  on-disk[min=-127, max=  62]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_874  INT8  on-disk[min=-127, max= 123]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_876  INT8  on-disk[min=-127, max= 109]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_878  INT8  on-disk[min=-127, max=  74]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_880  INT8  on-disk[min=-124, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_882  INT8  on-disk[min= -96, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_884  INT8  on-disk[min=-127, max=  61]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_886  INT8  on-disk[min=-127, max= 117]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_888  INT8  on-disk[min=-127, max= 118]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_890  INT8  on-disk[min= -57, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_892  INT8  on-disk[min=-127, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_894  INT8  on-disk[min=-103, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_896  INT8  on-disk[min=-127, max=  97]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_898  INT8  on-disk[min=-122, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_900  INT8  on-disk[min=-106, max= 127]  expect[-128,127]  requant_match=99.9993%
+  [OK ]    node_conv_902  INT8  on-disk[min=-127, max=  57]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_904  INT8  on-disk[min=-114, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_906  INT8  on-disk[min=-127, max= 111]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_908  INT8  on-disk[min=-111, max= 127]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_910  INT8  on-disk[min=-127, max= 107]  expect[-128,127]  requant_match=100.0000%
+  [OK ]    node_conv_912  INT8  on-disk[min=-127, max=  59]  expect[-128,127]  requant_match=100.0000%
+  [OK ]      node_linear  INT8  on-disk[min= -77, max= 127]  expect[-128,127]  requant_match=99.9998%  <-- classifier (Gemm)
+-- range: ALL OK  (total=52 convs + 1 gemm)
+-- requant round-trip: clamp(round(W_fold / (max_abs/127))) vs deployed int -> median match=100.0000%, min match=99.9993%  (must be ~100% => deployed ints are the folded-weight quantization at the derived scale)
+
+  (A) STOCK torchvision mbv2 V2 (BN intact): 72.67%   <-- baseline (~72.2%)
+  (B) FOLDED-FLOAT (BN=identity)           : 72.73%   (delta vs STOCK = +0.07%)
+  (C) DEPLOYED MobileNetV2 INT8 (w-only)   : 67.07%
+  (C) DEPLOYED MobileNetV2 INT8 + A8 (act) : 67.27%   <-- AUTHORITATIVE deployed top-1
+
+-- TRUST GATES (deployed number is trustworthy only if ALL pass) --
+  [PASS] integer-range in-domain [-128,127]
+  [PASS] requant round-trip min-match >= 99.9%
+  [PASS] FOLDED-FLOAT ~= STOCK (B==A within 1%)
+=> VERDICT: TRUSTWORTHY. Deployed MobileNetV2 INT8 top-1 (A8) = 67.27% on 1500 val imgs (disjoint from 256 calib).

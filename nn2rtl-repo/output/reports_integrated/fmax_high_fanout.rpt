@@ -1,0 +1,62 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date         : Mon Jun  1 12:24:39 2026
+| Host         : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command      : report_high_fanout_nets -max_nets 40 -file C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/fmax_high_fanout.rpt
+| Design       : nn2rtl_top
+| Device       : xcu250
+| Design State : Fully Placed
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+High Fan-out Nets Information
+
+1. Summary
+----------
+
++---------------------------------------------------+--------+-------------+
+| Net Name                                          | Fanout | Driver Type |
++---------------------------------------------------+--------+-------------+
+| rst_n_IBUF_BUFG                                   | 960626 | BUFGCE      |
+| u_node_conv_284/start_pulse_reg_n_0               |  28709 | FDCE        |
+| u_node_conv_292/start_pulse_reg_n_0               |  28705 | FDCE        |
+| u_node_conv_298/start_pulse_reg_n_0               |  28705 | FDCE        |
+| u_node_conv_284/scheduler/start_pulse_reg_BUFG[0] |  28672 | BUFGCE      |
+| u_node_conv_292/scheduler/start_pulse_reg_BUFG[0] |  28672 | BUFGCE      |
+| u_node_conv_298/scheduler/start_pulse_reg_BUFG[0] |  28672 | BUFGCE      |
+| u_node_conv_220/dp/Q[4]                           |  19725 | FDCE        |
+| u_node_conv_220/dp/Q[3]                           |  19558 | FDCE        |
+| u_node_conv_228/dp/Q[4]                           |  19394 | FDCE        |
+| u_node_conv_228/dp/Q[3]                           |  19297 | FDCE        |
+| u_node_conv_234/dp/ADDRARDADDR[3]                 |  16436 | FDCE        |
+| u_node_conv_288/dp/out_pix0                       |  16384 | BUFGCE      |
+| u_node_conv_234/dp/ADDRARDADDR[2]                 |  13925 | FDCE        |
+| u_node_conv_228/dp/Q[2]                           |   9900 | FDCE        |
+| u_node_conv_240/dp/ADDRARDADDR[2]                 |   8817 | FDCE        |
+| u_node_conv_280/dp/state[2]                       |   8799 | FDCE        |
+| u_node_conv_256/dp/state[2]                       |   8789 | FDCE        |
+| u_node_conv_248/dp/state[2]                       |   8761 | FDCE        |
+| u_node_conv_274/dp/state[2]                       |   8697 | FDCE        |
+| u_node_conv_262/dp/state[2]                       |   8687 | FDCE        |
+| u_node_conv_268/dp/state[2]                       |   8665 | FDCE        |
+| u_node_conv_248/dp/state[0]                       |   8613 | FDCE        |
+| u_node_conv_256/dp/state[0]                       |   8613 | FDCE        |
+| u_node_conv_262/dp/state[0]                       |   8613 | FDCE        |
+| u_node_conv_274/dp/state[0]                       |   8608 | FDCE        |
+| u_node_conv_268/dp/state[0]                       |   8602 | FDCE        |
+| u_node_conv_280/dp/state[0]                       |   8602 | FDCE        |
+| u_node_conv_248/dp/state[1]                       |   8591 | FDCE        |
+| u_node_conv_256/dp/state[1]                       |   8591 | FDCE        |
+| u_node_conv_262/dp/state[1]                       |   8591 | FDCE        |
+| u_node_conv_268/dp/state[1]                       |   8591 | FDCE        |
+| u_node_conv_274/dp/state[1]                       |   8591 | FDCE        |
+| u_node_conv_280/dp/state[1]                       |   8591 | FDCE        |
+| u_node_add_14/ch_s1_reg_n_0_[0]                   |   8253 | FDCE        |
+| u_node_add_13/compute_cycle_reg_n_0_[0]           |   8252 | FDCE        |
+| u_node_add_14/ch_s1_reg_n_0_[1]                   |   8252 | FDCE        |
+| u_node_add_13/compute_cycle_reg_n_0_[1]           |   8251 | FDCE        |
+| u_node_add_15/ch_s1_reg_n_0_[0]                   |   8234 | FDCE        |
+| u_node_add_15/ch_s1_reg_n_0_[1]                   |   8234 | FDCE        |
++---------------------------------------------------+--------+-------------+
+
+

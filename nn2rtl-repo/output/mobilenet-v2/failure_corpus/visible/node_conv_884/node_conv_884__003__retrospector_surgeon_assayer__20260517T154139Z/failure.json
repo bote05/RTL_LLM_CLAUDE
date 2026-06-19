@@ -1,0 +1,363 @@
+{
+  "entry": {
+    "id": "node_conv_884__003__retrospector_surgeon_assayer__20260517T154139Z",
+    "created_at": "2026-05-17T15:41:39.339Z",
+    "network_id": "mobilenet-v2",
+    "model_name": "mobilenet-v2",
+    "module_id": "node_conv_884",
+    "stage": "retrospector_surgeon_assayer",
+    "attempt_index": 3,
+    "parent_id": "node_conv_884:attempt_2",
+    "op_type": "conv2d",
+    "contract_id": "depthwise-conv",
+    "spec_hash": "conv2d_576x576x3x3_s14x14_st1x1_p1x1_d1x1_g576_mp4_i4096_o4096_iodepthwise-conv_tile512",
+    "generated_by": "Surgeon",
+    "module_attempt": 3,
+    "rtl_path": "output/mobilenet-v2/failure_corpus/visible/node_conv_884/node_conv_884__003__retrospector_surgeon_assayer__20260517T154139Z/node_conv_884.v",
+    "failure_path": "output/mobilenet-v2/failure_corpus/visible/node_conv_884/node_conv_884__003__retrospector_surgeon_assayer__20260517T154139Z/failure.json",
+    "score": {
+      "syntax_ok": true,
+      "sim_completed": false,
+      "timing_delta_cycles": -6066,
+      "timing_abs_delta_cycles": 6066,
+      "outputs_received": null,
+      "outputs_expected": null,
+      "output_completion_ratio": null,
+      "first_mismatch_index": null,
+      "max_error": null,
+      "mean_error": null,
+      "exact_match_count": null,
+      "mismatch_count": null,
+      "signed_error_sum": null,
+      "positive_error_count": null,
+      "negative_error_count": null,
+      "axi_out_of_range_reads": null
+    },
+    "summary": {
+      "status": "fail",
+      "status_class": null,
+      "failure_class": "agent_max_turns_exhausted",
+      "failure_category": "code_bug",
+      "timing_pass": false,
+      "timing_actual_cycles": 0,
+      "timing_expected_cycles": 6066,
+      "timing_delta_cycles": -6066,
+      "outputs_received": null,
+      "outputs_expected": null,
+      "output_completion_ratio": null,
+      "first_mismatch": {
+        "flat_index": null,
+        "vector_index": null,
+        "output_index": null,
+        "channel_index": null,
+        "expected": null,
+        "got": null
+      },
+      "error_stats": {
+        "max_error": null,
+        "mean_error": null,
+        "exact_match_count": null,
+        "mismatch_count": null,
+        "signed_error_sum": null,
+        "positive_error_count": null,
+        "negative_error_count": null
+      },
+      "gap": {
+        "missing_index_start": null,
+        "missing_index_end": null,
+        "output_gap_histogram": null,
+        "last_valid_out_cycle": null,
+        "simulation_end_cycle": null
+      },
+      "axi_weight_trace": {
+        "model_enabled": null,
+        "model_status": null,
+        "ar_handshakes": null,
+        "r_beats": null,
+        "completed_bursts": null,
+        "out_of_range_reads": null
+      },
+      "per_vector": null
+    },
+    "shape": {
+      "input_shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "output_shape": [
+        1,
+        576,
+        14,
+        14
+      ],
+      "weight_shape": [
+        576,
+        1,
+        3,
+        3
+      ],
+      "input_width_bits": 4096,
+      "output_width_bits": 4096,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 576,
+      "mac_parallelism": 4,
+      "io_mode": null,
+      "channel_tile": 512
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "depthwise-conv",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 576,
+      "input_channels": 576,
+      "output_channels": 576,
+      "input_width_bits": 4096,
+      "output_width_bits": 4096,
+      "bus_width_bits": 4096,
+      "channel_tile": 512,
+      "spatial_shape": [
+        14,
+        14
+      ],
+      "spatial_family": "tiny",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "d2dda677b90313d1cc5c834791914e3e",
+    "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g576|bus4096|tile512|c576-576|int8_symmetric_per_tensor",
+    "applicability": {
+      "networks": [
+        "mobilenet-v2"
+      ],
+      "signature_hashes": [
+        "d2dda677b90313d1cc5c834791914e3e"
+      ],
+      "exact_reference_keys": [
+        "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g576|bus4096|tile512|c576-576|int8_symmetric_per_tensor"
+      ],
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g576|bus4096|tile512|c576-576|int8_symmetric_per_tensor",
+      "op_type": "conv2d",
+      "contract_id": "depthwise-conv",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 576,
+      "bus_width_bits": 4096,
+      "channel_tile": 512,
+      "input_channels": 576,
+      "output_channels": 576,
+      "quantization_family": "int8_symmetric_per_tensor",
+      "spatial_family": "tiny"
+    },
+    "contraindications": []
+  },
+  "layer_ir": {
+    "module_id": "node_conv_884",
+    "op_type": "conv2d",
+    "input_shape": [
+      1,
+      576,
+      14,
+      14
+    ],
+    "output_shape": [
+      1,
+      576,
+      14,
+      14
+    ],
+    "weights_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_884_weights.hex",
+    "bias_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_884_bias.hex",
+    "weight_shape": [
+      576,
+      1,
+      3,
+      3
+    ],
+    "num_weights": 5184,
+    "scale_factor": 0.018744485590673952,
+    "zero_point": 0,
+    "quantization_family": "int8_symmetric_per_tensor",
+    "pipeline_latency_cycles": 6066,
+    "clock_period_ns": 20,
+    "input_width_bits": 4096,
+    "output_width_bits": 4096,
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+    "golden_inputs_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/goldens/node_conv_884.goldin",
+    "golden_outputs_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/goldens/node_conv_884.goldout",
+    "stride": [
+      1,
+      1
+    ],
+    "padding": [
+      1,
+      1
+    ],
+    "dilation": [
+      1,
+      1
+    ],
+    "groups": 576,
+    "mac_parallelism": 4,
+    "weight_bank_paths": [
+      "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_884_weights_bank0.hex",
+      "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_884_weights_bank1.hex",
+      "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_884_weights_bank2.hex",
+      "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/mobilenet-v2/weights/node_conv_884_weights_bank3.hex"
+    ],
+    "contract_id": "depthwise-conv",
+    "base_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "depthwise-conv",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 576,
+      "input_channels": 576,
+      "output_channels": 576,
+      "input_width_bits": 4608,
+      "output_width_bits": 4608,
+      "bus_width_bits": 4608,
+      "channel_tile": null,
+      "spatial_shape": [
+        14,
+        14
+      ],
+      "spatial_family": "tiny",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "depthwise-conv",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 576,
+      "input_channels": 576,
+      "output_channels": 576,
+      "input_width_bits": 4096,
+      "output_width_bits": 4096,
+      "bus_width_bits": 4096,
+      "channel_tile": 512,
+      "spatial_shape": [
+        14,
+        14
+      ],
+      "spatial_family": "tiny",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "d2dda677b90313d1cc5c834791914e3e",
+    "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g576|bus4096|tile512|c576-576|int8_symmetric_per_tensor",
+    "channel_tile": 512,
+    "contract_params": {}
+  },
+  "module": {
+    "module_id": "node_conv_884",
+    "spec_hash": "conv2d_576x576x3x3_s14x14_st1x1_p1x1_d1x1_g576_mp4_i4096_o4096_iodepthwise-conv_tile512",
+    "generated_by": "Surgeon",
+    "attempt": 3,
+    "rtl_path": "output/mobilenet-v2/failure_corpus/visible/node_conv_884/node_conv_884__003__retrospector_surgeon_assayer__20260517T154139Z/node_conv_884.v"
+  },
+  "verif_result": {
+    "module_id": "node_conv_884",
+    "status": "fail",
+    "timing_pass": false,
+    "timing_actual_cycles": 0,
+    "timing_expected_cycles": 6066,
+    "failure_class": "agent_max_turns_exhausted",
+    "failure_category": "code_bug",
+    "fix_hint": "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.\nDetected 50 lines and a truncation marker.\nTreat as agent_max_turns_exhausted and force a fresh attempt or template clone.\nDo NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure.",
+    "iverilog_stderr": "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.\nDetected 50 lines and a truncation marker.\nTreat as agent_max_turns_exhausted and force a fresh attempt or template clone.\nDo NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure."
+  },
+  "logs": {
+    "iverilog_stderr": "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.\nDetected 50 lines and a truncation marker.\nTreat as agent_max_turns_exhausted and force a fresh attempt or template clone.\nDo NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure.",
+    "verilator_stderr": "",
+    "fix_hint": "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.\nDetected 50 lines and a truncation marker.\nTreat as agent_max_turns_exhausted and force a fresh attempt or template clone.\nDo NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure.",
+    "verif_result_json": {
+      "module_id": "node_conv_884",
+      "status": "fail",
+      "timing_pass": false,
+      "timing_actual_cycles": 0,
+      "timing_expected_cycles": 6066,
+      "failure_class": "agent_max_turns_exhausted",
+      "failure_category": "code_bug",
+      "fix_hint": "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.\nDetected 50 lines and a truncation marker.\nTreat as agent_max_turns_exhausted and force a fresh attempt or template clone.\nDo NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure.",
+      "iverilog_stderr": "Foundry/Surgeon output is a truncated stub or placeholder, not real Verilog.\nDetected 50 lines and a truncation marker.\nTreat as agent_max_turns_exhausted and force a fresh attempt or template clone.\nDo NOT proceed to iverilog/Verilator — they will produce noise that hides the agent failure."
+    }
+  }
+}

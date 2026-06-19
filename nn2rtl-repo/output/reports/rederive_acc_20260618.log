@@ -1,0 +1,24 @@
+##### REDERIVE START Thu Jun 18 10:50:00 WEDT 2026 #####
+===== (1) DEPLOYED Config B: float(stock) + folded-float + deployed w-only + deployed+A8 =====
+Deployed Config B (BN-FOLD-AWARE) accuracy: n_val=1500 skip(calib)=256 dev=cuda (val DISJOINT from calib)
+Traceback (most recent call last):
+  File "D:\RTL_LLM_CLAUDE\nn2rtl-repo\scripts\measure_deployed_configb_acc.py", line 372, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "D:\RTL_LLM_CLAUDE\nn2rtl-repo\scripts\measure_deployed_configb_acc.py", line 294, in main
+    deployed, sanity_rows = build_deployed(base, refs)
+                            ~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "D:\RTL_LLM_CLAUDE\nn2rtl-repo\scripts\measure_deployed_configb_acc.py", line 234, in build_deployed
+    int_w = _load_int_weights(Path(layer["weights_path"]), shape)
+  File "D:\RTL_LLM_CLAUDE\nn2rtl-repo\scripts\measure_deployed_configb_acc.py", line 94, in _load_int_weights
+    with open(hex_path, "r") as f:
+         ~~~~^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\weights\\node_conv_196_weights.hex'
+===== (2) GPTQ: float + all-INT4 per-channel+A8 =====
+GPTQ INT4 feasibility: n_calib=256 n_val=1500 dev=cuda
+  float                         : 80.07%
+  INT4 GPTQ per-CHANNEL (w-only): 79.07%
+  INT4 GPTQ per-CHANNEL + A8    : 79.47%   <-- per-channel requant rework
+
+=> if per-TENSOR GPTQ is usable (~74%+), keep per-tensor requant (Scheme A).
+##### ALL_REDERIVE_DONE Thu Jun 18 10:50:42 WEDT 2026 #####

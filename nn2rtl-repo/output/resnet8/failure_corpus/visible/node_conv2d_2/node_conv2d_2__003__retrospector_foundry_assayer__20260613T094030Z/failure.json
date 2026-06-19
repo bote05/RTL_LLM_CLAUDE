@@ -1,0 +1,402 @@
+{
+  "entry": {
+    "id": "node_conv2d_2__003__retrospector_foundry_assayer__20260613T094030Z",
+    "created_at": "2026-06-13T09:40:30.043Z",
+    "network_id": "resnet8",
+    "model_name": "resnet8",
+    "module_id": "node_conv2d_2",
+    "stage": "retrospector_foundry_assayer",
+    "attempt_index": 3,
+    "parent_id": "node_conv2d_2:attempt_2",
+    "op_type": "conv2d",
+    "contract_id": "flat-bus",
+    "spec_hash": "conv2d_16x16x3x3_s32x32_st1x1_p1x1_d1x1_g1_mp4_i128_o128",
+    "generated_by": "Foundry",
+    "module_attempt": 2,
+    "rtl_path": "output/resnet8/failure_corpus/visible/node_conv2d_2/node_conv2d_2__003__retrospector_foundry_assayer__20260613T094030Z/node_conv2d_2.v",
+    "failure_path": "output/resnet8/failure_corpus/visible/node_conv2d_2/node_conv2d_2__003__retrospector_foundry_assayer__20260613T094030Z/failure.json",
+    "score": {
+      "syntax_ok": true,
+      "sim_completed": false,
+      "timing_delta_cycles": -124,
+      "timing_abs_delta_cycles": 124,
+      "outputs_received": null,
+      "outputs_expected": null,
+      "output_completion_ratio": null,
+      "first_mismatch_index": null,
+      "max_error": null,
+      "mean_error": null,
+      "exact_match_count": null,
+      "mismatch_count": null,
+      "signed_error_sum": null,
+      "positive_error_count": null,
+      "negative_error_count": null,
+      "axi_out_of_range_reads": null
+    },
+    "summary": {
+      "status": "fail",
+      "status_class": null,
+      "failure_class": "structural_preflight_failed",
+      "failure_category": "code_bug",
+      "timing_pass": false,
+      "timing_actual_cycles": 0,
+      "timing_expected_cycles": 124,
+      "timing_delta_cycles": -124,
+      "outputs_received": null,
+      "outputs_expected": null,
+      "output_completion_ratio": null,
+      "first_mismatch": {
+        "flat_index": null,
+        "vector_index": null,
+        "output_index": null,
+        "channel_index": null,
+        "expected": null,
+        "got": null
+      },
+      "error_stats": {
+        "max_error": null,
+        "mean_error": null,
+        "exact_match_count": null,
+        "mismatch_count": null,
+        "signed_error_sum": null,
+        "positive_error_count": null,
+        "negative_error_count": null
+      },
+      "gap": {
+        "missing_index_start": null,
+        "missing_index_end": null,
+        "output_gap_histogram": null,
+        "last_valid_out_cycle": null,
+        "simulation_end_cycle": null
+      },
+      "axi_weight_trace": {
+        "model_enabled": null,
+        "model_status": null,
+        "ar_handshakes": null,
+        "r_beats": null,
+        "completed_bursts": null,
+        "out_of_range_reads": null
+      },
+      "per_vector": null
+    },
+    "shape": {
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weight_shape": [
+        16,
+        16,
+        3,
+        3
+      ],
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "io_mode": "packed_full",
+      "channel_tile": null
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 16,
+      "output_channels": 16,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "bus_width_bits": 128,
+      "channel_tile": null,
+      "spatial_shape": [
+        32,
+        32
+      ],
+      "spatial_family": "medium",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "7218e7b4eefeaa274f4e12fcbfc5e599",
+    "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor",
+    "applicability": {
+      "networks": [
+        "resnet8"
+      ],
+      "signature_hashes": [
+        "7218e7b4eefeaa274f4e12fcbfc5e599"
+      ],
+      "exact_reference_keys": [
+        "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+      ],
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor",
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "bus_width_bits": 128,
+      "channel_tile": null,
+      "input_channels": 16,
+      "output_channels": 16,
+      "quantization_family": "int8_symmetric_per_tensor",
+      "spatial_family": "medium"
+    },
+    "contraindications": []
+  },
+  "layer_ir": {
+    "module_id": "node_conv2d_2",
+    "op_type": "conv2d",
+    "input_shape": [
+      1,
+      16,
+      32,
+      32
+    ],
+    "output_shape": [
+      1,
+      16,
+      32,
+      32
+    ],
+    "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights.hex",
+    "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_bias.hex",
+    "weight_shape": [
+      16,
+      16,
+      3,
+      3
+    ],
+    "num_weights": 2304,
+    "scale_factor": 1.093115374452829,
+    "zero_point": 0,
+    "quantization_family": "int8_symmetric_per_tensor",
+    "pipeline_latency_cycles": 124,
+    "clock_period_ns": 20,
+    "input_width_bits": 128,
+    "output_width_bits": 128,
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+    "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_2.goldin",
+    "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_2.goldout",
+    "stride": [
+      1,
+      1
+    ],
+    "padding": [
+      1,
+      1
+    ],
+    "dilation": [
+      1,
+      1
+    ],
+    "groups": 1,
+    "mac_parallelism": 4,
+    "weight_bank_paths": [
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank0.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank1.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank2.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank3.hex"
+    ],
+    "contract_id": "flat-bus",
+    "io_mode": "packed_full",
+    "base_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 16,
+      "output_channels": 16,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "bus_width_bits": 128,
+      "channel_tile": null,
+      "spatial_shape": [
+        32,
+        32
+      ],
+      "spatial_family": "medium",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 16,
+      "output_channels": 16,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "bus_width_bits": 128,
+      "channel_tile": null,
+      "spatial_shape": [
+        32,
+        32
+      ],
+      "spatial_family": "medium",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "7218e7b4eefeaa274f4e12fcbfc5e599",
+    "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor",
+    "weight_bits": 8,
+    "activation_bits": 8,
+    "scale_factor_per_oc": [
+      0.0015444432952978501,
+      0.0023954257143117934,
+      0.0034328209735698017,
+      0.004453441428885231,
+      0.0025421165518108107,
+      0.001974677567257771,
+      0.0025296414525838432,
+      0.002311816894806885,
+      0.001401462588347656,
+      0.00251398522341486,
+      0.0023637920633994744,
+      0.004266210591070669,
+      0.0014802469019576244,
+      0.003967055339567743,
+      0.0032815967904809614,
+      0.0021486826263698894
+    ],
+    "weight_scale_per_oc": [
+      0.001412882236763835,
+      0.002191375009715557,
+      0.003140401327982545,
+      0.004074081778526306,
+      0.002325570210814476,
+      0.0018064676551148295,
+      0.002314157783985138,
+      0.0021148882806301117,
+      0.0012820811243727803,
+      0.00229983520694077,
+      0.0021624360233545303,
+      0.003902799915522337,
+      0.001354154315777123,
+      0.003629127750173211,
+      0.0030020589474588633,
+      0.0019656503573060036
+    ]
+  },
+  "module": {
+    "module_id": "node_conv2d_2",
+    "spec_hash": "conv2d_16x16x3x3_s32x32_st1x1_p1x1_d1x1_g1_mp4_i128_o128",
+    "generated_by": "Foundry",
+    "attempt": 2,
+    "rtl_path": "output/resnet8/failure_corpus/visible/node_conv2d_2/node_conv2d_2__003__retrospector_foundry_assayer__20260613T094030Z/node_conv2d_2.v"
+  },
+  "verif_result": {
+    "module_id": "node_conv2d_2",
+    "status": "fail",
+    "timing_pass": false,
+    "timing_actual_cycles": 0,
+    "timing_expected_cycles": 124,
+    "failure_class": "structural_preflight_failed",
+    "fix_hint": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): window_not_registered, output_counter_missing, coord_scheduler_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [window_not_registered] Spatial conv must either instantiate line_buf_window or declare a shift-register window as 'reg [...] window [...]'. No such reg was found — a wire/assign 'window' is rebuilt combinationally every cycle, which blows up synth cones and loses the sliding-window invariant.\n- [output_counter_missing] Spatial conv / maxpool must bound its output count with either an `outputs_emitted` reg (or `out_row` / `out_col`) or a coord_scheduler instantiation. Without a bounded counter the FSM has no frame-level stop condition and Verilator can hang on partial valid_out firings.\n- [coord_scheduler_missing] Spatial conv / maxpool modules must instantiate coord_scheduler from rtl_library/coord_scheduler.v. No coord_scheduler reference was found in the RTL. Rolling your own coordinate/wrap/stride/termination logic is the historically most bug-prone piece of the pipeline — do not reinvent it.",
+    "iverilog_stderr": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): window_not_registered, output_counter_missing, coord_scheduler_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [window_not_registered] Spatial conv must either instantiate line_buf_window or declare a shift-register window as 'reg [...] window [...]'. No such reg was found — a wire/assign 'window' is rebuilt combinationally every cycle, which blows up synth cones and loses the sliding-window invariant.\n- [output_counter_missing] Spatial conv / maxpool must bound its output count with either an `outputs_emitted` reg (or `out_row` / `out_col`) or a coord_scheduler instantiation. Without a bounded counter the FSM has no frame-level stop condition and Verilator can hang on partial valid_out firings.\n- [coord_scheduler_missing] Spatial conv / maxpool modules must instantiate coord_scheduler from rtl_library/coord_scheduler.v. No coord_scheduler reference was found in the RTL. Rolling your own coordinate/wrap/stride/termination logic is the historically most bug-prone piece of the pipeline — do not reinvent it.",
+    "failure_category": "code_bug",
+    "classifier_reason": "Structural preflight rejected the RTL for three missing constructs: no registered window (wire/assign instead of reg), no output counter, and no coord_scheduler instantiation. These are all local RTL authoring omissions — the contract (16ch, 128-bit bus, flat-bus, ZCU102) is well within resource limits. A targeted repair adding line_buf_window/reg window, an outputs_emitted counter, and a coord_scheduler instantiation will satisfy the preflight rules without any architectural change."
+  },
+  "logs": {
+    "iverilog_stderr": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): window_not_registered, output_counter_missing, coord_scheduler_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [window_not_registered] Spatial conv must either instantiate line_buf_window or declare a shift-register window as 'reg [...] window [...]'. No such reg was found — a wire/assign 'window' is rebuilt combinationally every cycle, which blows up synth cones and loses the sliding-window invariant.\n- [output_counter_missing] Spatial conv / maxpool must bound its output count with either an `outputs_emitted` reg (or `out_row` / `out_col`) or a coord_scheduler instantiation. Without a bounded counter the FSM has no frame-level stop condition and Verilator can hang on partial valid_out firings.\n- [coord_scheduler_missing] Spatial conv / maxpool modules must instantiate coord_scheduler from rtl_library/coord_scheduler.v. No coord_scheduler reference was found in the RTL. Rolling your own coordinate/wrap/stride/termination logic is the historically most bug-prone piece of the pipeline — do not reinvent it.",
+    "verilator_stderr": "",
+    "fix_hint": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): window_not_registered, output_counter_missing, coord_scheduler_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [window_not_registered] Spatial conv must either instantiate line_buf_window or declare a shift-register window as 'reg [...] window [...]'. No such reg was found — a wire/assign 'window' is rebuilt combinationally every cycle, which blows up synth cones and loses the sliding-window invariant.\n- [output_counter_missing] Spatial conv / maxpool must bound its output count with either an `outputs_emitted` reg (or `out_row` / `out_col`) or a coord_scheduler instantiation. Without a bounded counter the FSM has no frame-level stop condition and Verilator can hang on partial valid_out firings.\n- [coord_scheduler_missing] Spatial conv / maxpool modules must instantiate coord_scheduler from rtl_library/coord_scheduler.v. No coord_scheduler reference was found in the RTL. Rolling your own coordinate/wrap/stride/termination logic is the historically most bug-prone piece of the pipeline — do not reinvent it.",
+    "verif_result_json": {
+      "module_id": "node_conv2d_2",
+      "status": "fail",
+      "timing_pass": false,
+      "timing_actual_cycles": 0,
+      "timing_expected_cycles": 124,
+      "failure_class": "structural_preflight_failed",
+      "fix_hint": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): window_not_registered, output_counter_missing, coord_scheduler_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [window_not_registered] Spatial conv must either instantiate line_buf_window or declare a shift-register window as 'reg [...] window [...]'. No such reg was found — a wire/assign 'window' is rebuilt combinationally every cycle, which blows up synth cones and loses the sliding-window invariant.\n- [output_counter_missing] Spatial conv / maxpool must bound its output count with either an `outputs_emitted` reg (or `out_row` / `out_col`) or a coord_scheduler instantiation. Without a bounded counter the FSM has no frame-level stop condition and Verilator can hang on partial valid_out firings.\n- [coord_scheduler_missing] Spatial conv / maxpool modules must instantiate coord_scheduler from rtl_library/coord_scheduler.v. No coord_scheduler reference was found in the RTL. Rolling your own coordinate/wrap/stride/termination logic is the historically most bug-prone piece of the pipeline — do not reinvent it.",
+      "iverilog_stderr": "Deterministic structural preflight rejected the RTL before iverilog/Verilator.\nViolated rule(s): window_not_registered, output_counter_missing, coord_scheduler_missing.\nRepair the indicted construct exactly; do not touch unrelated logic.\nViolations:\n- [window_not_registered] Spatial conv must either instantiate line_buf_window or declare a shift-register window as 'reg [...] window [...]'. No such reg was found — a wire/assign 'window' is rebuilt combinationally every cycle, which blows up synth cones and loses the sliding-window invariant.\n- [output_counter_missing] Spatial conv / maxpool must bound its output count with either an `outputs_emitted` reg (or `out_row` / `out_col`) or a coord_scheduler instantiation. Without a bounded counter the FSM has no frame-level stop condition and Verilator can hang on partial valid_out firings.\n- [coord_scheduler_missing] Spatial conv / maxpool modules must instantiate coord_scheduler from rtl_library/coord_scheduler.v. No coord_scheduler reference was found in the RTL. Rolling your own coordinate/wrap/stride/termination logic is the historically most bug-prone piece of the pipeline — do not reinvent it.",
+      "failure_category": "code_bug",
+      "classifier_reason": "Structural preflight rejected the RTL for three missing constructs: no registered window (wire/assign instead of reg), no output counter, and no coord_scheduler instantiation. These are all local RTL authoring omissions — the contract (16ch, 128-bit bus, flat-bus, ZCU102) is well within resource limits. A targeted repair adding line_buf_window/reg window, an outputs_emitted counter, and a coord_scheduler instantiation will satisfy the preflight rules without any architectural change."
+    }
+  }
+}

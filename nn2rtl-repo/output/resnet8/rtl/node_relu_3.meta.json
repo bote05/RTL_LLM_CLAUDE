@@ -1,0 +1,7 @@
+{
+  "module_id": "node_relu_3",
+  "spec_hash": "relu_32x32_s16x16_i256_o256",
+  "verilog_source": "// node_relu_3 - INT8 elementwise ReLU, flat-bus, 32 channels, 256-bit packed.\n// pipeline_latency_cycles = 1.\n\nmodule node_relu_3 (\n    input  wire                clk,\n    input  wire                rst_n,\n    input  wire                valid_in,\n    output reg                 ready_in,\n    input  wire [255:0]        data_in,\n    output reg                 valid_out,\n    output reg  [255:0]        data_out\n);\n\n    localparam integer OC = 32;\n\n    integer i;\n\n    always @(posedge clk or negedge rst_n) begin\n        if (!rst_n) begin\n            valid_out <= 1'b0;        // [INVARIANT:VALID_OUT_LATENCY]\n            ready_in  <= 1'b1;        // [INVARIANT:READY_IN_GATING]\n            data_out  <= 256'b0;\n        end else begin\n            ready_in  <= 1'b1;        // [INVARIANT:READY_IN_GATING]\n            valid_out <= valid_in;    // [INVARIANT:VALID_OUT_LATENCY]\n            if (valid_in) begin\n                for (i = 0; i < OC; i = i + 1) begin\n                    data_out[i*8 +: 8] <= ($signed(data_in[i*8 +: 8]) > 0)\n                                            ? data_in[i*8 +: 8]\n                                            : 8'sd0;\n                end\n            end\n        end\n    end\n\nendmodule\n",
+  "generated_by": "Foundry",
+  "attempt": 1
+}

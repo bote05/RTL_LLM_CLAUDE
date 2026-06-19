@@ -1,0 +1,24 @@
+{
+  "network_id": "resnet-50",
+  "output_root": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output",
+  "layers_total": 119,
+  "layers_measured": 117,
+  "layers_skipped": 2,
+  "skipped": [
+    {
+      "mid": "node_relu_24",
+      "why": "no results.json"
+    },
+    {
+      "mid": "node_conv_252",
+      "why": "no results.json"
+    }
+  ],
+  "network_bottleneck_module": "node_conv_196",
+  "network_bottleneck_op": "conv2d",
+  "network_bottleneck_fps": 1.5702365453163334,
+  "network_steady_state_fps": 1.5702365453163334,
+  "pipeline_fill_seconds_sum": 0.082735984473,
+  "one_frame_seconds": 0.6368467241338751,
+  "end_to_end_latency_seconds_one_image": 0.7195827086068751
+}

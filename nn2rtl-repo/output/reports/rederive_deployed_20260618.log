@@ -1,0 +1,70 @@
+Deployed Config B (BN-FOLD-AWARE) accuracy: n_val=1500 skip(calib)=256 dev=cuda (val DISJOINT from calib)
+
+-- per-conv deployed integer-range + scale-match sanity (35 INT4 expect [-8,7]; 18 INT3 expect [-4,3]) --
+  [OK ]    node_conv_196  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_198  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_200  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_202  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_204  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_206  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_208  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_210  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_212  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_214  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_216  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_218  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_220  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_222  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_224  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_226  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_228  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_230  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_232  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_234  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_236  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_238  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_240  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_242  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_244  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_246  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_248  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_250  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_252  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_254  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_256  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_258  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_260  INT3  on-disk[min=  -3, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_262  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_264  INT3  on-disk[min=  -3, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_266  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_268  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_270  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_272  INT3  on-disk[min=  -3, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_274  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_276  INT4  on-disk[min=  -7, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_278  INT3  on-disk[min=  -3, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_280  INT4  on-disk[min=  -8, max=   7]  expect[-8,7]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_282  INT3  on-disk[min=  -3, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_284  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_286  INT3  on-disk[min=  -3, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_288  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_290  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_292  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_294  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_296  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_298  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+  [OK ]    node_conv_300  INT3  on-disk[min=  -4, max=   3]  expect[-4,3]  s_ir/s_fold(med)=1.000000
+-- range: ALL OK  (INT3=18, INT4=35, total=53; INT3-set matches the 18 known IDs)
+-- scale-match: median |weight_scale_per_oc / (max_abs(W_fold)/qmax)| = 1.000000  (must be ~1.0 => layer_ir scale == folded-weight scale)
+
+  (A) STOCK torchvision (BN intact)        : 80.07%   <-- baseline
+  (B) FOLDED-FLOAT (BN=identity)           : 80.07%   (delta vs STOCK = +0.00%)
+  (C) DEPLOYED Config B (w-only)           : 77.33%
+  (C) DEPLOYED Config B + A8 (int8 act)    : 77.07%   <-- AUTHORITATIVE deployed top-1 (expect ~77.6%)
+
+-- TRUST GATES (deployed number is trustworthy only if ALL pass) --
+  [PASS] integer-range in-domain
+  [PASS] INT3-set == 18 known IDs
+  [PASS] scale-match median ~= 1.0
+  [PASS] FOLDED-FLOAT ~= STOCK (B==A)
+=> VERDICT: TRUSTWORTHY. Deployed Config B top-1 (A8) = 77.07% on 1500 val imgs (disjoint from 256 calib).

@@ -1,0 +1,18 @@
+{
+  "success": true,
+  "tool": "vivado",
+  "part": "xczu9eg-ffvb1156-2-e",
+  "stage": "synth",
+  "lut_count": 999999,
+  "ff_count": 100000,
+  "dsp_count": 1,
+  "bram18_count": 0,
+  "bram36_count": 0,
+  "bram18_equiv": 0,
+  "wns_ns": 5.0,
+  "setup_wns_ns": 5.0,
+  "hold_wns_ns": 0.0,
+  "timing_met": true,
+  "fmax_mhz": 66.0,
+  "report": "STUB BASELINE \u2014 Vivado synth never completed on this module. Placeholder values for `improve --targets=use-bram` baseline. Replace with real synthesis report once available.\n"
+}

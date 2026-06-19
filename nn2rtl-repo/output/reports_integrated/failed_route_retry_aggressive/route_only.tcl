@@ -1,0 +1,20 @@
+set_param general.maxThreads 16
+puts "NN2RTL_INFO: requested general.maxThreads=16, effective=[get_param general.maxThreads]"
+puts "NN2RTL_INFO: opening placed/physopt checkpoint"
+open_checkpoint "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_physopt_final_c14.dcp"
+puts "NN2RTL_INFO: starting route_design (directive=AggressiveExplore)"
+route_design -directive AggressiveExplore
+puts "NN2RTL_INFO: write routed checkpoint"
+write_checkpoint -force "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_routed.dcp"
+puts "NN2RTL_INFO: post-route phys_opt_design (final timing closure; quality-preserving)"
+catch { phys_opt_design }
+write_checkpoint -force "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_routed.dcp"
+puts "NN2RTL_INFO: post-route utilization"
+report_utilization -file "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_postroute_util.rpt"
+puts "NN2RTL_INFO: post-route timing summary"
+report_timing_summary -check_timing_verbose -max_paths 20 -file "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_postroute_timing.rpt"
+puts "NN2RTL_INFO: post-route power (vectorless)"
+report_power -file "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_postroute_power.rpt"
+file copy -force "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_postroute_util.rpt" "C:/Users/User/AppData/Local/Temp/nn2rtl-routeonly-duJCDT/route_only_util.rpt"
+file copy -force "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/checkpoints/first_light_postroute_timing.rpt" "C:/Users/User/AppData/Local/Temp/nn2rtl-routeonly-duJCDT/route_only_timing.rpt"
+puts "NN2RTL_INFO: route_only flow complete"

@@ -1,0 +1,620 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date              : Tue May 26 11:15:33 2026
+| Host              : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command           : report_timing -delay_type max -max_paths 200 -nworst 1 -unique_pins -path_type summary -file C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/diag_routed_slack.rpt.paths
+| Design            : nn2rtl_top
+| Device            : xcu250-figd2104
+| Speed File        : -2L  PRODUCTION 1.28 03-30-2022
+| Design State      : Routed
+| Temperature Grade : E
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Startpoint                     Endpoint                       Slack(ns)     
+----------------------------------------------------------------------------
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[1]/D
+                                                              10.119        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[5]/D
+                                                              10.121        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[6]/D
+                                                              10.130        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[0]/D
+                                                              10.139        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]/D
+                                                              10.143        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[4]/D
+                                                              10.205        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[2]/D
+                                                              10.259        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[3]/D
+                                                              10.260        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[3]/D
+                                                              10.272        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[4]/D
+                                                              10.314        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[5]/D
+                                                              10.344        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[2]/D
+                                                              10.352        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[6]/D
+                                                              10.359        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[2]/D
+                                                              10.382        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]/D
+                                                              10.382        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[1]/D
+                                                              10.383        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[3]/D
+                                                              10.388        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[1]/D
+                                                              10.406        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[0]/D
+                                                              10.408        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[5]/D
+                                                              10.416        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[4]/D
+                                                              10.432        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[6]/D
+                                                              10.467        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]/D
+                                                              10.500        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[0]/D
+                                                              10.505        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[1]/D
+                                                              10.686        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[0]/D
+                                                              10.726        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[2]/D
+                                                              10.732        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[3]/D
+                                                              10.745        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[5]/D
+                                                              10.820        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[6]/D
+                                                              10.821        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[7]/D
+                                                              10.848        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[185].data_out_q3_reg[4]/D
+                                                              10.863        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[6]/D
+                                                              11.286        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[6]/D
+                                                              11.302        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[3]/D
+                                                              11.302        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[7]/D
+                                                              11.317        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[7]/D
+                                                              11.322        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[5]/D
+                                                              11.333        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[6]/D
+                                                              11.334        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[4]/D
+                                                              11.351        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[7]/D
+                                                              11.353        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[2]/D
+                                                              11.360        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[5]/D
+                                                              11.364        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[1]/D
+                                                              11.369        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[5]/D
+                                                              11.390        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[4]/D
+                                                              11.466        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[0]/D
+                                                              11.480        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[4]/D
+                                                              11.487        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[1]/D
+                                                              11.492        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[4]/D
+                                                              11.493        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[5]/D
+                                                              11.497        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[2]/D
+                                                              11.519        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[1]/D
+                                                              11.519        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[3]/D
+                                                              11.523        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[2]/D
+                                                              11.525        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[2]/D
+                                                              11.533        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[186].data_out_q3_reg[3]/D
+                                                              11.534        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[3]/D
+                                                              11.534        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[21].data_out_q3_reg[0]/D
+                                                              11.582        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[20].data_out_q3_reg[0]/D
+                                                              11.585        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[1]/D
+                                                              11.614        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[0]/D
+                                                              11.676        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[6]/D
+                                                              11.749        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[7]/D
+                                                              11.767        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[6]/D
+                                                              11.782        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[178].data_out_q3_reg[7]/D
+                                                              11.815        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[1]/D
+                                                              11.906        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[6]/D
+                                                              11.934        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[6]/D
+                                                              11.952        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[7]/D
+                                                              11.955        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[3]/D
+                                                              11.958        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[3]/D
+                                                              11.969        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[0]/D
+                                                              11.969        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[7]/D
+                                                              11.984        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[5]/D
+                                                              11.985        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[0]/D
+                                                              11.986        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[4]/D
+                                                              11.987        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[2]/D
+                                                              11.990        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[4]/D
+                                                              11.993        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[1]/D
+                                                              11.997        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[2]/D
+                                                              12.002        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[5]/D
+                                                              12.004        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[179].data_out_q3_reg[3]/D
+                                                              12.005        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[1]/D
+                                                              12.007        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[0]/D
+                                                              12.009        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[3]/D
+                                                              12.017        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[4]/D
+                                                              12.020        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[4]/D
+                                                              12.021        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[6]/D
+                                                              12.034        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[7]/D
+                                                              12.051        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[2]/D
+                                                              12.051        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[101].data_out_q3_reg[2]/D
+                                                              12.054        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[3]/D
+                                                              12.057        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[1]/D
+                                                              12.065        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[5]/D
+                                                              12.067        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[4]/D
+                                                              12.077        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[5]/D
+                                                              12.080        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[0]/D
+                                                              12.119        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[1]/D
+                                                              12.123        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[4].data_out_q3_reg[5]/D
+                                                              12.129        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[6]/D
+                                                              12.144        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[4]/D
+                                                              12.150        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[0]/D
+                                                              12.153        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[1]/D
+                                                              12.159        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[184].data_out_q3_reg[7]/D
+                                                              12.167        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[3]/D
+                                                              12.201        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[168].data_out_q3_reg[2]/D
+                                                              12.210        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[5]/D
+                                                              12.237        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[0]/D
+                                                              12.248        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[2]/D
+                                                              12.268        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[6]/D
+                                                              12.282        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[180].data_out_q3_reg[7]/D
+                                                              12.301        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[3]/D
+                                                              12.483        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[6]/D
+                                                              12.493        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[7]/D
+                                                              12.507        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[5]/D
+                                                              12.511        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[1]/D
+                                                              12.543        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[2]/D
+                                                              12.546        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[1]/D
+                                                              12.549        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[2]/D
+                                                              12.568        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[0]/D
+                                                              12.580        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[3]/D
+                                                              12.606        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[4]/D
+                                                              12.614        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[0]/D
+                                                              12.640        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[1]/D
+                                                              12.642        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[5]/D
+                                                              12.644        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[106].data_out_q3_reg[6]/D
+                                                              12.649        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[106].data_out_q3_reg[7]/D
+                                                              12.670        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[4]/D
+                                                              12.673        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[2]/D
+                                                              12.675        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[6]/D
+                                                              12.696        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[166].data_out_q3_reg[0]/D
+                                                              12.697        
+u_shared_engine/u_address_generator/weight_rd_addr_reg[11]_rep__2/C
+                               u_uram_weight_bank4/mem_bram_34/CASDOMUXA
+                                                              12.715        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[183].data_out_q3_reg[7]/D
+                                                              12.724        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[6]/D
+                                                              12.754        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[2]/D
+                                                              12.762        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[3]/D
+                                                              12.762        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[7]/D
+                                                              12.766        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[5]/D
+                                                              12.771        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[4]/D
+                                                              12.784        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[5]/D
+                                                              12.803        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[1]/D
+                                                              12.849        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[0]/D
+                                                              12.849        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[3]/D
+                                                              12.857        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[53].data_out_q3_reg[4]/D
+                                                              12.858        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[5]/D
+                                                              12.904        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[6]/D
+                                                              12.905        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[2]/D
+                                                              12.907        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[3]/D
+                                                              12.924        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[4]/D
+                                                              12.925        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[165].data_out_q3_reg[7]/D
+                                                              12.932        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[1]/D
+                                                              12.953        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[4]/D
+                                                              12.978        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[0]/D
+                                                              13.006        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[3]/D
+                                                              13.010        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[0]/D
+                                                              13.027        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[106].data_out_q3_reg[4]/D
+                                                              13.028        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[1]/D
+                                                              13.032        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[2]/D
+                                                              13.033        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[5]/D
+                                                              13.039        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[3]/D
+                                                              13.050        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[6]/D
+                                                              13.058        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[6]/D
+                                                              13.064        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[181].data_out_q3_reg[2]/D
+                                                              13.065        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[173].data_out_q3_reg[5]/D
+                                                              13.071        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[103].data_out_q3_reg[5]/D
+                                                              13.073        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[24].data_out_q3_reg[7]/D
+                                                              13.073        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[3]/D
+                                                              13.073        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[106].data_out_q3_reg[5]/D
+                                                              13.075        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[0]/D
+                                                              13.076        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[106].data_out_q3_reg[1]/D
+                                                              13.077        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[0]/D
+                                                              13.096        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[4]/D
+                                                              13.097        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[4]/D
+                                                              13.099        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[1]/D
+                                                              13.101        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[106].data_out_q3_reg[0]/D
+                                                              13.112        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[1]/D
+                                                              13.117        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[103].data_out_q3_reg[3]/D
+                                                              13.119        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[7]/D
+                                                              13.119        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[42].data_out_q3_reg[2]/D
+                                                              13.121        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[103].data_out_q3_reg[4]/D
+                                                              13.124        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[181].data_out_q3_reg[1]/D
+                                                              13.126        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[2]/D
+                                                              13.128        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[105].data_out_q3_reg[6]/D
+                                                              13.140        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[6]/D
+                                                              13.153        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[6]/D
+                                                              13.160        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[104].data_out_q3_reg[4]/D
+                                                              13.160        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[105].data_out_q3_reg[7]/D
+                                                              13.161        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[104].data_out_q3_reg[5]/D
+                                                              13.161        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[173].data_out_q3_reg[2]/D
+                                                              13.161        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[104].data_out_q3_reg[2]/D
+                                                              13.171        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[104].data_out_q3_reg[3]/D
+                                                              13.175        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[23].data_out_q3_reg[7]/D
+                                                              13.176        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[5]/D
+                                                              13.180        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[99].data_out_q3_reg[7]/D
+                                                              13.182        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[103].data_out_q3_reg[2]/D
+                                                              13.184        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[103].data_out_q3_reg[1]/D
+                                                              13.186        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[181].data_out_q3_reg[3]/D
+                                                              13.190        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[113].data_out_q3_reg[3]/D
+                                                              13.192        
+u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                               u_shared_engine/u_requant_pipeline/g_lane[173].data_out_q3_reg[0]/D
+                                                              13.200        
+
+
+

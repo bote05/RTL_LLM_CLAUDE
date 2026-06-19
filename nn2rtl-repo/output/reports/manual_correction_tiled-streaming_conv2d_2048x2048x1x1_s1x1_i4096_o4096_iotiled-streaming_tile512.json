@@ -1,0 +1,177 @@
+{
+  "event": "manual_correction_needed",
+  "generated_at": "2026-04-29T21:15:50.209Z",
+  "module_id": "layer1_0_conv1",
+  "contract_key": "tiled-streaming:conv2d_2048x2048x1x1_s1x1_i4096_o4096_iotiled-streaming_tile512",
+  "contract_id": "tiled-streaming",
+  "contract_plan": {
+    "id": "tiled-streaming",
+    "complexity": 1,
+    "description": "Channel-tiled stream contract that keeps each activation stream within the configured bus cap."
+  },
+  "contract": {
+    "interface": {
+      "clock": "clk",
+      "reset": "rst_n",
+      "valid_in": "valid_in",
+      "ready_in": "ready_in",
+      "valid_out": "valid_out",
+      "data_in_bits": 4096,
+      "data_out_bits": 4096
+    },
+    "timing": {
+      "pipeline_latency_cycles": 4193,
+      "clock_period_ns": 20,
+      "fmax_target_mhz": 50
+    },
+    "capability_limits": {
+      "max_supported_bus_bits": 4096,
+      "target_part": "xc7a100tcsg324-1",
+      "artix7_100t_capacity": {
+        "lut": 63400,
+        "ff": 126800,
+        "dsp": 240,
+        "bram18": 240
+      }
+    },
+    "operation": {
+      "op_type": "conv2d",
+      "contract_id": "tiled-streaming",
+      "contract_complexity": 1,
+      "input_shape": [
+        1,
+        2048,
+        1,
+        1
+      ],
+      "output_shape": [
+        1,
+        2048,
+        1,
+        1
+      ],
+      "weight_shape": [
+        2048,
+        2048,
+        1,
+        1
+      ],
+      "scale_factor": 0.027665346839894772,
+      "zero_point": 0,
+      "io_mode": "channel_tiled",
+      "channel_tile": 512,
+      "weight_bank_paths": []
+    }
+  },
+  "layer_ir": {
+    "module_id": "layer1_0_conv1",
+    "op_type": "conv2d",
+    "input_shape": [
+      1,
+      2048,
+      1,
+      1
+    ],
+    "output_shape": [
+      1,
+      2048,
+      1,
+      1
+    ],
+    "weights_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_weights.hex",
+    "bias_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_bias.hex",
+    "weight_shape": [
+      2048,
+      2048,
+      1,
+      1
+    ],
+    "num_weights": 4194304,
+    "scale_factor": 0.027665346839894772,
+    "zero_point": 0,
+    "pipeline_latency_cycles": 4193,
+    "clock_period_ns": 20,
+    "input_width_bits": 4096,
+    "output_width_bits": 4096,
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+    "golden_inputs_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/goldens/layer1_0_conv1.goldin",
+    "golden_outputs_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/goldens/layer1_0_conv1.goldout",
+    "io_mode": "channel_tiled",
+    "contract_id": "tiled-streaming",
+    "channel_tile": 512
+  },
+  "reason": "retrospector_no_resumable_foundry_session",
+  "final_result": {
+    "module_id": "layer1_0_conv1",
+    "status": "fail",
+    "timing_pass": false,
+    "timing_actual_cycles": 0,
+    "timing_expected_cycles": 4193,
+    "failure_class": "architectural_unsupported",
+    "fix_hint": "Layer layer1_0_conv1 does not fit contract 'tiled-streaming': effective_input_width_bits=4096 and output_width_bits=4096 exceeds max_bus_width_bits=256. Reduce channel_tile / beat width or select a heavier contract.",
+    "failure_category": "architectural_fit",
+    "violated_constraint": "MAX_SUPPORTED_BUS_BITS",
+    "classifier_reason": "The orchestrator capability gate explicitly rejected this module before simulation: effective bus width (4096 bits, from channel_tile=512 × 8-bit channels) exceeds the contract's max_bus_width_bits=256. No RTL code bug — the channel_tile must be reduced (e.g., to 32) or a heavier contract selected."
+  },
+  "foundry_versions": [],
+  "failure_attempts": [
+    {
+      "attempt_index": 1,
+      "stage": "capability_gate",
+      "module": null,
+      "result": {
+        "module_id": "layer1_0_conv1",
+        "status": "fail",
+        "timing_pass": false,
+        "timing_actual_cycles": 0,
+        "timing_expected_cycles": 4193,
+        "failure_class": "architectural_unsupported",
+        "fix_hint": "Layer layer1_0_conv1 does not fit contract 'tiled-streaming': effective_input_width_bits=4096 and output_width_bits=4096 exceeds max_bus_width_bits=256. Reduce channel_tile / beat width or select a heavier contract.",
+        "failure_category": "architectural_fit",
+        "violated_constraint": "MAX_SUPPORTED_BUS_BITS",
+        "classifier_reason": "The orchestrator capability gate explicitly rejected this module before simulation: effective bus width (4096 bits, from channel_tile=512 × 8-bit channels) exceeds the contract's max_bus_width_bits=256. No RTL code bug — the channel_tile must be reduced (e.g., to 32) or a heavier contract selected."
+      },
+      "logs": {
+        "iverilog_stderr": "",
+        "verilator_stderr": "",
+        "fix_hint": "Layer layer1_0_conv1 does not fit contract 'tiled-streaming': effective_input_width_bits=4096 and output_width_bits=4096 exceeds max_bus_width_bits=256. Reduce channel_tile / beat width or select a heavier contract.",
+        "verif_result_json": {
+          "module_id": "layer1_0_conv1",
+          "status": "fail",
+          "timing_pass": false,
+          "timing_actual_cycles": 0,
+          "timing_expected_cycles": 4193,
+          "failure_class": "architectural_unsupported",
+          "fix_hint": "Layer layer1_0_conv1 does not fit contract 'tiled-streaming': effective_input_width_bits=4096 and output_width_bits=4096 exceeds max_bus_width_bits=256. Reduce channel_tile / beat width or select a heavier contract.",
+          "failure_category": "architectural_fit",
+          "violated_constraint": "MAX_SUPPORTED_BUS_BITS",
+          "classifier_reason": "The orchestrator capability gate explicitly rejected this module before simulation: effective bus width (4096 bits, from channel_tile=512 × 8-bit channels) exceeds the contract's max_bus_width_bits=256. No RTL code bug — the channel_tile must be reduced (e.g., to 32) or a heavier contract selected."
+        },
+        "capability_gate": "Layer layer1_0_conv1 does not fit contract 'tiled-streaming': effective_input_width_bits=4096 and output_width_bits=4096 exceeds max_bus_width_bits=256. Reduce channel_tile / beat width or select a heavier contract."
+      }
+    }
+  ],
+  "available_contracts": [
+    {
+      "id": "flat-bus",
+      "complexity": 0,
+      "description": "Full packed activation bus, current default contract."
+    },
+    {
+      "id": "tiled-streaming",
+      "complexity": 1,
+      "description": "Channel-tiled stream contract that keeps each activation stream within the configured bus cap."
+    },
+    {
+      "id": "dram-backed-weights",
+      "complexity": 2,
+      "description": "External-memory-backed weights contract for layers that cannot fit the simpler streaming contracts."
+    }
+  ]
+}

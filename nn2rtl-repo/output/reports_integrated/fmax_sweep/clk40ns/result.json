@@ -1,0 +1,15 @@
+{
+  "clock_ns": 40,
+  "target_mhz": 25,
+  "wns_ns": 26.747,
+  "fmax_mhz": 75.45461404964914,
+  "achieved_target": true,
+  "success": true,
+  "elapsed_s": 7199.633,
+  "lut_count": 1247980,
+  "ff_count": 920023,
+  "dsp_count": 1502,
+  "bram36_count": 2496,
+  "log_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\reports_integrated\\fmax_sweep\\clk40ns\\vivado.log",
+  "routed_dcp": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\reports_integrated\\fmax_sweep\\clk40ns\\routed.dcp"
+}

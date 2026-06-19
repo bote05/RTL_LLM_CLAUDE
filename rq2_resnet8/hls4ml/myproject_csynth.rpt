@@ -1,0 +1,255 @@
+
+
+================================================================
+== Vitis HLS Report for 'myproject'
+================================================================
+* Date:           Sat Jun 13 11:08:27 2026
+
+* Version:        2024.2 (Build 5238294 on Nov  8 2024)
+* Project:        myproject_prj
+* Solution:       solution1 (Vivado IP Flow Target)
+* Product family: zynquplus
+* Target device:  xczu7ev-ffvc1156-2-e
+
+
+================================================================
+== Performance Estimates
+================================================================
++ Timing: 
+    * Summary: 
+    +--------+----------+----------+------------+
+    |  Clock |  Target  | Estimated| Uncertainty|
+    +--------+----------+----------+------------+
+    |ap_clk  |  10.00 ns|  7.282 ns|     2.70 ns|
+    +--------+----------+----------+------------+
+
++ Latency: 
+    * Summary: 
+    +---------+---------+----------+----------+------+-------+----------+
+    |  Latency (cycles) |  Latency (absolute) |   Interval   | Pipeline |
+    |   min   |   max   |    min   |    max   |  min |  max  |   Type   |
+    +---------+---------+----------+----------+------+-------+----------+
+    |    90146|    90195|  0.901 ms|  0.902 ms|  4626|  90170|  dataflow|
+    +---------+---------+----------+----------+------+-------+----------+
+
+    + Detail: 
+        * Instance: 
+        +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+---------+-----------+-----------+------+-------+------------------------------------------------+
+        |                                                                           |                                                                        |  Latency (cycles) |   Latency (absolute)  |   Interval   |                    Pipeline                    |
+        |                                  Instance                                 |                                 Module                                 |   min   |   max   |    min    |    max    |  min |  max  |                      Type                      |
+        +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+---------+-----------+-----------+------+-------+------------------------------------------------+
+        |zeropad2d_cl_array_ap_fixed_3u_array_ap_fixed_16_6_5_3_0_3u_config49_U0    |zeropad2d_cl_array_ap_fixed_3u_array_ap_fixed_16_6_5_3_0_3u_config49_s  |     1167|     1167|  11.670 us|  11.670 us|  1167|   1167|                                              no|
+        |conv_2d_cl_array_ap_fixed_3u_array_ap_fixed_30_13_5_3_0_16u_config2_U0     |conv_2d_cl_array_ap_fixed_3u_array_ap_fixed_30_13_5_3_0_16u_config2_s   |     4625|    69361|  46.250 us|   0.694 ms|  4625|  69361|                                              no|
+        |normalize_array_ap_fixed_16u_array_ap_fixed_47_20_5_3_0_16u_config4_U0     |normalize_array_ap_fixed_16u_array_ap_fixed_47_20_5_3_0_16u_config4_s   |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config5_U0      |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config5_s    |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_U0    |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_s  |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config50_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config50_s             |     1167|     1167|  11.670 us|  11.670 us|  1167|   1167|                                              no|
+        |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config6_U0                 |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config6_s               |     4625|    90169|  46.250 us|   0.902 ms|  4625|  90169|                                              no|
+        |normalize_array_ap_fixed_16u_array_ap_fixed_42_19_5_3_0_16u_config8_U0     |normalize_array_ap_fixed_16u_array_ap_fixed_42_19_5_3_0_16u_config8_s   |     2049|     2049|  20.490 us|  20.490 us|  2048|   2048|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config9_U0      |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config9_s    |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config51_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config51_s             |     1167|     1167|  11.670 us|  11.670 us|  1167|   1167|                                              no|
+        |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config10_U0                |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config10_s              |     4625|    90169|  46.250 us|   0.902 ms|  4625|  90169|                                              no|
+        |normalize_array_ap_fixed_16u_array_ap_fixed_8_3_4_0_0_16u_config12_U0      |normalize_array_ap_fixed_16u_array_ap_fixed_8_3_4_0_0_16u_config12_s    |     2049|     2049|  20.490 us|  20.490 us|  2048|   2048|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |add_array_array_ap_fixed_16u_array_ap_fixed_10_4_5_3_0_16u_config14_U0     |add_array_array_ap_fixed_16u_array_ap_fixed_10_4_5_3_0_16u_config14_s   |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config15_U0     |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config15_s   |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_1_U0  |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_1  |     1025|     1025|  10.250 us|  10.250 us|  1024|   1024|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config52_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config52_s             |     1096|     1096|  10.960 us|  10.960 us|  1096|   1096|                                              no|
+        |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_32u_config56_U0        |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_32u_config56_s      |     2049|    20481|  20.490 us|   0.205 ms|  2049|  20481|                                              no|
+        |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_32u_config16_U0                |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_32u_config16_s              |     4357|    84943|  43.570 us|   0.849 ms|  4357|  84943|                                              no|
+        |linear_array_array_ap_fixed_16_6_5_3_0_32u_linear_config23_U0              |linear_array_array_ap_fixed_16_6_5_3_0_32u_linear_config23_s            |      257|      257|   2.570 us|   2.570 us|   256|    256|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |normalize_array_ap_fixed_32u_array_ap_fixed_42_19_5_3_0_32u_config18_U0    |normalize_array_ap_fixed_32u_array_ap_fixed_42_19_5_3_0_32u_config18_s  |      513|      513|   5.130 us|   5.130 us|   512|    512|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config19_U0     |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config19_s   |      257|      257|   2.570 us|   2.570 us|   256|    256|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config53_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config53_s             |      335|      335|   3.350 us|   3.350 us|   335|    335|                                              no|
+        |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_32u_config20_U0                |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_32u_config20_s              |     1297|    25273|  12.970 us|   0.253 ms|  1297|  25273|                                              no|
+        |normalize_array_ap_fixed_32u_array_ap_fixed_8_3_4_0_0_32u_config24_U0      |normalize_array_ap_fixed_32u_array_ap_fixed_8_3_4_0_0_32u_config24_s    |      513|      513|   5.130 us|   5.130 us|   512|    512|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |add_array_array_ap_fixed_32u_array_ap_fixed_17_7_5_3_0_32u_config27_U0     |add_array_array_ap_fixed_32u_array_ap_fixed_17_7_5_3_0_32u_config27_s   |      257|      257|   2.570 us|   2.570 us|   256|    256|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config28_U0     |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config28_s   |      257|      257|   2.570 us|   2.570 us|   256|    256|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |clone_stream_array_ap_ufixed_32u_array_ap_ufixed_8_2_4_0_0_32u_8192_U0     |clone_stream_array_ap_ufixed_32u_array_ap_ufixed_8_2_4_0_0_32u_8192_s   |      257|      257|   2.570 us|   2.570 us|   256|    256|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config54_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config54_s             |      296|      296|   2.960 us|   2.960 us|   296|    296|                                              no|
+        |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_64u_config57_U0        |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_64u_config57_s      |      513|     9217|   5.130 us|  92.170 us|   513|   9217|                                              no|
+        |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_64u_config29_U0                |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_64u_config29_s              |     1157|    22543|  11.570 us|   0.225 ms|  1157|  22543|                                              no|
+        |linear_array_array_ap_fixed_16_6_5_3_0_64u_linear_config36_U0              |linear_array_array_ap_fixed_16_6_5_3_0_64u_linear_config36_s            |       65|       65|   0.650 us|   0.650 us|    64|     64|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |normalize_array_ap_fixed_64u_array_ap_fixed_43_20_5_3_0_64u_config31_U0    |normalize_array_ap_fixed_64u_array_ap_fixed_43_20_5_3_0_64u_config31_s  |       65|       65|   0.650 us|   0.650 us|    64|     64|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config32_U0     |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config32_s   |       65|       65|   0.650 us|   0.650 us|    64|     64|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config55_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config55_s             |      111|      111|   1.110 us|   1.110 us|   111|    111|                                              no|
+        |conv_2d_cl_array_array_ap_fixed_27_14_5_3_0_64u_config33_U0                |conv_2d_cl_array_array_ap_fixed_27_14_5_3_0_64u_config33_s              |      401|     7801|   4.010 us|  78.010 us|   401|   7801|                                              no|
+        |normalize_array_ap_fixed_64u_array_ap_fixed_8_3_4_0_0_64u_config37_U0      |normalize_array_ap_fixed_64u_array_ap_fixed_8_3_4_0_0_64u_config37_s    |      193|      193|   1.930 us|   1.930 us|   192|    192|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |add_array_array_ap_fixed_64u_array_ap_fixed_17_7_5_3_0_64u_config40_U0     |add_array_array_ap_fixed_64u_array_ap_fixed_17_7_5_3_0_64u_config40_s   |       65|       65|   0.650 us|   0.650 us|    64|     64|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config41_U0     |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config41_s   |       65|       65|   0.650 us|   0.650 us|    64|     64|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |pooling2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config42_U0               |pooling2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config42_s             |      131|      131|   1.310 us|   1.310 us|   128|    128|  loop auto-rewind stp (delay=0 clock cycles(s))|
+        |dense_array_ap_ufixed_64u_array_ap_fixed_23_10_5_3_0_10u_config44_U0       |dense_array_ap_ufixed_64u_array_ap_fixed_23_10_5_3_0_10u_config44_s     |       66|       67|   0.660 us|   0.670 us|    66|     67|                                              no|
+        +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+---------+-----------+-----------+------+-------+------------------------------------------------+
+
+        * Loop: 
+        N/A
+
+
+
+================================================================
+== Utilization Estimates
+================================================================
+* Summary: 
++-----------------+---------+------+--------+--------+-----+
+|       Name      | BRAM_18K|  DSP |   FF   |   LUT  | URAM|
++-----------------+---------+------+--------+--------+-----+
+|DSP              |        -|     -|       -|       -|    -|
+|Expression       |        -|     -|       0|       8|    -|
+|FIFO             |     1229|     -|    6669|    2443|    -|
+|Instance         |      236|   831|  163239|  336745|    -|
+|Memory           |        -|     -|       -|       -|    -|
+|Multiplexer      |        -|     -|       -|       -|    -|
+|Register         |        -|     -|       -|       -|    -|
++-----------------+---------+------+--------+--------+-----+
+|Total            |     1465|   831|  169908|  339196|    0|
++-----------------+---------+------+--------+--------+-----+
+|Available        |      624|  1728|  460800|  230400|   96|
++-----------------+---------+------+--------+--------+-----+
+|Utilization (%)  |      234|    48|      36|     147|    0|
++-----------------+---------+------+--------+--------+-----+
+
++ Detail: 
+    * Instance: 
+    +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+-----+-------+--------+-----+
+    |                                  Instance                                 |                                 Module                                 | BRAM_18K| DSP |   FF  |   LUT  | URAM|
+    +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+-----+-------+--------+-----+
+    |add_array_array_ap_fixed_16u_array_ap_fixed_10_4_5_3_0_16u_config14_U0     |add_array_array_ap_fixed_16u_array_ap_fixed_10_4_5_3_0_16u_config14_s   |        0|    0|     13|     371|    0|
+    |add_array_array_ap_fixed_32u_array_ap_fixed_17_7_5_3_0_32u_config27_U0     |add_array_array_ap_fixed_32u_array_ap_fixed_17_7_5_3_0_32u_config27_s   |        0|    0|     11|     863|    0|
+    |add_array_array_ap_fixed_64u_array_ap_fixed_17_7_5_3_0_64u_config40_U0     |add_array_array_ap_fixed_64u_array_ap_fixed_17_7_5_3_0_64u_config40_s   |        0|    0|      9|    1627|    0|
+    |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_1_U0  |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_1  |        0|    0|     13|      99|    0|
+    |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_U0    |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_s  |        0|    0|     13|      99|    0|
+    |clone_stream_array_ap_ufixed_32u_array_ap_ufixed_8_2_4_0_0_32u_8192_U0     |clone_stream_array_ap_ufixed_32u_array_ap_ufixed_8_2_4_0_0_32u_8192_s   |        0|    0|     11|      95|    0|
+    |conv_2d_cl_array_ap_fixed_3u_array_ap_fixed_30_13_5_3_0_16u_config2_U0     |conv_2d_cl_array_ap_fixed_3u_array_ap_fixed_30_13_5_3_0_16u_config2_s   |        2|    8|   3371|    4106|    0|
+    |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config10_U0                |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config10_s              |        8|   16|   6988|    7403|    0|
+    |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config6_U0                 |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_16u_config6_s               |        8|   16|   6988|    7403|    0|
+    |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_32u_config16_U0                |conv_2d_cl_array_array_ap_fixed_25_12_5_3_0_32u_config16_s              |       15|   32|   8171|    8766|    0|
+    |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_32u_config20_U0                |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_32u_config20_s              |       29|   64|  13897|   16146|    0|
+    |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_64u_config29_U0                |conv_2d_cl_array_array_ap_fixed_26_13_5_3_0_64u_config29_s              |       57|  128|  16361|   21046|    0|
+    |conv_2d_cl_array_array_ap_fixed_27_14_5_3_0_64u_config33_U0                |conv_2d_cl_array_array_ap_fixed_27_14_5_3_0_64u_config33_s              |      114|  256|  27305|   45168|    0|
+    |dense_array_ap_ufixed_64u_array_ap_fixed_23_10_5_3_0_10u_config44_U0       |dense_array_ap_ufixed_64u_array_ap_fixed_23_10_5_3_0_10u_config44_s     |        3|   10|   2008|    1748|    0|
+    |linear_array_array_ap_fixed_16_6_5_3_0_32u_linear_config23_U0              |linear_array_array_ap_fixed_16_6_5_3_0_32u_linear_config23_s            |        0|    0|     11|      86|    0|
+    |linear_array_array_ap_fixed_16_6_5_3_0_64u_linear_config36_U0              |linear_array_array_ap_fixed_16_6_5_3_0_64u_linear_config36_s            |        0|    0|      9|      82|    0|
+    |normalize_array_ap_fixed_16u_array_ap_fixed_42_19_5_3_0_16u_config8_U0     |normalize_array_ap_fixed_16u_array_ap_fixed_42_19_5_3_0_16u_config8_s   |        0|   16|    574|    1567|    0|
+    |normalize_array_ap_fixed_16u_array_ap_fixed_47_20_5_3_0_16u_config4_U0     |normalize_array_ap_fixed_16u_array_ap_fixed_47_20_5_3_0_16u_config4_s   |        0|    0|     13|    3452|    0|
+    |normalize_array_ap_fixed_16u_array_ap_fixed_8_3_4_0_0_16u_config12_U0      |normalize_array_ap_fixed_16u_array_ap_fixed_8_3_4_0_0_16u_config12_s    |        0|   15|    536|    3715|    0|
+    |normalize_array_ap_fixed_32u_array_ap_fixed_42_19_5_3_0_32u_config18_U0    |normalize_array_ap_fixed_32u_array_ap_fixed_42_19_5_3_0_32u_config18_s  |        0|   29|   1077|    2916|    0|
+    |normalize_array_ap_fixed_32u_array_ap_fixed_8_3_4_0_0_32u_config24_U0      |normalize_array_ap_fixed_32u_array_ap_fixed_8_3_4_0_0_32u_config24_s    |        0|   32|   1203|    7602|    0|
+    |normalize_array_ap_fixed_64u_array_ap_fixed_43_20_5_3_0_64u_config31_U0    |normalize_array_ap_fixed_64u_array_ap_fixed_43_20_5_3_0_64u_config31_s  |        0|   56|      9|    5491|    0|
+    |normalize_array_ap_fixed_64u_array_ap_fixed_8_3_4_0_0_64u_config37_U0      |normalize_array_ap_fixed_64u_array_ap_fixed_8_3_4_0_0_64u_config37_s    |        0|   57|   3089|   15860|    0|
+    |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_32u_config56_U0        |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_32u_config56_s      |        0|   32|   1572|    7279|    0|
+    |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_64u_config57_U0        |pointwise_conv_2d_cl_array_array_ap_fixed_8_3_4_0_0_64u_config57_s      |        0|   64|   3142|   19769|    0|
+    |pooling2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config42_U0               |pooling2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config42_s             |        0|    0|  65272|  117913|    0|
+    |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config15_U0     |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config15_s   |        0|    0|     13|     890|    0|
+    |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config5_U0      |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config5_s    |        0|    0|     13|    2794|    0|
+    |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config9_U0      |relu_array_ap_fixed_16u_array_ap_ufixed_8_2_4_0_0_16u_relu_config9_s    |        0|    0|     13|    2634|    0|
+    |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config19_U0     |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config19_s   |        0|    0|     11|    5174|    0|
+    |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config28_U0     |relu_array_ap_fixed_32u_array_ap_ufixed_8_2_4_0_0_32u_relu_config28_s   |        0|    0|     11|    3574|    0|
+    |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config32_U0     |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config32_s   |        0|    0|      9|   10386|    0|
+    |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config41_U0     |relu_array_ap_fixed_64u_array_ap_ufixed_8_2_4_0_0_64u_relu_config41_s   |        0|    0|      9|    7058|    0|
+    |zeropad2d_cl_array_ap_fixed_3u_array_ap_fixed_16_6_5_3_0_3u_config49_U0    |zeropad2d_cl_array_ap_fixed_3u_array_ap_fixed_16_6_5_3_0_3u_config49_s  |        0|    0|    121|     596|    0|
+    |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config50_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config50_s             |        0|    0|    201|     587|    0|
+    |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config51_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config51_s             |        0|    0|    201|     587|    0|
+    |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config52_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_16u_config52_s             |        0|    0|     60|     482|    0|
+    |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config53_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config53_s             |        0|    0|    312|     493|    0|
+    |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config54_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_32u_config54_s             |        0|    0|     42|     380|    0|
+    |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config55_U0               |zeropad2d_cl_array_array_ap_ufixed_8_2_4_0_0_64u_config55_s             |        0|    0|    557|     438|    0|
+    +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+-----+-------+--------+-----+
+    |Total                                                                      |                                                                        |      236|  831| 163239|  336745|    0|
+    +---------------------------------------------------------------------------+------------------------------------------------------------------------+---------+-----+-------+--------+-----+
+
+    * DSP: 
+    N/A
+
+    * Memory: 
+    N/A
+
+    * FIFO: 
+    +----------------+---------+-----+----+-----+------+------+---------+
+    |      Name      | BRAM_18K|  FF | LUT| URAM| Depth| Bits | Size:D*B|
+    +----------------+---------+-----+----+-----+------+------+---------+
+    |layer10_out_U   |       23|  163|   0|    -|  1024|   400|   409600|
+    |layer12_out_U   |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer14_out_U   |        9|  163|   0|    -|  1024|   160|   163840|
+    |layer15_out_U   |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer16_out_U   |       45|  159|   0|    -|   256|   800|   204800|
+    |layer18_out_U   |       75|  159|   0|    -|   256|  1344|   344064|
+    |layer19_out_U   |       15|  159|   0|    -|   256|   256|    65536|
+    |layer20_out_U   |       47|  159|   0|    -|   256|   832|   212992|
+    |layer22_out_U   |       15|  159|   0|    -|   256|   256|    65536|
+    |layer23_out_U   |       29|  159|   0|    -|   256|   512|   131072|
+    |layer24_out_U   |       15|  159|   0|    -|   256|   256|    65536|
+    |layer27_out_U   |       31|  159|   0|    -|   256|   544|   139264|
+    |layer28_out_U   |       15|  159|   0|    -|   256|   256|    65536|
+    |layer29_out_U   |       93|  155|   0|    -|    64|  1664|   106496|
+    |layer2_out_U    |       27|  163|   0|    -|  1024|   480|   491520|
+    |layer31_out_U   |      153|  155|   0|    -|    64|  2752|   176128|
+    |layer32_out_U   |       29|  155|   0|    -|    64|   512|    32768|
+    |layer33_out_U   |       96|  155|   0|    -|    64|  1728|   110592|
+    |layer35_out_U   |       29|  155|   0|    -|    64|   512|    32768|
+    |layer36_out_U   |       57|  155|   0|    -|    64|  1024|    65536|
+    |layer37_out_U   |       29|  155|   0|    -|    64|   512|    32768|
+    |layer40_out_U   |       61|  155|   0|    -|    64|  1088|    69632|
+    |layer41_out_U   |       29|  155|   0|    -|    64|   512|    32768|
+    |layer42_out_U   |        0|   99|   0|    -|     1|   512|      512|
+    |layer46_cpy1_U  |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer46_cpy2_U  |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer47_cpy1_U  |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer47_cpy2_U  |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer48_cpy1_U  |       15|  159|   0|    -|   256|   256|    65536|
+    |layer48_cpy2_U  |       15|  159|   0|    -|   256|   256|    65536|
+    |layer49_out_U   |        6|  163|   0|    -|  1156|    48|    55488|
+    |layer4_out_U    |       42|  163|   0|    -|  1024|   752|   770048|
+    |layer50_out_U   |       15|  163|   0|    -|  1156|   128|   147968|
+    |layer51_out_U   |       15|  163|   0|    -|  1156|   128|   147968|
+    |layer52_out_U   |       15|  163|   0|    -|  1089|   128|   139392|
+    |layer53_out_U   |       15|  165|   0|    -|   324|   256|    82944|
+    |layer54_out_U   |       15|  163|   0|    -|   289|   256|    73984|
+    |layer55_out_U   |       29|  164|   0|    -|   100|   512|    51200|
+    |layer5_out_U    |        8|  163|   0|    -|  1024|   128|   131072|
+    |layer6_out_U    |       23|  163|   0|    -|  1024|   400|   409600|
+    |layer8_out_U    |       38|  163|   0|    -|  1024|   672|   688128|
+    |layer9_out_U    |        8|  163|   0|    -|  1024|   128|   131072|
+    +----------------+---------+-----+----+-----+------+------+---------+
+    |Total           |     1229| 6669|   0|    0| 22999| 21728|  6765632|
+    +----------------+---------+-----+----+-----+------+------+---------+
+
+    * Expression: 
+    +----------------------------------------------------------------------------------------+----------+----+---+----+------------+------------+
+    |                                      Variable Name                                     | Operation| DSP| FF| LUT| Bitwidth P0| Bitwidth P1|
+    +----------------------------------------------------------------------------------------+----------+----+---+----+------------+------------+
+    |ap_idle                                                                                 |       and|   0|  0|   2|           1|           1|
+    |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_1_U0_start_full_n  |       and|   0|  0|   2|           1|           1|
+    |clone_stream_array_ap_ufixed_16u_array_ap_ufixed_8_2_4_0_0_16u_16384_U0_start_full_n    |       and|   0|  0|   2|           1|           1|
+    |clone_stream_array_ap_ufixed_32u_array_ap_ufixed_8_2_4_0_0_32u_8192_U0_start_full_n     |       and|   0|  0|   2|           1|           1|
+    +----------------------------------------------------------------------------------------+----------+----+---+----+------------+------------+
+    |Total                                                                                   |          |   0|  0|   8|           4|           4|
+    +----------------------------------------------------------------------------------------+----------+----+---+----+------------+------------+
+
+    * Multiplexer: 
+    N/A
+
+    * Register: 
+    N/A
+
+
+
+================================================================
+== Interface
+================================================================
+* Summary: 
++--------------------+-----+-----+------------+--------------+--------------+
+|      RTL Ports     | Dir | Bits|  Protocol  | Source Object|    C Type    |
++--------------------+-----+-----+------------+--------------+--------------+
+|in_image_TDATA      |   in|   48|        axis|      in_image|       pointer|
+|in_image_TVALID     |   in|    1|        axis|      in_image|       pointer|
+|in_image_TREADY     |  out|    1|        axis|      in_image|       pointer|
+|layer44_out_TDATA   |  out|  320|        axis|   layer44_out|       pointer|
+|layer44_out_TVALID  |  out|    1|        axis|   layer44_out|       pointer|
+|layer44_out_TREADY  |   in|    1|        axis|   layer44_out|       pointer|
+|ap_clk              |   in|    1|  ap_ctrl_hs|     myproject|  return value|
+|ap_rst_n            |   in|    1|  ap_ctrl_hs|     myproject|  return value|
+|ap_start            |   in|    1|  ap_ctrl_hs|     myproject|  return value|
+|ap_done             |  out|    1|  ap_ctrl_hs|     myproject|  return value|
+|ap_ready            |  out|    1|  ap_ctrl_hs|     myproject|  return value|
+|ap_idle             |  out|    1|  ap_ctrl_hs|     myproject|  return value|
++--------------------+-----+-----+------------+--------------+--------------+
+

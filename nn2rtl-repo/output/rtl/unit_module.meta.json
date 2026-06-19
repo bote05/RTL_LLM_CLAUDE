@@ -1,0 +1,7 @@
+{
+  "module_id": "unit_module",
+  "spec_hash": "fixture-hash",
+  "verilog_source": "module unit_module(\n  input wire clk,\n  input wire rst_n,\n  input wire valid_in,\n  output wire ready_in,\n  input wire signed [7:0] data_in,\n  output reg valid_out,\n  output reg signed [7:0] data_out\n);\n  assign ready_in = 1'b1;\n  always @(posedge clk or negedge rst_n) begin\n    if (!rst_n) begin\n      valid_out <= 1'b0;\n      data_out <= 8'sd0;\n    end else begin\n      valid_out <= valid_in;\n      data_out <= data_in;\n    end\n  end\nendmodule\n",
+  "generated_by": "Foundry",
+  "attempt": 1
+}

@@ -1,0 +1,237 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date         : Thu Jun 11 16:21:58 2026
+| Host         : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -hierarchical_depth 3 -file C:/Users/User/AppData/Local/Temp/nn2rtl-mbv2synth-evzPYD/mbv2_util.rpt.synth.hier
+| Design       : nn2rtl_top
+| Device       : xcu250-figd2104-2L-e
+| Speed File   : -2L
+| Design State : Synthesized
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++------------------------------+----------------------------------------------------+------------+------------+---------+------+--------+--------+--------+------+------------+
+|           Instance           |                       Module                       | Total LUTs | Logic LUTs | LUTRAMs | SRLs |   FFs  | RAMB36 | RAMB18 | URAM | DSP Blocks |
++------------------------------+----------------------------------------------------+------------+------------+---------+------+--------+--------+--------+------+------------+
+| nn2rtl_top                   |                                              (top) |     329371 |     315339 |   14032 |    0 | 437671 |   1809 |      7 |  235 |       3345 |
+|   (nn2rtl_top)               |                                              (top) |          0 |          0 |       0 |    0 |     15 |      0 |      0 |    0 |          0 |
+|   u_br_ldr22                 |                      retile_gather__parameterized0 |       7187 |       7187 |       0 |    0 |   8258 |      0 |      0 |    0 |          0 |
+|   u_br_ldr24                 |                    retile_gather__parameterized0_0 |       7187 |       7187 |       0 |    0 |   8258 |      0 |      0 |    0 |          0 |
+|   u_br_ldr26                 |                    retile_gather__parameterized0_1 |       7187 |       7187 |       0 |    0 |   8258 |      0 |      0 |    0 |          0 |
+|   u_br_mean                  |                                      retile_gather |      14506 |      14506 |       0 |    0 |  17965 |      0 |      0 |    0 |          0 |
+|   u_engine_out_fifo          |                                 engine_output_fifo |       9263 |       9263 |       0 |    0 |     30 |      0 |      0 |   29 |          0 |
+|   u_engine_out_node_conv_814 |                               engine_output_bridge |         16 |         16 |       0 |    0 |    291 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_816 |               engine_output_bridge__parameterized0 |         21 |         21 |       0 |    0 |   1571 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_818 |               engine_output_bridge__parameterized1 |        309 |        309 |       0 |    0 |   1571 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_820 |               engine_output_bridge__parameterized2 |         16 |         16 |       0 |    0 |    419 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_822 |               engine_output_bridge__parameterized3 |        313 |        313 |       0 |    0 |   2339 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_824 |               engine_output_bridge__parameterized4 |        462 |        462 |       0 |    0 |   2346 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_826 |               engine_output_bridge__parameterized5 |         27 |         27 |       0 |    0 |    426 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_828 |               engine_output_bridge__parameterized6 |       1467 |       1467 |       0 |    0 |   2339 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_830 |               engine_output_bridge__parameterized7 |        607 |        607 |       0 |    0 |   2346 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_832 |               engine_output_bridge__parameterized8 |         17 |         17 |       0 |    0 |    547 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_834 |               engine_output_bridge__parameterized9 |        420 |        420 |       0 |    0 |   3114 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_836 |              engine_output_bridge__parameterized10 |       4060 |       4060 |       0 |    0 |   3107 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_838 |              engine_output_bridge__parameterized11 |         17 |         17 |       0 |    0 |    547 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_840 |              engine_output_bridge__parameterized12 |       4060 |       4060 |       0 |    0 |   3107 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_842 |              engine_output_bridge__parameterized13 |       4068 |       4068 |       0 |    0 |   3114 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_844 |              engine_output_bridge__parameterized14 |         28 |         28 |       0 |    0 |    554 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_846 |              engine_output_bridge__parameterized15 |        803 |        803 |       0 |    0 |   3114 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_848 |              engine_output_bridge__parameterized16 |        611 |        611 |       0 |    0 |   3114 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_850 |              engine_output_bridge__parameterized17 |         27 |         27 |       0 |    0 |   1066 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_852 |              engine_output_bridge__parameterized18 |       2518 |       2518 |       0 |    0 |   6213 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_854 |              engine_output_bridge__parameterized19 |       4436 |       4436 |       0 |    0 |   6213 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_856 |              engine_output_bridge__parameterized20 |         26 |         26 |       0 |    0 |   1066 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_858 |              engine_output_bridge__parameterized21 |       2510 |       2510 |       0 |    0 |   6212 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_860 |              engine_output_bridge__parameterized22 |       7118 |       7118 |       0 |    0 |   6212 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_862 |              engine_output_bridge__parameterized23 |         18 |         18 |       0 |    0 |   1059 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_864 |              engine_output_bridge__parameterized24 |       2511 |       2511 |       0 |    0 |   6212 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_866 |              engine_output_bridge__parameterized25 |       8277 |       8277 |       0 |    0 |   6213 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_868 |              engine_output_bridge__parameterized26 |         26 |         26 |       0 |    0 |   1066 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_870 |              engine_output_bridge__parameterized27 |       7117 |       7117 |       0 |    0 |   6212 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_872 |              engine_output_bridge__parameterized28 |       2509 |       2509 |       0 |    0 |   6212 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_874 |              engine_output_bridge__parameterized29 |         21 |         21 |       0 |    0 |   1571 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_876 |              engine_output_bridge__parameterized30 |        762 |        762 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_878 |              engine_output_bridge__parameterized31 |        769 |        769 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_880 |              engine_output_bridge__parameterized32 |         23 |         23 |       0 |    0 |   1571 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_882 |              engine_output_bridge__parameterized33 |        766 |        766 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_884 |              engine_output_bridge__parameterized34 |        769 |        769 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_886 |              engine_output_bridge__parameterized35 |         29 |         29 |       0 |    0 |   1578 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_888 |              engine_output_bridge__parameterized36 |        766 |        766 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_890 |              engine_output_bridge__parameterized37 |        762 |        762 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_892 |              engine_output_bridge__parameterized38 |         33 |         33 |       0 |    0 |   2602 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_894 |              engine_output_bridge__parameterized39 |        805 |        805 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_896 |              engine_output_bridge__parameterized40 |        785 |        785 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_898 |              engine_output_bridge__parameterized41 |         33 |         33 |       0 |    0 |   2602 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_900 |              engine_output_bridge__parameterized42 |        803 |        803 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_902 |              engine_output_bridge__parameterized43 |        785 |        785 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_904 |              engine_output_bridge__parameterized44 |         25 |         25 |       0 |    0 |   2595 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_906 |              engine_output_bridge__parameterized45 |        787 |        787 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_908 |              engine_output_bridge__parameterized46 |        790 |        790 |       0 |    0 |   2441 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_910 |              engine_output_bridge__parameterized47 |        321 |        321 |       0 |    0 |   5181 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_conv_912 |              engine_output_bridge__parameterized48 |        740 |        740 |       0 |    0 |   2409 |      0 |      0 |    0 |          0 |
+|   u_engine_out_node_linear   |              engine_output_bridge__parameterized49 |       8126 |       8126 |       0 |    0 |  16058 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_814        |                          stream_to_act_bram_bridge |        209 |        209 |       0 |    0 |    510 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_816        |          stream_to_act_bram_bridge__parameterized0 |         65 |         65 |       0 |    0 |    318 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_818        |         stream_to_act_bram_bridge__parameterized24 |         39 |         39 |       0 |    0 |   1378 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_820        |          stream_to_act_bram_bridge__parameterized1 |         44 |         44 |       0 |    0 |   1387 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_822        |          stream_to_act_bram_bridge__parameterized2 |        931 |        931 |       0 |    0 |    418 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_824        |         stream_to_act_bram_bridge__parameterized16 |       4283 |       4283 |       0 |    0 |   1773 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_826        |          stream_to_act_bram_bridge__parameterized3 |        552 |        552 |       0 |    0 |   2059 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_828        |        stream_to_act_bram_bridge__parameterized2_2 |         48 |         48 |       0 |    0 |    418 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_830        |       stream_to_act_bram_bridge__parameterized16_3 |         50 |         50 |       0 |    0 |   2059 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_832        |          stream_to_act_bram_bridge__parameterized5 |        846 |        846 |       0 |    0 |   2050 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_834        |          stream_to_act_bram_bridge__parameterized6 |        125 |        125 |       0 |    0 |    548 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_836        |         stream_to_act_bram_bridge__parameterized17 |        391 |        391 |       0 |    0 |   2733 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_838        |          stream_to_act_bram_bridge__parameterized7 |         53 |         53 |       0 |    0 |   2734 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_840        |        stream_to_act_bram_bridge__parameterized6_4 |        930 |        930 |       0 |    0 |    558 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_842        |         stream_to_act_bram_bridge__parameterized18 |         58 |         58 |       0 |    0 |   2737 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_844        |        stream_to_act_bram_bridge__parameterized7_5 |       1161 |       1161 |       0 |    0 |   2722 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_846        |        stream_to_act_bram_bridge__parameterized6_6 |         38 |         38 |       0 |    0 |    546 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_848        |       stream_to_act_bram_bridge__parameterized17_7 |       1111 |       1111 |       0 |    0 |   2722 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_850        |          stream_to_act_bram_bridge__parameterized8 |       1723 |       1723 |       0 |    0 |   2722 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_852        |          stream_to_act_bram_bridge__parameterized9 |        297 |        297 |       0 |    0 |   1063 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_854        |         stream_to_act_bram_bridge__parameterized19 |       2267 |       2267 |       0 |    0 |   5426 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_856        |         stream_to_act_bram_bridge__parameterized10 |        515 |        515 |       0 |    0 |   5417 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_858        |        stream_to_act_bram_bridge__parameterized9_8 |        593 |        593 |       0 |    0 |   1073 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_860        |         stream_to_act_bram_bridge__parameterized20 |        978 |        978 |       0 |    0 |   5427 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_862        |       stream_to_act_bram_bridge__parameterized10_9 |       1855 |       1855 |       0 |    0 |   5427 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_864        |       stream_to_act_bram_bridge__parameterized9_10 |         42 |         42 |       0 |    0 |   1063 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_866        |         stream_to_act_bram_bridge__parameterized21 |        529 |        529 |       0 |    0 |   5412 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_868        |      stream_to_act_bram_bridge__parameterized10_11 |       4528 |       4528 |       0 |    0 |   5418 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_870        |       stream_to_act_bram_bridge__parameterized9_12 |        106 |        106 |       0 |    0 |   1063 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_872        |         stream_to_act_bram_bridge__parameterized22 |       2337 |       2337 |       0 |    0 |   5412 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_874        |      stream_to_act_bram_bridge__parameterized10_13 |        512 |        512 |       0 |    0 |   5427 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_878        |    tiled_stream_to_act_bram_bridge__parameterized3 |       1466 |       1466 |       0 |    0 |   3679 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_880        |         stream_to_act_bram_bridge__parameterized11 |       1888 |       1888 |       0 |    0 |   3633 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_882        |         stream_to_act_bram_bridge__parameterized12 |         48 |         48 |       0 |    0 |   1581 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_884        |    tiled_stream_to_act_bram_bridge__parameterized4 |       1435 |       1435 |       0 |    0 |   3657 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_886        |      stream_to_act_bram_bridge__parameterized11_14 |         71 |         71 |       0 |    0 |   3633 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_888        |      stream_to_act_bram_bridge__parameterized12_15 |       1000 |       1000 |       0 |    0 |   1570 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_890        | tiled_stream_to_act_bram_bridge__parameterized3_16 |       3363 |       3363 |       0 |    0 |   3687 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_892        |         stream_to_act_bram_bridge__parameterized13 |        530 |        530 |       0 |    0 |   3634 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_894        |         stream_to_act_bram_bridge__parameterized14 |       1348 |       1348 |       0 |    0 |   2610 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_896        |                    tiled_stream_to_act_bram_bridge |       4372 |       4372 |       0 |    0 |   3667 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_898        |    tiled_stream_to_act_bram_bridge__parameterized2 |       1659 |       1659 |       0 |    0 |   3660 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_900        |      stream_to_act_bram_bridge__parameterized14_17 |        272 |        272 |       0 |    0 |   2605 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_902        |    tiled_stream_to_act_bram_bridge__parameterized0 |       2117 |       2117 |       0 |    0 |   3671 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_904        | tiled_stream_to_act_bram_bridge__parameterized2_18 |       1971 |       1971 |       0 |    0 |   3681 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_906        |      stream_to_act_bram_bridge__parameterized14_19 |        136 |        136 |       0 |    0 |   2594 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_908        |    tiled_stream_to_act_bram_bridge__parameterized1 |       1916 |       1916 |       0 |    0 |   3671 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_910        | tiled_stream_to_act_bram_bridge__parameterized2_20 |       5687 |       5687 |       0 |    0 |   3662 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_conv_912        |         stream_to_act_bram_bridge__parameterized15 |        449 |        449 |       0 |    0 |   5172 |      0 |      0 |    0 |          0 |
+|   u_ldr_node_linear          |         stream_to_act_bram_bridge__parameterized23 |       5273 |       5273 |       0 |    0 |   4130 |      0 |      0 |    0 |          0 |
+|   u_lhs_node_add_1038        |                          skip_fifo__parameterized3 |        385 |        385 |       0 |    0 |     15 |     18 |      0 |    0 |          0 |
+|   u_lhs_node_add_1110        |                       skip_fifo__parameterized3_21 |        387 |        387 |       0 |    0 |     15 |     18 |      0 |    0 |          0 |
+|   u_lhs_node_add_198         |                                          skip_fifo |         85 |         85 |       0 |    0 |     27 |     21 |      1 |    0 |          0 |
+|   u_lhs_node_add_828         |                          skip_fifo__parameterized2 |        237 |        237 |       0 |    0 |     19 |     11 |      0 |    0 |          0 |
+|   u_lhs_node_add_900         |                       skip_fifo__parameterized2_22 |        253 |        253 |       0 |    0 |     19 |     11 |      0 |    0 |          0 |
+|   u_n4_10                    |                                              n4_10 |          0 |          0 |       0 |    0 |   1345 |      0 |      0 |    0 |          0 |
+|   u_n4_11                    |                                              n4_11 |          0 |          0 |       0 |    0 |   1345 |      0 |      0 |    0 |          0 |
+|   u_n4_12                    |                                              n4_12 |          0 |          0 |       0 |    0 |   1345 |      0 |      0 |    0 |          0 |
+|   u_n4_13                    |                                              n4_13 |       2112 |       2112 |       0 |    0 |   1345 |      0 |      0 |    0 |          0 |
+|   u_n4_14                    |                                              n4_14 |       2112 |       2112 |       0 |    0 |   1345 |      0 |      0 |    0 |          0 |
+|   u_n4_15                    |                                              n4_15 |       4992 |       4992 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_16                    |                                              n4_16 |          0 |          0 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_17                    |                                              n4_17 |       4608 |       4608 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_18                    |                                              n4_18 |          0 |          0 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_19                    |                                              n4_19 |       4992 |       4992 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_2                     |                                               n4_2 |          2 |          2 |       0 |    0 |    225 |      0 |      0 |    0 |          0 |
+|   u_n4_20                    |                                              n4_20 |          0 |          0 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_21                    |                                              n4_21 |        384 |        384 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_22                    |                                              n4_22 |       4992 |       4992 |       0 |    0 |   2689 |      0 |      0 |    0 |          0 |
+|   u_n4_23                    |                                              n4_23 |       1690 |       1394 |     296 |    0 |    240 |      0 |      0 |    0 |          0 |
+|   u_n4_24                    |                                              n4_24 |       1979 |       1683 |     296 |    0 |    241 |      0 |      0 |    0 |          0 |
+|   u_n4_25                    |                                              n4_25 |       1690 |       1394 |     296 |    0 |    240 |      0 |      0 |    0 |          0 |
+|   u_n4_26                    |                                              n4_26 |       1403 |       1107 |     296 |    0 |    241 |      0 |      0 |    0 |          0 |
+|   u_n4_27                    |                                              n4_27 |       1851 |       1555 |     296 |    0 |    241 |      0 |      0 |    0 |          0 |
+|   u_n4_28                    |                                              n4_28 |       1626 |       1330 |     296 |    0 |    240 |      0 |      0 |    0 |          0 |
+|   u_n4_29                    |                                              n4_29 |       1687 |       1391 |     296 |    0 |    239 |      0 |      0 |    0 |          0 |
+|   u_n4_3                     |                                               n4_3 |        768 |        768 |       0 |    0 |    673 |      0 |      0 |    0 |          0 |
+|   u_n4_30                    |                                              n4_30 |       1687 |       1391 |     296 |    0 |    239 |      0 |      0 |    0 |          0 |
+|   u_n4_31                    |                                              n4_31 |       1527 |       1231 |     296 |    0 |    239 |      0 |      0 |    0 |          0 |
+|   u_n4_32                    |                                              n4_32 |       1527 |       1231 |     296 |    0 |    239 |      0 |      0 |    0 |          0 |
+|   u_n4_33                    |                                              n4_33 |       1689 |       1393 |     296 |    0 |    239 |      0 |      0 |    0 |          0 |
+|   u_n4_34                    |                                              n4_34 |       1527 |       1231 |     296 |    0 |    239 |      0 |      0 |    0 |          0 |
+|   u_n4_35                    |                                              n4_35 |       1324 |        732 |     592 |    0 |    249 |      0 |      0 |    0 |          0 |
+|   u_n4_4                     |                                               n4_4 |        960 |        960 |       0 |    0 |    673 |      0 |      0 |    0 |          0 |
+|   u_n4_5                     |                                               n4_5 |       1872 |       1872 |       0 |    0 |    865 |      0 |      0 |    0 |          0 |
+|   u_n4_6                     |                                               n4_6 |       1440 |       1440 |       0 |    0 |   1009 |      0 |      0 |    0 |          0 |
+|   u_n4_7                     |                                               n4_7 |          0 |          0 |       0 |    0 |   1009 |      0 |      0 |    0 |          0 |
+|   u_n4_8                     |                                               n4_8 |       1584 |       1584 |       0 |    0 |   1009 |      0 |      0 |    0 |          0 |
+|   u_n4_9                     |                                               n4_9 |       1728 |       1728 |       0 |    0 |   1345 |      0 |      0 |    0 |          0 |
+|   u_node_add_1038            |                                      node_add_1038 |        566 |        566 |       0 |    0 |   2627 |      0 |      0 |    0 |          2 |
+|   u_node_add_1110            |                                      node_add_1110 |        590 |        590 |       0 |    0 |   2619 |      0 |      0 |    0 |          2 |
+|   u_node_add_198             |                                       node_add_198 |        216 |        216 |       0 |    0 |    404 |      0 |      0 |    0 |          4 |
+|   u_node_add_336             |                                       node_add_336 |        272 |        272 |       0 |    0 |    791 |      0 |      0 |    0 |          4 |
+|   u_node_add_408             |                                       node_add_408 |        271 |        271 |       0 |    0 |    791 |      0 |      0 |    0 |          4 |
+|   u_node_add_546             |                                       node_add_546 |        528 |        528 |       0 |    0 |   1565 |      0 |      0 |    0 |          4 |
+|   u_node_add_618             |                                       node_add_618 |        718 |        718 |       0 |    0 |   1576 |      0 |      0 |    0 |          2 |
+|   u_node_add_690             |                                       node_add_690 |        720 |        720 |       0 |    0 |   1579 |      0 |      0 |    0 |          2 |
+|   u_node_add_828             |                                       node_add_828 |        561 |        561 |       0 |    0 |   1600 |      0 |      0 |    0 |          2 |
+|   u_node_add_900             |                                       node_add_900 |        282 |        282 |       0 |    0 |   1600 |      0 |      0 |    0 |          2 |
+|   u_node_conv_810            |                                      node_conv_810 |       4313 |       4313 |       0 |    0 |   1890 |      0 |      0 |    3 |        144 |
+|     (u_node_conv_810)        |                                      node_conv_810 |         66 |         66 |       0 |    0 |    260 |      0 |      0 |    0 |          0 |
+|     dp                       |                                 conv_datapath_mp_k |       3892 |       3892 |       0 |    0 |   1424 |      0 |      0 |    0 |        144 |
+|     lbw                      |                                    line_buf_window |        282 |        282 |       0 |    0 |    173 |      0 |      0 |    3 |          0 |
+|     scheduler                |                                    coord_scheduler |         73 |         73 |       0 |    0 |     33 |      0 |      0 |    0 |          0 |
+|   u_node_conv_812            |                                      node_conv_812 |       5579 |       5579 |       0 |    0 |   2389 |     12 |      0 |    0 |         82 |
+|     (u_node_conv_812)        |                                      node_conv_812 |       3776 |       3776 |       0 |    0 |   1233 |      0 |      0 |    0 |         82 |
+|     lbw                      |                    line_buf_window__parameterized0 |       1705 |       1705 |       0 |    0 |   1125 |     12 |      0 |    0 |          0 |
+|     scheduler                |                    coord_scheduler__parameterized0 |         98 |         98 |       0 |    0 |     31 |      0 |      0 |    0 |          0 |
+|   u_node_mean                |                                          node_mean |      24210 |      14322 |    9888 |    0 |  10563 |      0 |      0 |    0 |         16 |
+|   u_output_serializer        |                                  output_serializer |       2321 |       2321 |       0 |    0 |   8273 |      0 |      0 |    0 |          0 |
+|   u_scheduler                |                                   nn2rtl_scheduler |        318 |        318 |       0 |    0 |     27 |      0 |      0 |    0 |          0 |
+|   u_shared_engine            |                                      shared_engine |      46090 |      46090 |       0 |    0 |  22498 |      0 |      0 |    0 |       3075 |
+|     (u_shared_engine)        |                                      shared_engine |          6 |          6 |       0 |    0 |  10598 |      0 |      0 |    0 |          0 |
+|     u_address_generator      |                                  address_generator |        263 |        263 |       0 |    0 |    399 |      0 |      0 |    0 |          3 |
+|     u_bram_to_stream_bridge  |                              bram_to_stream_bridge |       2031 |       2031 |       0 |    0 |   2049 |      0 |      0 |    0 |          0 |
+|     u_config_register_block  |                              config_register_block |       1604 |       1604 |       0 |    0 |    151 |      0 |      0 |    0 |          0 |
+|     u_mac_array              |                                          mac_array |       5089 |       5089 |       0 |    0 |     64 |      0 |      0 |    0 |       2048 |
+|     u_requant_pipeline       |                                   requant_pipeline |      37122 |      37122 |       0 |    0 |   9237 |      0 |      0 |    0 |       1024 |
+|   u_skip_node_add_1038       |                       skip_fifo__parameterized3_23 |        357 |        357 |       0 |    0 |     15 |     18 |      0 |    0 |          0 |
+|   u_skip_node_add_1110       |                       skip_fifo__parameterized3_24 |        354 |        354 |       0 |    0 |     15 |     18 |      0 |    0 |          0 |
+|   u_skip_node_add_198        |                                       skip_fifo_25 |         83 |         83 |       0 |    0 |     27 |     21 |      1 |    0 |          0 |
+|   u_skip_node_add_336        |                          skip_fifo__parameterized0 |         96 |         96 |       0 |    0 |     23 |      7 |      1 |    0 |          0 |
+|   u_skip_node_add_408        |                       skip_fifo__parameterized0_26 |         96 |         96 |       0 |    0 |     23 |      7 |      1 |    0 |          0 |
+|   u_skip_node_add_546        |                          skip_fifo__parameterized1 |        157 |        157 |       0 |    0 |     19 |      7 |      1 |    0 |          0 |
+|   u_skip_node_add_618        |                       skip_fifo__parameterized1_27 |        158 |        158 |       0 |    0 |     19 |      7 |      1 |    0 |          0 |
+|   u_skip_node_add_690        |                       skip_fifo__parameterized1_28 |        156 |        156 |       0 |    0 |     19 |      7 |      1 |    0 |          0 |
+|   u_skip_node_add_828        |                       skip_fifo__parameterized2_29 |        221 |        221 |       0 |    0 |     19 |     11 |      0 |    0 |          0 |
+|   u_skip_node_add_900        |                       skip_fifo__parameterized2_30 |        222 |        222 |       0 |    0 |     19 |     11 |      0 |    0 |          0 |
+|   u_uram_weight_bank0        |                                   uram_weight_bank |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                                   xpm_memory_sprom |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                                   xpm_memory_sprom |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank1        |                   uram_weight_bank__parameterized0 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized0 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized0 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank2        |                   uram_weight_bank__parameterized1 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized1 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized1 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank3        |                   uram_weight_bank__parameterized2 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized2 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized2 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank4        |                   uram_weight_bank__parameterized3 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized3 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized3 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank5        |                   uram_weight_bank__parameterized4 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized4 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized4 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank6        |                   uram_weight_bank__parameterized5 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized5 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized5 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
+|   u_uram_weight_bank7        |                   uram_weight_bank__parameterized6 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|     u_xpm                    |                   xpm_memory_sprom__parameterized6 |        519 |        519 |       0 |    0 |      0 |    172 |      0 |    0 |          0 |
+|       (u_xpm)                |                   xpm_memory_sprom__parameterized6 |        512 |        512 |       0 |    0 |      0 |      0 |      0 |    0 |          0 |
++------------------------------+----------------------------------------------------+------------+------------+---------+------+--------+--------+--------+------+------------+
+
+

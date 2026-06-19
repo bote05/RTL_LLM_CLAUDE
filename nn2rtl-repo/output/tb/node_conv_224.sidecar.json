@@ -1,0 +1,29 @@
+{
+  "module_name": "node_conv_224",
+  "module_id": "node_conv_224",
+  "clock_signal": "clk",
+  "reset_signal": "rst_n",
+  "valid_in_signal": "valid_in",
+  "valid_out_signal": "valid_out",
+  "ready_in_signal": "ready_in",
+  "data_in_signal": "data_in",
+  "data_out_signal": "data_out",
+  "bus_bytes_per_sample": 32,
+  "input_width_bits": 256,
+  "output_width_bits": 256,
+  "pipeline_latency_cycles": 131848,
+  "clock_period_ns": 20,
+  "golden_inputs_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\_worker_2\\goldens\\contracts\\node_conv_224_tiled-streaming_conv2d_256x512x1x1_s56x56_st2x2_p0x0_d1x1_g1_mp4_i\\node_conv_224.goldin",
+  "golden_outputs_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\_worker_2\\goldens\\contracts\\node_conv_224_tiled-streaming_conv2d_256x512x1x1_s56x56_st2x2_p0x0_d1x1_g1_mp4_i\\node_conv_224.goldout",
+  "results_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\_worker_2\\reports\\node_conv_224.results.json",
+  "testbench_template_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\contracts\\tiled-streaming\\testbench.cpp",
+  "contract_id": "tiled-streaming",
+  "contract_name": "Tiled Streaming (Canonical ResNet-50 ABI)",
+  "contract_metadata_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\contracts\\tiled-streaming\\metadata.json",
+  "beat_width_bits": 256,
+  "beats_per_input_sample": 8,
+  "beats_per_output_sample": 16,
+  "contract_params": {
+    "beat_width_bits": 256
+  }
+}

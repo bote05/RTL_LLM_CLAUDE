@@ -1,0 +1,300 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date              : Mon Jun  1 12:25:27 2026
+| Host              : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command           : report_timing -max_paths 3 -nworst 3 -setup -path_type full_clock_expanded -file C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/fmax_worst_detail.rpt
+| Design            : nn2rtl_top
+| Device            : xcu250-figd2104
+| Speed File        : -2L  PRODUCTION 1.28 03-30-2022
+| Design State      : Fully Placed
+| Temperature Grade : E
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             22.461ns  (required time - arrival time)
+  Source:                 u_scheduler/FSM_onehot_state_reg[5]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_node_add_1/FSM_sequential_state_reg[1]/CE
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        16.903ns  (logic 0.495ns (2.928%)  route 16.408ns (97.072%))
+  Logic Levels:           5  (LUT2=1 LUT5=2 LUT6=2)
+  Clock Path Skew:        -0.307ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    2.755ns = ( 42.755 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.400ns
+    Clock Pessimism Removal (CPR):    0.338ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+  Inter-SLR Compensation: 0.234ns  ((DCD - CCD) * PF)
+    Destination Clock Delay (DCD):    2.755ns
+    Common Clock Delay      (CCD):    1.198ns
+    Prorating Factor         (PF):    0.150
+  Clock Net Delay (Source):      2.394ns (routing 0.530ns, distribution 1.864ns)
+  Clock Net Delay (Destination): 2.040ns (routing 0.483ns, distribution 1.557ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+    BA14                                              0.000     0.000 r  clk (IN)
+                         net (fo=0)                   0.000     0.000    clk_IBUF_inst/I
+    BA14                 INBUF (Prop_INBUF_HPIOB_M_PAD_O)
+                                                      0.655     0.655 r  clk_IBUF_inst/INBUF_INST/O
+                         net (fo=1, routed)           0.000     0.655    clk_IBUF_inst/OUT
+    BA14                 IBUFCTRL (Prop_IBUFCTRL_HPIOB_M_I_O)
+                                                      0.000     0.655 r  clk_IBUF_inst/IBUFCTRL_INST/O
+                         net (fo=1, estimated)        0.323     0.978    clk_IBUF
+    BUFGCE_X0Y191        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.028     1.006 r  clk_IBUF_BUFG_inst/O
+    X3Y7 (CLOCK_ROOT)    net (fo=1370832, estimated)
+                                                      2.394     3.400    u_scheduler/clk
+    SLR Crossing[1->2]   
+    SLICE_X91Y506        FDCE                                         r  u_scheduler/FSM_onehot_state_reg[5]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X91Y506        FDCE (Prop_DFF2_SLICEM_C_Q)
+                                                      0.080     3.480 f  u_scheduler/FSM_onehot_state_reg[5]/Q
+                         net (fo=6, estimated)        0.167     3.647    u_scheduler/engine_start
+    SLICE_X90Y506        LUT2 (Prop_A6LUT_SLICEL_I1_O)
+                                                      0.090     3.737 f  u_scheduler/out_idx[3]_i_5/O
+                         net (fo=7, estimated)        0.181     3.918    u_scheduler/out_idx[3]_i_5_n_0
+    SLICE_X91Y505        LUT6 (Prop_F6LUT_SLICEM_I5_O)
+                                                      0.148     4.066 r  u_scheduler/out_idx[3]_i_3__6/O
+                         net (fo=108, estimated)      6.160    10.226    u_skid_node_relu_6/spatial_run
+    SLR Crossing[2->3]   
+    SLICE_X223Y916       LUT5 (Prop_C6LUT_SLICEL_I0_O)
+                                                      0.050    10.276 r  u_skid_node_relu_6/out_beat_count[3]_i_3__11/O
+                         net (fo=5, estimated)        4.750    15.026    u_node_add_1/ready_out0251_out
+    SLR Crossing[3->2]   
+    SLICE_X111Y623       LUT6 (Prop_C6LUT_SLICEM_I4_O)
+                                                      0.037    15.063 r  u_node_add_1/FSM_sequential_state[1]_i_3__0/O
+                         net (fo=1, estimated)        0.668    15.731    u_node_add_1/FSM_sequential_state[1]_i_3__0_n_0
+    SLICE_X117Y628       LUT5 (Prop_B6LUT_SLICEL_I4_O)
+                                                      0.090    15.821 r  u_node_add_1/FSM_sequential_state[1]_i_1__8/O
+                         net (fo=2, estimated)        4.482    20.303    u_node_add_1/FSM_sequential_state[1]_i_1__8_n_0
+    SLR Crossing[2->0]   
+    SLICE_X112Y233       FDCE                                         r  u_node_add_1/FSM_sequential_state_reg[1]/CE
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+    BA14                                              0.000    40.000 r  clk (IN)
+                         net (fo=0)                   0.000    40.000    clk_IBUF_inst/I
+    BA14                 INBUF (Prop_INBUF_HPIOB_M_PAD_O)
+                                                      0.404    40.404 r  clk_IBUF_inst/INBUF_INST/O
+                         net (fo=1, routed)           0.000    40.404    clk_IBUF_inst/OUT
+    BA14                 IBUFCTRL (Prop_IBUFCTRL_HPIOB_M_I_O)
+                                                      0.000    40.404 r  clk_IBUF_inst/IBUFCTRL_INST/O
+                         net (fo=1, estimated)        0.287    40.691    clk_IBUF
+    BUFGCE_X0Y191        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.024    40.715 r  clk_IBUF_BUFG_inst/O
+    X3Y7 (CLOCK_ROOT)    net (fo=1370832, estimated)
+                                                      2.040    42.755    u_node_add_1/clk_IBUF_BUFG
+    SLR Crossing[1->0]   
+    SLICE_X112Y233       FDCE                                         r  u_node_add_1/FSM_sequential_state_reg[1]/C
+                         clock pessimism              0.338    43.093    
+                         inter-SLR compensation      -0.234    42.860    
+                         clock uncertainty           -0.035    42.824    
+    SLICE_X112Y233       FDCE (Setup_DFF_SLICEL_C_CE)
+                                                     -0.060    42.764    u_node_add_1/FSM_sequential_state_reg[1]
+  -------------------------------------------------------------------
+                         required time                         42.764    
+                         arrival time                         -20.303    
+  -------------------------------------------------------------------
+                         slack                                 22.461    
+
+Slack (MET) :             22.461ns  (required time - arrival time)
+  Source:                 u_scheduler/FSM_onehot_state_reg[5]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_node_add_1/FSM_sequential_state_reg[1]/CE
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        16.903ns  (logic 0.495ns (2.928%)  route 16.408ns (97.072%))
+  Logic Levels:           5  (LUT2=1 LUT5=2 LUT6=2)
+  Clock Path Skew:        -0.307ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    2.755ns = ( 42.755 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.400ns
+    Clock Pessimism Removal (CPR):    0.338ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+  Inter-SLR Compensation: 0.234ns  ((DCD - CCD) * PF)
+    Destination Clock Delay (DCD):    2.755ns
+    Common Clock Delay      (CCD):    1.198ns
+    Prorating Factor         (PF):    0.150
+  Clock Net Delay (Source):      2.394ns (routing 0.530ns, distribution 1.864ns)
+  Clock Net Delay (Destination): 2.040ns (routing 0.483ns, distribution 1.557ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+    BA14                                              0.000     0.000 r  clk (IN)
+                         net (fo=0)                   0.000     0.000    clk_IBUF_inst/I
+    BA14                 INBUF (Prop_INBUF_HPIOB_M_PAD_O)
+                                                      0.655     0.655 r  clk_IBUF_inst/INBUF_INST/O
+                         net (fo=1, routed)           0.000     0.655    clk_IBUF_inst/OUT
+    BA14                 IBUFCTRL (Prop_IBUFCTRL_HPIOB_M_I_O)
+                                                      0.000     0.655 r  clk_IBUF_inst/IBUFCTRL_INST/O
+                         net (fo=1, estimated)        0.323     0.978    clk_IBUF
+    BUFGCE_X0Y191        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.028     1.006 r  clk_IBUF_BUFG_inst/O
+    X3Y7 (CLOCK_ROOT)    net (fo=1370832, estimated)
+                                                      2.394     3.400    u_scheduler/clk
+    SLR Crossing[1->2]   
+    SLICE_X91Y506        FDCE                                         r  u_scheduler/FSM_onehot_state_reg[5]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X91Y506        FDCE (Prop_DFF2_SLICEM_C_Q)
+                                                      0.080     3.480 r  u_scheduler/FSM_onehot_state_reg[5]/Q
+                         net (fo=6, estimated)        0.167     3.647    u_scheduler/engine_start
+    SLICE_X90Y506        LUT2 (Prop_A6LUT_SLICEL_I1_O)
+                                                      0.090     3.737 r  u_scheduler/out_idx[3]_i_5/O
+                         net (fo=7, estimated)        0.181     3.918    u_scheduler/out_idx[3]_i_5_n_0
+    SLICE_X91Y505        LUT6 (Prop_F6LUT_SLICEM_I5_O)
+                                                      0.148     4.066 f  u_scheduler/out_idx[3]_i_3__6/O
+                         net (fo=108, estimated)      6.160    10.226    u_skid_node_relu_6/spatial_run
+    SLR Crossing[2->3]   
+    SLICE_X223Y916       LUT5 (Prop_C6LUT_SLICEL_I0_O)
+                                                      0.050    10.276 f  u_skid_node_relu_6/out_beat_count[3]_i_3__11/O
+                         net (fo=5, estimated)        4.750    15.026    u_node_add_1/ready_out0251_out
+    SLR Crossing[3->2]   
+    SLICE_X111Y623       LUT6 (Prop_C6LUT_SLICEM_I4_O)
+                                                      0.037    15.063 f  u_node_add_1/FSM_sequential_state[1]_i_3__0/O
+                         net (fo=1, estimated)        0.668    15.731    u_node_add_1/FSM_sequential_state[1]_i_3__0_n_0
+    SLICE_X117Y628       LUT5 (Prop_B6LUT_SLICEL_I4_O)
+                                                      0.090    15.821 f  u_node_add_1/FSM_sequential_state[1]_i_1__8/O
+                         net (fo=2, estimated)        4.482    20.303    u_node_add_1/FSM_sequential_state[1]_i_1__8_n_0
+    SLR Crossing[2->0]   
+    SLICE_X112Y233       FDCE                                         f  u_node_add_1/FSM_sequential_state_reg[1]/CE
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+    BA14                                              0.000    40.000 r  clk (IN)
+                         net (fo=0)                   0.000    40.000    clk_IBUF_inst/I
+    BA14                 INBUF (Prop_INBUF_HPIOB_M_PAD_O)
+                                                      0.404    40.404 r  clk_IBUF_inst/INBUF_INST/O
+                         net (fo=1, routed)           0.000    40.404    clk_IBUF_inst/OUT
+    BA14                 IBUFCTRL (Prop_IBUFCTRL_HPIOB_M_I_O)
+                                                      0.000    40.404 r  clk_IBUF_inst/IBUFCTRL_INST/O
+                         net (fo=1, estimated)        0.287    40.691    clk_IBUF
+    BUFGCE_X0Y191        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.024    40.715 r  clk_IBUF_BUFG_inst/O
+    X3Y7 (CLOCK_ROOT)    net (fo=1370832, estimated)
+                                                      2.040    42.755    u_node_add_1/clk_IBUF_BUFG
+    SLR Crossing[1->0]   
+    SLICE_X112Y233       FDCE                                         r  u_node_add_1/FSM_sequential_state_reg[1]/C
+                         clock pessimism              0.338    43.093    
+                         inter-SLR compensation      -0.234    42.860    
+                         clock uncertainty           -0.035    42.824    
+    SLICE_X112Y233       FDCE (Setup_DFF_SLICEL_C_CE)
+                                                     -0.060    42.764    u_node_add_1/FSM_sequential_state_reg[1]
+  -------------------------------------------------------------------
+                         required time                         42.764    
+                         arrival time                         -20.303    
+  -------------------------------------------------------------------
+                         slack                                 22.461    
+
+Slack (MET) :             22.544ns  (required time - arrival time)
+  Source:                 u_scheduler/FSM_onehot_state_reg[3]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_node_add_1/FSM_sequential_state_reg[1]/CE
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        16.819ns  (logic 0.456ns (2.711%)  route 16.363ns (97.289%))
+  Logic Levels:           5  (LUT2=1 LUT5=2 LUT6=2)
+  Clock Path Skew:        -0.308ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    2.755ns = ( 42.755 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.401ns
+    Clock Pessimism Removal (CPR):    0.338ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+  Inter-SLR Compensation: 0.234ns  ((DCD - CCD) * PF)
+    Destination Clock Delay (DCD):    2.755ns
+    Common Clock Delay      (CCD):    1.198ns
+    Prorating Factor         (PF):    0.150
+  Clock Net Delay (Source):      2.395ns (routing 0.530ns, distribution 1.865ns)
+  Clock Net Delay (Destination): 2.040ns (routing 0.483ns, distribution 1.557ns)
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+    BA14                                              0.000     0.000 r  clk (IN)
+                         net (fo=0)                   0.000     0.000    clk_IBUF_inst/I
+    BA14                 INBUF (Prop_INBUF_HPIOB_M_PAD_O)
+                                                      0.655     0.655 r  clk_IBUF_inst/INBUF_INST/O
+                         net (fo=1, routed)           0.000     0.655    clk_IBUF_inst/OUT
+    BA14                 IBUFCTRL (Prop_IBUFCTRL_HPIOB_M_I_O)
+                                                      0.000     0.655 r  clk_IBUF_inst/IBUFCTRL_INST/O
+                         net (fo=1, estimated)        0.323     0.978    clk_IBUF
+    BUFGCE_X0Y191        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.028     1.006 r  clk_IBUF_BUFG_inst/O
+    X3Y7 (CLOCK_ROOT)    net (fo=1370832, estimated)
+                                                      2.395     3.401    u_scheduler/clk
+    SLR Crossing[1->2]   
+    SLICE_X90Y505        FDCE                                         r  u_scheduler/FSM_onehot_state_reg[3]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X90Y505        FDCE (Prop_FFF2_SLICEL_C_Q)
+                                                      0.081     3.482 f  u_scheduler/FSM_onehot_state_reg[3]/Q
+                         net (fo=10, estimated)       0.122     3.604    u_scheduler/FSM_onehot_state_reg_n_0_[3]
+    SLICE_X90Y506        LUT2 (Prop_A6LUT_SLICEL_I0_O)
+                                                      0.050     3.654 f  u_scheduler/out_idx[3]_i_5/O
+                         net (fo=7, estimated)        0.181     3.835    u_scheduler/out_idx[3]_i_5_n_0
+    SLICE_X91Y505        LUT6 (Prop_F6LUT_SLICEM_I5_O)
+                                                      0.148     3.983 r  u_scheduler/out_idx[3]_i_3__6/O
+                         net (fo=108, estimated)      6.160    10.143    u_skid_node_relu_6/spatial_run
+    SLR Crossing[2->3]   
+    SLICE_X223Y916       LUT5 (Prop_C6LUT_SLICEL_I0_O)
+                                                      0.050    10.193 r  u_skid_node_relu_6/out_beat_count[3]_i_3__11/O
+                         net (fo=5, estimated)        4.750    14.943    u_node_add_1/ready_out0251_out
+    SLR Crossing[3->2]   
+    SLICE_X111Y623       LUT6 (Prop_C6LUT_SLICEM_I4_O)
+                                                      0.037    14.980 r  u_node_add_1/FSM_sequential_state[1]_i_3__0/O
+                         net (fo=1, estimated)        0.668    15.648    u_node_add_1/FSM_sequential_state[1]_i_3__0_n_0
+    SLICE_X117Y628       LUT5 (Prop_B6LUT_SLICEL_I4_O)
+                                                      0.090    15.738 r  u_node_add_1/FSM_sequential_state[1]_i_1__8/O
+                         net (fo=2, estimated)        4.482    20.220    u_node_add_1/FSM_sequential_state[1]_i_1__8_n_0
+    SLR Crossing[2->0]   
+    SLICE_X112Y233       FDCE                                         r  u_node_add_1/FSM_sequential_state_reg[1]/CE
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+    BA14                                              0.000    40.000 r  clk (IN)
+                         net (fo=0)                   0.000    40.000    clk_IBUF_inst/I
+    BA14                 INBUF (Prop_INBUF_HPIOB_M_PAD_O)
+                                                      0.404    40.404 r  clk_IBUF_inst/INBUF_INST/O
+                         net (fo=1, routed)           0.000    40.404    clk_IBUF_inst/OUT
+    BA14                 IBUFCTRL (Prop_IBUFCTRL_HPIOB_M_I_O)
+                                                      0.000    40.404 r  clk_IBUF_inst/IBUFCTRL_INST/O
+                         net (fo=1, estimated)        0.287    40.691    clk_IBUF
+    BUFGCE_X0Y191        BUFGCE (Prop_BUFCE_BUFGCE_I_O)
+                                                      0.024    40.715 r  clk_IBUF_BUFG_inst/O
+    X3Y7 (CLOCK_ROOT)    net (fo=1370832, estimated)
+                                                      2.040    42.755    u_node_add_1/clk_IBUF_BUFG
+    SLR Crossing[1->0]   
+    SLICE_X112Y233       FDCE                                         r  u_node_add_1/FSM_sequential_state_reg[1]/C
+                         clock pessimism              0.338    43.093    
+                         inter-SLR compensation      -0.234    42.860    
+                         clock uncertainty           -0.035    42.824    
+    SLICE_X112Y233       FDCE (Setup_DFF_SLICEL_C_CE)
+                                                     -0.060    42.764    u_node_add_1/FSM_sequential_state_reg[1]
+  -------------------------------------------------------------------
+                         required time                         42.764    
+                         arrival time                         -20.220    
+  -------------------------------------------------------------------
+                         slack                                 22.544    
+
+
+
+

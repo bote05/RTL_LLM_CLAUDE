@@ -1,0 +1,597 @@
+{
+  "entry": {
+    "id": "node_conv2d_8__001__foundry_assayer__20260613T135104Z",
+    "created_at": "2026-06-13T13:51:04.906Z",
+    "network_id": "resnet8",
+    "model_name": "resnet8",
+    "module_id": "node_conv2d_8",
+    "stage": "foundry_assayer",
+    "attempt_index": 1,
+    "op_type": "conv2d",
+    "contract_id": "flat-bus",
+    "spec_hash": "conv2d_64x64x3x3_s8x8_st1x1_p1x1_d1x1_g1_mp4_i512_o512",
+    "generated_by": "Foundry",
+    "module_attempt": 1,
+    "rtl_path": "output/resnet8/failure_corpus/visible/node_conv2d_8/node_conv2d_8__001__foundry_assayer__20260613T135104Z/node_conv2d_8.v",
+    "failure_path": "output/resnet8/failure_corpus/visible/node_conv2d_8/node_conv2d_8__001__foundry_assayer__20260613T135104Z/failure.json",
+    "score": {
+      "syntax_ok": true,
+      "sim_completed": false,
+      "timing_delta_cycles": null,
+      "timing_abs_delta_cycles": null,
+      "outputs_received": 0,
+      "outputs_expected": 64,
+      "output_completion_ratio": 0,
+      "first_mismatch_index": -1,
+      "max_error": 0,
+      "mean_error": 0,
+      "exact_match_count": 0,
+      "mismatch_count": 0,
+      "signed_error_sum": 0,
+      "positive_error_count": 0,
+      "negative_error_count": 0,
+      "axi_out_of_range_reads": null
+    },
+    "summary": {
+      "status": "fail",
+      "status_class": "sim_stalled",
+      "failure_class": null,
+      "failure_category": "code_bug",
+      "timing_pass": false,
+      "timing_actual_cycles": -1,
+      "timing_expected_cycles": 1132,
+      "timing_delta_cycles": null,
+      "outputs_received": 0,
+      "outputs_expected": 64,
+      "output_completion_ratio": 0,
+      "first_mismatch": {
+        "flat_index": -1,
+        "vector_index": -1,
+        "output_index": -1,
+        "channel_index": -1,
+        "expected": 0,
+        "got": 0
+      },
+      "error_stats": {
+        "max_error": 0,
+        "mean_error": 0,
+        "exact_match_count": 0,
+        "mismatch_count": 0,
+        "signed_error_sum": 0,
+        "positive_error_count": 0,
+        "negative_error_count": 0
+      },
+      "gap": {
+        "missing_index_start": 0,
+        "missing_index_end": 64,
+        "output_gap_histogram": [
+          16,
+          16,
+          16,
+          16
+        ],
+        "last_valid_out_cycle": -1,
+        "simulation_end_cycle": 4550
+      },
+      "axi_weight_trace": {
+        "model_enabled": null,
+        "model_status": null,
+        "ar_handshakes": null,
+        "r_beats": null,
+        "completed_bursts": null,
+        "out_of_range_reads": null
+      },
+      "per_vector": [
+        {
+          "vector_idx": 0,
+          "outputs_received": 0,
+          "exact_match_count": 0,
+          "mismatch_count": 0,
+          "max_error": 0,
+          "mean_error": 0,
+          "actual_cycles": -1,
+          "first_mismatch_output_index": null
+        }
+      ]
+    },
+    "shape": {
+      "input_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weight_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "io_mode": "packed_full",
+      "channel_tile": null
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 64,
+      "output_channels": 64,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "bus_width_bits": 512,
+      "channel_tile": null,
+      "spatial_shape": [
+        8,
+        8
+      ],
+      "spatial_family": "tiny",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "e3e572c7b47be2347af309e662d8ffab",
+    "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor",
+    "applicability": {
+      "networks": [
+        "resnet8"
+      ],
+      "signature_hashes": [
+        "e3e572c7b47be2347af309e662d8ffab"
+      ],
+      "exact_reference_keys": [
+        "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+      ],
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor",
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "bus_width_bits": 512,
+      "channel_tile": null,
+      "input_channels": 64,
+      "output_channels": 64,
+      "quantization_family": "int8_symmetric_per_tensor",
+      "spatial_family": "tiny"
+    },
+    "contraindications": []
+  },
+  "layer_ir": {
+    "module_id": "node_conv2d_8",
+    "op_type": "conv2d",
+    "input_shape": [
+      1,
+      64,
+      8,
+      8
+    ],
+    "output_shape": [
+      1,
+      64,
+      8,
+      8
+    ],
+    "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights.hex",
+    "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_bias.hex",
+    "weight_shape": [
+      64,
+      64,
+      3,
+      3
+    ],
+    "num_weights": 36864,
+    "scale_factor": 0.30067238604677415,
+    "zero_point": 0,
+    "quantization_family": "int8_symmetric_per_tensor",
+    "pipeline_latency_cycles": 1132,
+    "clock_period_ns": 20,
+    "input_width_bits": 512,
+    "output_width_bits": 512,
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+    "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_8.goldin",
+    "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_8.goldout",
+    "stride": [
+      1,
+      1
+    ],
+    "padding": [
+      1,
+      1
+    ],
+    "dilation": [
+      1,
+      1
+    ],
+    "groups": 1,
+    "mac_parallelism": 4,
+    "weight_bank_paths": [
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank0.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank1.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank2.hex",
+      "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank3.hex"
+    ],
+    "contract_id": "flat-bus",
+    "io_mode": "packed_full",
+    "base_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 64,
+      "output_channels": 64,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "bus_width_bits": 512,
+      "channel_tile": null,
+      "spatial_shape": [
+        8,
+        8
+      ],
+      "spatial_family": "tiny",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "runtime_layer_signature": {
+      "version": 1,
+      "op_type": "conv2d",
+      "contract_id": "flat-bus",
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "input_channels": 64,
+      "output_channels": 64,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "bus_width_bits": 512,
+      "channel_tile": null,
+      "spatial_shape": [
+        8,
+        8
+      ],
+      "spatial_family": "tiny",
+      "quantization_family": "int8_symmetric_per_tensor"
+    },
+    "signature_hash": "e3e572c7b47be2347af309e662d8ffab",
+    "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor",
+    "weight_bits": 8,
+    "activation_bits": 8,
+    "scale_factor_per_oc": [
+      0.0029710516657522716,
+      0.0026821284346451963,
+      0.0032789467338239986,
+      0.0021969061538339323,
+      0.0028845833695453587,
+      0.003447890198533202,
+      0.0027968496494887125,
+      0.0042037901130873075,
+      0.002680180034745563,
+      0.003183421934375646,
+      0.00321613085870395,
+      0.003524486844601891,
+      0.0027629254254242183,
+      0.0026102118126527605,
+      0.0032520429659083547,
+      0.002793953651822428,
+      0.003159682146118806,
+      0.004351976314306987,
+      0.0028833792707283964,
+      0.002740505945521326,
+      0.002734660745822427,
+      0.0028025453169159237,
+      0.0028789462269211115,
+      0.0028887629925551206,
+      0.0033680721680946686,
+      0.003594408022833938,
+      0.003866039554860496,
+      0.0029202157337920548,
+      0.003926814622497284,
+      0.0026558507981143727,
+      0.002915771209042561,
+      0.002920938193082232,
+      0.003254212863985713,
+      0.0036200166844638955,
+      0.002218653858606152,
+      0.0042483305683956776,
+      0.0038143134298446687,
+      0.0029127265191735315,
+      0.0025836356716245224,
+      0.0032566440235040532,
+      0.00301748563645606,
+      0.003041650499597586,
+      0.003599044643348184,
+      0.0027913766003311484,
+      0.0038442610475604,
+      0.0030187384592716623,
+      0.0023510289822557067,
+      0.002435054918025052,
+      0.002921489278308228,
+      0.0027394651001021054,
+      0.0030213236314293817,
+      0.0032232580036084435,
+      0.002391566229032149,
+      0.003310265344053183,
+      0.003073171286418828,
+      0.002909538737561369,
+      0.002915812652443703,
+      0.0037822701201414614,
+      0.002658989015658953,
+      0.003444874631054164,
+      0.002676915526836693,
+      0.0025540277217843666,
+      0.0028497000667720056,
+      0.00359442090389105
+    ],
+    "weight_scale_per_oc": [
+      0.009881358593702316,
+      0.00892043486237526,
+      0.010905380360782146,
+      0.007306644227355719,
+      0.009593775495886803,
+      0.011467265896499157,
+      0.009301983751356602,
+      0.013981297612190247,
+      0.008913954719901085,
+      0.010587676428258419,
+      0.010696462355554104,
+      0.011722017079591751,
+      0.009189155884087086,
+      0.008681248873472214,
+      0.010815901681780815,
+      0.009292352013289928,
+      0.010508720763027668,
+      0.014474146999418736,
+      0.009589770808815956,
+      0.009114591404795647,
+      0.009095150977373123,
+      0.00932092685252428,
+      0.009575027041137218,
+      0.009607676416635513,
+      0.011201800778508186,
+      0.011954566463828087,
+      0.012857980094850063,
+      0.009712284430861473,
+      0.013060110621154308,
+      0.008833038620650768,
+      0.009697502478957176,
+      0.009714687243103981,
+      0.01082311850041151,
+      0.012039737775921822,
+      0.007378974463790655,
+      0.014129433780908585,
+      0.012685945257544518,
+      0.009687376208603382,
+      0.008592859841883183,
+      0.010831204243004322,
+      0.010035792365670204,
+      0.010116161778569221,
+      0.01196998730301857,
+      0.009283781051635742,
+      0.012785547412931919,
+      0.010039959102869034,
+      0.007819238118827343,
+      0.00809869822114706,
+      0.009716520085930824,
+      0.009111129678785801,
+      0.010048557072877884,
+      0.010720166377723217,
+      0.007954060100018978,
+      0.011009542271494865,
+      0.010220996104180813,
+      0.00967677403241396,
+      0.00969764031469822,
+      0.012579373084008694,
+      0.008843475952744484,
+      0.011457236483693123,
+      0.008903097361326218,
+      0.00849438738077879,
+      0.009477757848799229,
+      0.01195460930466652
+    ]
+  },
+  "module": {
+    "module_id": "node_conv2d_8",
+    "spec_hash": "conv2d_64x64x3x3_s8x8_st1x1_p1x1_d1x1_g1_mp4_i512_o512",
+    "generated_by": "Foundry",
+    "attempt": 1,
+    "rtl_path": "output/resnet8/failure_corpus/visible/node_conv2d_8/node_conv2d_8__001__foundry_assayer__20260613T135104Z/node_conv2d_8.v"
+  },
+  "verif_result": {
+    "module_id": "node_conv2d_8",
+    "status": "fail",
+    "timing_pass": false,
+    "timing_actual_cycles": -1,
+    "timing_expected_cycles": 1132,
+    "expected": [],
+    "got": [],
+    "max_error": 0,
+    "mean_error": 0,
+    "sample_count": 0,
+    "fix_hint": "Simulation stalled at cycle 4550 on vector 0 after emitting 0 of 64 expected outputs. Last valid_out fired at cycle -1. Missing output indices: [0, 64). See output_gap_histogram and the head/tail samples of expected/got for raw evidence.",
+    "verilator_stderr": "Simulation stalled at cycle 4550 on vector 0 after emitting 0 of 64 expected outputs. Last valid_out fired at cycle -1. Missing output indices: [0, 64). See output_gap_histogram and the head/tail samples of expected/got for raw evidence.",
+    "status_class": "sim_stalled",
+    "outputs_expected": 64,
+    "outputs_received": 0,
+    "missing_index_start": 0,
+    "missing_index_end": 64,
+    "last_valid_out_cycle": -1,
+    "simulation_end_cycle": 4550,
+    "output_gap_histogram": [
+      16,
+      16,
+      16,
+      16
+    ],
+    "first_mismatch_index": -1,
+    "first_mismatch_expected": 0,
+    "first_mismatch_got": 0,
+    "first_mismatch_vector_index": -1,
+    "first_mismatch_output_index": -1,
+    "first_mismatch_channel_index": -1,
+    "exact_match_count": 0,
+    "mismatch_count": 0,
+    "signed_error_sum": 0,
+    "positive_error_count": 0,
+    "negative_error_count": 0,
+    "first_valid_in_cycle": 7,
+    "first_valid_out_cycle": -1,
+    "per_vector": [
+      {
+        "vector_idx": 0,
+        "outputs_received": 0,
+        "exact_match_count": 0,
+        "mismatch_count": 0,
+        "max_error": 0,
+        "mean_error": 0,
+        "actual_cycles": -1,
+        "first_mismatch_output_index": null
+      }
+    ],
+    "failure_category": "code_bug",
+    "classifier_reason": "Simulation compiled (no iverilog_stderr) and valid_in fired at cycle 7, but valid_out never asserted across 4550 cycles. No resource exhaustion or bus-width violation is present (512-bit bus << 4096-bit cap; weight ROM fits comfortably). The sim_stalled / zero-output pattern with first_valid_in_cycle=7 and last_valid_out_cycle=-1 is consistent with a deadlock or missing handshake in the generated RTL — e.g., ready_in never asserted, an internal FSM stuck in a wait state, incorrect pipeline latency counter, or a backpressure signal held deasserted. The contract and resource envelope are valid; a targeted repair of the control/handshake logic should unblock output."
+  },
+  "logs": {
+    "iverilog_stderr": "",
+    "verilator_stderr": "Simulation stalled at cycle 4550 on vector 0 after emitting 0 of 64 expected outputs. Last valid_out fired at cycle -1. Missing output indices: [0, 64). See output_gap_histogram and the head/tail samples of expected/got for raw evidence.",
+    "fix_hint": "Simulation stalled at cycle 4550 on vector 0 after emitting 0 of 64 expected outputs. Last valid_out fired at cycle -1. Missing output indices: [0, 64). See output_gap_histogram and the head/tail samples of expected/got for raw evidence.",
+    "verif_result_json": {
+      "module_id": "node_conv2d_8",
+      "status": "fail",
+      "timing_pass": false,
+      "timing_actual_cycles": -1,
+      "timing_expected_cycles": 1132,
+      "expected": [],
+      "got": [],
+      "max_error": 0,
+      "mean_error": 0,
+      "sample_count": 0,
+      "fix_hint": "Simulation stalled at cycle 4550 on vector 0 after emitting 0 of 64 expected outputs. Last valid_out fired at cycle -1. Missing output indices: [0, 64). See output_gap_histogram and the head/tail samples of expected/got for raw evidence.",
+      "verilator_stderr": "Simulation stalled at cycle 4550 on vector 0 after emitting 0 of 64 expected outputs. Last valid_out fired at cycle -1. Missing output indices: [0, 64). See output_gap_histogram and the head/tail samples of expected/got for raw evidence.",
+      "status_class": "sim_stalled",
+      "outputs_expected": 64,
+      "outputs_received": 0,
+      "missing_index_start": 0,
+      "missing_index_end": 64,
+      "last_valid_out_cycle": -1,
+      "simulation_end_cycle": 4550,
+      "output_gap_histogram": [
+        16,
+        16,
+        16,
+        16
+      ],
+      "first_mismatch_index": -1,
+      "first_mismatch_expected": 0,
+      "first_mismatch_got": 0,
+      "first_mismatch_vector_index": -1,
+      "first_mismatch_output_index": -1,
+      "first_mismatch_channel_index": -1,
+      "exact_match_count": 0,
+      "mismatch_count": 0,
+      "signed_error_sum": 0,
+      "positive_error_count": 0,
+      "negative_error_count": 0,
+      "first_valid_in_cycle": 7,
+      "first_valid_out_cycle": -1,
+      "per_vector": [
+        {
+          "vector_idx": 0,
+          "outputs_received": 0,
+          "exact_match_count": 0,
+          "mismatch_count": 0,
+          "max_error": 0,
+          "mean_error": 0,
+          "actual_cycles": -1,
+          "first_mismatch_output_index": null
+        }
+      ],
+      "failure_category": "code_bug",
+      "classifier_reason": "Simulation compiled (no iverilog_stderr) and valid_in fired at cycle 7, but valid_out never asserted across 4550 cycles. No resource exhaustion or bus-width violation is present (512-bit bus << 4096-bit cap; weight ROM fits comfortably). The sim_stalled / zero-output pattern with first_valid_in_cycle=7 and last_valid_out_cycle=-1 is consistent with a deadlock or missing handshake in the generated RTL — e.g., ready_in never asserted, an internal FSM stuck in a wait state, incorrect pipeline latency counter, or a backpressure signal held deasserted. The contract and resource envelope are valid; a targeted repair of the control/handshake logic should unblock output."
+    }
+  }
+}

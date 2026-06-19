@@ -1,0 +1,2 @@
+Routed checkpoint: first_light_routed_40ns_explore.dcp
+Total paths reported: 0

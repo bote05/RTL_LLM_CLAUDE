@@ -1,0 +1,429 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+-------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version     : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date             : Thu Jun 18 07:32:17 2026
+| Host             : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command          : report_power -file output/power/ResNet50_kp4mp32_power.rpt
+| Design           : nn2rtl_top
+| Device           : xcu250-figd2104-2L-e
+| Design State     : routed
+| Grade            : extended
+| Process          : typical
+| Characterization : Production
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+Power Report
+
+Table of Contents
+-----------------
+1. Summary
+1.1 On-Chip Components
+1.2 Power Supply Summary
+1.3 Confidence Level
+2. Settings
+2.1 Environment
+2.2 Clock Constraints
+3. Detailed Reports
+3.1 By Hierarchy
+
+1. Summary
+----------
+
++--------------------------+--------------+
+| Total On-Chip Power (W)  | 16.014       |
+| Design Power Budget (W)  | Unspecified* |
+| Power Budget Margin (W)  | NA           |
+| Dynamic (W)              | 12.698       |
+| Device Static (W)        | 3.316        |
+| Effective TJA (C/W)      | 0.5          |
+| Max Ambient (C)          | 91.6         |
+| Junction Temperature (C) | 33.4         |
+| Confidence Level         | Low          |
+| Setting File             | ---          |
+| Simulation Activity File | ---          |
+| Design Nets Matched      | NA           |
++--------------------------+--------------+
+* Specify Design Power Budget using, set_operating_conditions -design_power_budget <value in Watts>
+
+
+1.1 On-Chip Components
+----------------------
+
++--------------------------+-----------+----------+-----------+-----------------+
+| On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
++--------------------------+-----------+----------+-----------+-----------------+
+| Clocks                   |     1.515 |        3 |       --- |             --- |
+| CLB Logic                |     3.490 |  2856871 |       --- |             --- |
+|   LUT as Logic           |     3.196 |  1168673 |   1728000 |           67.63 |
+|   CARRY8                 |     0.172 |    61578 |    216000 |           28.51 |
+|   Register               |     0.107 |  1189379 |   3456000 |           34.41 |
+|   LUT as Distributed RAM |     0.015 |    27660 |    791040 |            3.50 |
+|   LUT as Shift Register  |    <0.001 |       10 |    791040 |           <0.01 |
+|   BUFG                   |    <0.001 |      116 |       128 |           90.63 |
+|   Others                 |     0.000 |      887 |       --- |             --- |
+|   F7/F8 Muxes            |     0.000 |   114908 |   1728000 |            6.65 |
+| Signals                  |     4.166 |  2432524 |       --- |             --- |
+| Block RAM                |     1.132 |     2656 |      2688 |           98.81 |
+| URAM                     |     0.867 |      662 |      1280 |           51.72 |
+| DSPs                     |     1.411 |     6983 |     12288 |           56.83 |
+| I/O                      |     0.117 |      328 |       676 |           48.52 |
+| Static Power             |     3.316 |          |           |                 |
+| Total                    |    16.014 |          |           |                 |
++--------------------------+-----------+----------+-----------+-----------------+
+
+
+1.2 Power Supply Summary
+------------------------
+
++------------------+-------------+-----------+-------------+------------+-------------+-------------+------------+
+| Source           | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
++------------------+-------------+-----------+-------------+------------+-------------+-------------+------------+
+| Vccint           |       0.850 |    16.339 |      14.739 |      1.600 |       NA    | Unspecified | NA         |
+| Vccint_io        |       0.850 |     0.149 |       0.002 |      0.147 |       NA    | Unspecified | NA         |
+| Vccbram          |       0.850 |     0.101 |       0.061 |      0.040 |       NA    | Unspecified | NA         |
+| Vccaux           |       1.800 |     0.863 |       0.000 |      0.863 |       NA    | Unspecified | NA         |
+| Vccaux_io        |       1.800 |     0.156 |       0.051 |      0.104 |       NA    | Unspecified | NA         |
+| Vcco33           |       3.300 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco25           |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco18           |       1.800 |     0.013 |       0.013 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco15           |       1.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco135          |       1.350 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco12           |       1.200 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco10           |       1.000 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vccadc           |       1.800 |     0.032 |       0.000 |      0.032 |       NA    | Unspecified | NA         |
+| VMGTAVCC (GTY)   |       0.900 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| VMGTAVTT (GTY)   |       1.200 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| VMGTVCCAUX (GTY) |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
++------------------+-------------+-----------+-------------+------------+-------------+-------------+------------+
+
+
+1.3 Confidence Level
+--------------------
+
++-----------------------------+------------+--------------------------------------------------------+------------------------------------------------------------------------------------------------------------+
+| User Input Data             | Confidence | Details                                                | Action                                                                                                     |
++-----------------------------+------------+--------------------------------------------------------+------------------------------------------------------------------------------------------------------------+
+| Design implementation state | High       | Design is routed                                       |                                                                                                            |
+| Clock nodes activity        | High       | User specified more than 95% of clocks                 |                                                                                                            |
+| I/O nodes activity          | Low        | More than 75% of inputs are missing user specification | Provide missing input activity with simulation results or by editing the "By Resource Type -> I/Os" view   |
+| Internal nodes activity     | Medium     | User specified less than 25% of internal nodes         | Provide missing internal nodes activity with simulation results or by editing the "By Resource Type" views |
+| Device models               | High       | Device models are Production                           |                                                                                                            |
+|                             |            |                                                        |                                                                                                            |
+| Overall confidence level    | Low        |                                                        |                                                                                                            |
++-----------------------------+------------+--------------------------------------------------------+------------------------------------------------------------------------------------------------------------+
+
+
+2. Settings
+-----------
+
+2.1 Environment
+---------------
+
++-----------------------+--------------------------+
+| Ambient Temp (C)      | 25.0                     |
+| ThetaJA (C/W)         | 0.5                      |
+| Airflow (LFM)         | 250                      |
+| Heat Sink             | medium (Medium Profile)  |
+| ThetaSA (C/W)         | 0.7                      |
+| Board Selection       | medium (10"x10")         |
+| # of Board Layers     | 12to15 (12 to 15 Layers) |
+| Board Temperature (C) | 25.0                     |
++-----------------------+--------------------------+
+
+
+2.2 Clock Constraints
+---------------------
+
++-------+--------+-----------------+
+| Clock | Domain | Constraint (ns) |
++-------+--------+-----------------+
+| clk   | clk    |            12.0 |
++-------+--------+-----------------+
+
+
+3. Detailed Reports
+-------------------
+
+3.1 By Hierarchy
+----------------
+
++------------------------------+-----------+
+| Name                         | Power (W) |
++------------------------------+-----------+
+| nn2rtl_top                   |    12.698 |
+|   u_act_mem                  |     0.143 |
+|   u_bias_mem                 |     0.072 |
+|   u_engine_out_fifo          |     0.026 |
+|   u_engine_out_node_conv_246 |     0.003 |
+|   u_engine_out_node_conv_250 |     0.003 |
+|   u_engine_out_node_conv_254 |     0.003 |
+|   u_engine_out_node_conv_260 |     0.003 |
+|   u_engine_out_node_conv_264 |     0.003 |
+|   u_engine_out_node_conv_266 |     0.003 |
+|   u_engine_out_node_conv_272 |     0.003 |
+|   u_engine_out_node_conv_278 |     0.003 |
+|   u_engine_out_node_conv_282 |     0.003 |
+|   u_engine_out_node_conv_284 |     0.003 |
+|   u_engine_out_node_conv_286 |     0.003 |
+|   u_engine_out_node_conv_290 |     0.003 |
+|   u_engine_out_node_conv_292 |     0.003 |
+|   u_engine_out_node_conv_294 |     0.003 |
+|   u_engine_out_node_conv_296 |     0.003 |
+|   u_engine_out_node_conv_298 |     0.003 |
+|   u_engine_out_node_conv_300 |     0.003 |
+|   u_ldr_node_conv_246        |     0.005 |
+|   u_ldr_node_conv_250        |     0.004 |
+|   u_ldr_node_conv_254        |     0.004 |
+|   u_ldr_node_conv_260        |     0.004 |
+|   u_ldr_node_conv_264        |     0.005 |
+|   u_ldr_node_conv_266        |     0.004 |
+|   u_ldr_node_conv_272        |     0.004 |
+|   u_ldr_node_conv_278        |     0.004 |
+|   u_ldr_node_conv_282        |     0.004 |
+|   u_ldr_node_conv_284        |     0.004 |
+|   u_ldr_node_conv_286        |     0.005 |
+|   u_ldr_node_conv_290        |     0.005 |
+|   u_ldr_node_conv_292        |     0.004 |
+|   u_ldr_node_conv_294        |     0.005 |
+|   u_ldr_node_conv_296        |     0.005 |
+|   u_ldr_node_conv_298        |     0.005 |
+|   u_ldr_node_conv_300        |     0.005 |
+|   u_node_add                 |     0.021 |
+|   u_node_add_1               |     0.022 |
+|   u_node_add_10              |     0.051 |
+|   u_node_add_11              |     0.052 |
+|   u_node_add_12              |     0.053 |
+|   u_node_add_13              |     0.100 |
+|   u_node_add_14              |     0.078 |
+|   u_node_add_15              |     0.084 |
+|   u_node_add_2               |     0.018 |
+|   u_node_add_3               |     0.061 |
+|   u_node_add_4               |     0.024 |
+|   u_node_add_5               |     0.023 |
+|   u_node_add_6               |     0.023 |
+|   u_node_add_7               |     0.051 |
+|   u_node_add_8               |     0.053 |
+|   u_node_add_9               |     0.048 |
+|   u_node_conv_196            |     0.206 |
+|     dp                       |     0.160 |
+|     lbw                      |     0.046 |
+|   u_node_conv_198            |     0.104 |
+|     dp                       |     0.097 |
+|   u_node_conv_200            |     0.177 |
+|     dp                       |     0.117 |
+|     lbw                      |     0.054 |
+|   u_node_conv_202            |     0.191 |
+|     dp                       |     0.174 |
+|   u_node_conv_204            |     0.148 |
+|     dp                       |     0.142 |
+|   u_node_conv_206            |     0.130 |
+|     dp                       |     0.116 |
+|     lbw                      |     0.003 |
+|   u_node_conv_208            |     0.180 |
+|     dp                       |     0.119 |
+|     lbw                      |     0.054 |
+|   u_node_conv_210            |     0.165 |
+|     dp                       |     0.154 |
+|   u_node_conv_212            |     0.130 |
+|     dp                       |     0.121 |
+|     lbw                      |     0.003 |
+|   u_node_conv_214            |     0.165 |
+|     dp                       |     0.109 |
+|     lbw                      |     0.054 |
+|   u_node_conv_216            |     0.146 |
+|     dp                       |     0.140 |
+|   u_node_conv_218            |     0.160 |
+|     dp                       |     0.146 |
+|     lbw                      |     0.003 |
+|   u_node_conv_220            |     0.273 |
+|     dp                       |     0.159 |
+|     lbw                      |     0.108 |
+|   u_node_conv_222            |     0.224 |
+|     dp                       |     0.206 |
+|     lbw                      |     0.001 |
+|   u_node_conv_224            |     0.195 |
+|     dp                       |     0.176 |
+|     lbw                      |     0.003 |
+|   u_node_conv_226            |     0.156 |
+|     dp                       |     0.138 |
+|     lbw                      |     0.007 |
+|   u_node_conv_228            |     0.257 |
+|     dp                       |     0.148 |
+|     lbw                      |     0.103 |
+|   u_node_conv_230            |     0.186 |
+|     dp                       |     0.173 |
+|     lbw                      |     0.001 |
+|   u_node_conv_232            |     0.154 |
+|     dp                       |     0.136 |
+|     lbw                      |     0.007 |
+|   u_node_conv_234            |     0.254 |
+|     dp                       |     0.145 |
+|     lbw                      |     0.103 |
+|   u_node_conv_236            |     0.167 |
+|     dp                       |     0.154 |
+|     lbw                      |     0.001 |
+|   u_node_conv_238            |     0.152 |
+|     dp                       |     0.137 |
+|     lbw                      |     0.006 |
+|   u_node_conv_240            |     0.260 |
+|     dp                       |     0.151 |
+|     lbw                      |     0.103 |
+|   u_node_conv_242            |     0.188 |
+|     dp                       |     0.176 |
+|     lbw                      |     0.001 |
+|   u_node_conv_244            |     0.197 |
+|     dp                       |     0.179 |
+|     lbw                      |     0.005 |
+|   u_node_conv_248            |     0.504 |
+|     dp                       |     0.464 |
+|     lbw                      |     0.003 |
+|   u_node_conv_252            |     0.351 |
+|     dp                       |     0.318 |
+|     lbw                      |     0.012 |
+|   u_node_conv_256            |     0.397 |
+|     dp                       |     0.358 |
+|     lbw                      |     0.003 |
+|   u_node_conv_258            |     0.324 |
+|     dp                       |     0.288 |
+|     lbw                      |     0.014 |
+|   u_node_conv_262            |     0.464 |
+|     dp                       |     0.424 |
+|     lbw                      |     0.003 |
+|   u_node_conv_268            |     0.445 |
+|     dp                       |     0.406 |
+|     lbw                      |     0.003 |
+|   u_node_conv_270            |     0.320 |
+|     dp                       |     0.287 |
+|     lbw                      |     0.012 |
+|   u_node_conv_274            |     0.433 |
+|     dp                       |     0.395 |
+|     lbw                      |     0.003 |
+|   u_node_conv_276            |     0.288 |
+|     dp                       |     0.255 |
+|     lbw                      |     0.011 |
+|   u_node_conv_280            |     0.458 |
+|     dp                       |     0.420 |
+|     lbw                      |     0.003 |
+|   u_node_conv_288            |     1.060 |
+|     dp                       |     0.994 |
+|     lbw                      |     0.015 |
+|   u_node_max_pool2d          |     0.080 |
+|     u_lbw                    |     0.078 |
+|   u_node_relu                |     0.001 |
+|   u_node_relu_1              |     0.010 |
+|   u_node_relu_10             |     0.007 |
+|   u_node_relu_11             |     0.001 |
+|   u_node_relu_12             |     0.003 |
+|   u_node_relu_13             |     0.001 |
+|   u_node_relu_14             |     0.001 |
+|   u_node_relu_15             |     0.009 |
+|   u_node_relu_16             |     0.008 |
+|   u_node_relu_17             |     0.008 |
+|   u_node_relu_18             |     0.002 |
+|   u_node_relu_19             |     0.001 |
+|   u_node_relu_2              |     0.004 |
+|   u_node_relu_20             |     0.008 |
+|   u_node_relu_21             |     0.001 |
+|   u_node_relu_22             |     0.007 |
+|   u_node_relu_23             |     0.006 |
+|   u_node_relu_24             |     0.001 |
+|   u_node_relu_25             |     0.002 |
+|   u_node_relu_26             |     0.006 |
+|   u_node_relu_27             |     0.007 |
+|   u_node_relu_28             |     0.002 |
+|   u_node_relu_29             |     0.001 |
+|   u_node_relu_3              |     0.009 |
+|   u_node_relu_30             |     0.006 |
+|   u_node_relu_31             |     0.001 |
+|   u_node_relu_32             |     0.001 |
+|   u_node_relu_33             |     0.001 |
+|   u_node_relu_34             |     0.002 |
+|   u_node_relu_35             |     0.006 |
+|   u_node_relu_36             |     0.002 |
+|   u_node_relu_37             |     0.002 |
+|   u_node_relu_38             |     0.006 |
+|   u_node_relu_39             |     0.001 |
+|   u_node_relu_4              |     0.036 |
+|   u_node_relu_40             |     0.001 |
+|   u_node_relu_41             |     0.006 |
+|   u_node_relu_42             |     0.007 |
+|   u_node_relu_43             |     0.001 |
+|   u_node_relu_44             |     0.006 |
+|   u_node_relu_45             |     0.006 |
+|   u_node_relu_46             |     0.001 |
+|   u_node_relu_47             |     0.006 |
+|   u_node_relu_48             |     0.003 |
+|   u_node_relu_5              |     0.028 |
+|   u_node_relu_6              |     0.004 |
+|   u_node_relu_7              |     0.009 |
+|   u_node_relu_8              |     0.001 |
+|   u_node_relu_9              |     0.003 |
+|   u_scale_mem                |     0.079 |
+|   u_scheduler                |     0.001 |
+|   u_shared_engine            |     0.804 |
+|     u_address_generator      |     0.017 |
+|     u_bram_to_stream_bridge  |     0.040 |
+|     u_mac_array              |     0.108 |
+|     u_requant_pipeline       |     0.632 |
+|   u_skid_ldr_290             |     0.002 |
+|   u_skid_ldr_296             |     0.002 |
+|   u_skid_node_conv_206       |     0.002 |
+|   u_skid_node_conv_212       |     0.002 |
+|   u_skid_node_conv_218       |     0.010 |
+|   u_skid_node_conv_220       |     0.002 |
+|   u_skid_node_conv_224       |     0.008 |
+|   u_skid_node_conv_226       |     0.003 |
+|   u_skid_node_conv_232       |     0.002 |
+|   u_skid_node_conv_248       |     0.002 |
+|   u_skid_node_conv_256       |     0.002 |
+|   u_skid_node_conv_262       |     0.002 |
+|   u_skid_node_conv_268       |     0.002 |
+|   u_skid_node_conv_274       |     0.002 |
+|   u_skid_node_conv_280       |     0.002 |
+|   u_skid_node_conv_288       |     0.003 |
+|   u_skid_node_relu_1         |     0.001 |
+|   u_skid_node_relu_2         |     0.002 |
+|   u_skid_node_relu_23        |     0.002 |
+|   u_skid_node_relu_26        |     0.002 |
+|   u_skid_node_relu_29        |     0.002 |
+|   u_skid_node_relu_31        |     0.002 |
+|   u_skid_node_relu_32        |     0.002 |
+|   u_skid_node_relu_35        |     0.002 |
+|   u_skid_node_relu_38        |     0.002 |
+|   u_skid_node_relu_4         |     0.002 |
+|   u_skid_node_relu_40        |     0.002 |
+|   u_skid_node_relu_43        |     0.002 |
+|   u_skid_node_relu_46        |     0.002 |
+|   u_skid_node_relu_5         |     0.002 |
+|   u_skip_node_add            |     0.003 |
+|   u_skip_node_add_1          |     0.024 |
+|   u_skip_node_add_10         |     0.005 |
+|   u_skip_node_add_10_main    |     0.008 |
+|   u_skip_node_add_11         |     0.005 |
+|   u_skip_node_add_11_main    |     0.036 |
+|   u_skip_node_add_12         |     0.005 |
+|   u_skip_node_add_12_main    |     0.017 |
+|   u_skip_node_add_13         |     0.003 |
+|   u_skip_node_add_14         |     0.005 |
+|   u_skip_node_add_15         |     0.006 |
+|   u_skip_node_add_2          |     0.016 |
+|   u_skip_node_add_3          |     0.003 |
+|   u_skip_node_add_4          |     0.006 |
+|   u_skip_node_add_5          |     0.007 |
+|   u_skip_node_add_6          |     0.003 |
+|   u_skip_node_add_7          |     0.001 |
+|   u_skip_node_add_8          |     0.005 |
+|   u_skip_node_add_8_main     |     0.017 |
+|   u_skip_node_add_9          |     0.004 |
+|   u_skip_node_add_9_main     |     0.005 |
+|   u_uram_weight_bank0        |     0.041 |
+|   u_uram_weight_bank1        |     0.041 |
+|   u_uram_weight_bank2        |     0.041 |
+|   u_uram_weight_bank3        |     0.041 |
+|   u_uram_weight_bank4        |     0.041 |
+|   u_uram_weight_bank5        |     0.041 |
+|   u_uram_weight_bank6        |     0.041 |
+|   u_uram_weight_bank7        |     0.041 |
++------------------------------+-----------+
+
+

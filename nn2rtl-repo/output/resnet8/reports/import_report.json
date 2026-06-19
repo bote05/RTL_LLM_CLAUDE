@@ -1,0 +1,250 @@
+{
+  "network_id": "resnet8",
+  "model_name": "resnet8",
+  "output_root": "D:\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\resnet8",
+  "layer_ir_path": "D:\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\resnet8\\layer_ir.json",
+  "generated_at": "2026-06-12T17:02:10.421Z",
+  "counts": {
+    "total_layers": 21,
+    "runnable": 13,
+    "blocked": 0,
+    "preflight_risk": 8
+  },
+  "cycles_per_frame": {
+    "runnable": 36777,
+    "blocked": 0,
+    "total": 45918,
+    "blocked_ratio": 0
+  },
+  "e2e_comparison_reliable": true,
+  "reliability_rule": "e2e comparison is unreliable when blocked_cycles / total_cycles > 0.20",
+  "preflight_scope": "advisory only: import preflight uses LayerIR shape/contract heuristics; deterministic RTL synthesis preflight gates still run before Vivado.",
+  "layers": [
+    {
+      "module_id": "node_conv2d",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 72,
+      "signature_hash": "1c334d02a9375e63743cc364239b2a9e",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c3-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "557d59b1a67e11bff7c373f7cc31530b",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_1",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 124,
+      "signature_hash": "7218e7b4eefeaa274f4e12fcbfc5e599",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_1",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "557d59b1a67e11bff7c373f7cc31530b",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_2",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 124,
+      "signature_hash": "7218e7b4eefeaa274f4e12fcbfc5e599",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_25",
+      "op_type": "add",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 19,
+      "signature_hash": "ea012157eaf1c592f6fac289a49a5577",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_2",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "557d59b1a67e11bff7c373f7cc31530b",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_3",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 561,
+      "signature_hash": "0a766dee96adc8cde369f28450e98391",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_4",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 8310,
+      "signature_hash": "3f687506c44960a2f4c898fa212d01c4",
+      "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_3",
+      "op_type": "relu",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 1,
+      "signature_hash": "6adb6a7dc3df3464df2886a58984b427",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_5",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 324,
+      "signature_hash": "6936bec495e765f6eaf39eb8b2a823d4",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_56",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 35,
+      "signature_hash": "b9ab66f8307fc32ccd5724786a0dea95",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_4",
+      "op_type": "relu",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 1,
+      "signature_hash": "6adb6a7dc3df3464df2886a58984b427",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_6",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 2145,
+      "signature_hash": "f4e05c111a32510a5452ee19cfdab79e",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s2x2|d1x1|g1|bus512|tilenone|c32-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_7",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 32902,
+      "signature_hash": "c447c4df23831fde8142cc9b3373871b",
+      "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus512|tilenone|c32-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_5",
+      "op_type": "relu",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 1,
+      "signature_hash": "4442053468bd125f3ba20a55f5d6d180",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_8",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 1132,
+      "signature_hash": "e3e572c7b47be2347af309e662d8ffab",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_87",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 67,
+      "signature_hash": "df9f0be0d2a2a6e25a9cd5597c33935e",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1024|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_6",
+      "op_type": "relu",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 1,
+      "signature_hash": "4442053468bd125f3ba20a55f5d6d180",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_mean",
+      "op_type": "global_avg_pool",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 67,
+      "signature_hash": "2bb2ea1d2841f0d898020cd800fcf867",
+      "exact_reference_key": "global_avg_pool|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_linear",
+      "op_type": "gemm",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 29,
+      "signature_hash": "f6e05e782782552ed66f7a5b80589753",
+      "exact_reference_key": "gemm|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-10|int8_symmetric_per_tensor"
+    }
+  ]
+}

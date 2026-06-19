@@ -1,0 +1,30 @@
+{
+  "expected": [],
+  "failure_class": null,
+  "first_mismatch_expected": 0,
+  "first_mismatch_got": 0,
+  "first_mismatch_index": -1,
+  "fix_hint": "Testbench setup error before simulation: Packed sample needs 320 words but the DUT input port can hold only 64 words.",
+  "got": [],
+  "last_valid_out_cycle": -1,
+  "max_error": -1,
+  "mean_error": -1.0,
+  "missing_index_end": -1,
+  "missing_index_start": -1,
+  "module_id": "node_mean",
+  "output_gap_histogram": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "outputs_expected": 0,
+  "outputs_received": 0,
+  "simulation_end_cycle": -1,
+  "status": "fail",
+  "status_class": "tb_setup_error",
+  "timing_actual_cycles": -1,
+  "timing_expected_cycles": -1,
+  "timing_pass": false,
+  "verilator_stderr": "Packed sample needs 320 words but the DUT input port can hold only 64 words."
+}

@@ -1,0 +1,21 @@
+[resnet8-synth] cleared stale resnet8_post_synth.dcp
+[resnet8-synth] cleared stale resnet8_post_opt.dcp
+[resnet8-synth] cleared stale resnet8_post_placed.dcp
+[resnet8-synth] cleared stale resnet8_post_routed.dcp
+[resnet8-synth] collected 29 source files
+[resnet8-synth] top=nn2rtl_top part=xczu7ev-ffvc1156-2-e clock_ns=13.9 threads=16 synthOnly=false
+[resnet8-synth] copied 102 weight .mem/.hex into tempdir
+[resnet8-synth] launching: cmd.exe /c D:/vivado/2025.2/Vivado/bin/vivado.bat -mode batch -source C:/Users/User/AppData/Local/Temp/nn2rtl-resnet8synth-svB8CJ/resnet8_synth.tcl -notrace
+[resnet8-synth] timeout=2.0h
+[resnet8-synth] RAM watchdog armed: kill at >= 90% used (total 95.6GB, poll 4s)
+[resnet8-synth] persisted resnet8_post_synth.dcp
+[resnet8-synth] persisted resnet8_post_opt.dcp
+[resnet8-synth] persisted resnet8_post_placed.dcp
+[resnet8-synth] persisted resnet8_post_routed.dcp
+[resnet8-synth] persisted resnet8_post_synth.dcp (final)
+[resnet8-synth] persisted resnet8_post_opt.dcp (final)
+[resnet8-synth] persisted resnet8_post_placed.dcp (final)
+[resnet8-synth] persisted resnet8_post_routed.dcp (final)
+[resnet8-synth] vivado returned in 2281.2s (ok=true)
+[resnet8-synth] wrote output\resnet8\reports\synth\resnet8_synth.json
+[resnet8-synth] success=true LUT=161443 FF=56180 DSP=1280 BRAM36=168 WNS=1.244 elapsed=2281s

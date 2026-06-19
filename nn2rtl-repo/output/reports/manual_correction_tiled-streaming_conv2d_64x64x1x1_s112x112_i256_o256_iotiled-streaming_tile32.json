@@ -1,0 +1,351 @@
+{
+  "event": "manual_correction_needed",
+  "generated_at": "2026-05-02T12:01:17.141Z",
+  "module_id": "layer1_0_conv1",
+  "contract_key": "tiled-streaming:conv2d_64x64x1x1_s112x112_i256_o256_iotiled-streaming_tile32",
+  "contract_id": "tiled-streaming",
+  "contract_plan": {
+    "id": "tiled-streaming",
+    "complexity": 1,
+    "description": "Channel-tiled stream contract that keeps each activation stream within the configured bus cap."
+  },
+  "contract": {
+    "interface": {
+      "clock": "clk",
+      "reset": "rst_n",
+      "valid_in": "valid_in",
+      "ready_in": "ready_in",
+      "valid_out": "valid_out",
+      "data_in_bits": 256,
+      "data_out_bits": 256
+    },
+    "timing": {
+      "pipeline_latency_cycles": 4193,
+      "clock_period_ns": 20,
+      "fmax_target_mhz": 50
+    },
+    "capability_limits": {
+      "max_supported_bus_bits": 4096,
+      "target_part": "xczu9eg-ffvb1156-2-e",
+      "zcu102_capacity": {
+        "lut": 274080,
+        "ff": 548160,
+        "dsp": 2520,
+        "bram18": 1824
+      }
+    },
+    "operation": {
+      "op_type": "conv2d",
+      "contract_id": "tiled-streaming",
+      "contract_complexity": 1,
+      "input_shape": [
+        1,
+        64,
+        112,
+        112
+      ],
+      "output_shape": [
+        1,
+        64,
+        112,
+        112
+      ],
+      "weight_shape": [
+        64,
+        64,
+        1,
+        1
+      ],
+      "scale_factor": 0.027665346839894772,
+      "zero_point": 0,
+      "io_mode": "channel_tiled",
+      "channel_tile": 32,
+      "weight_bank_paths": []
+    }
+  },
+  "layer_ir": {
+    "module_id": "layer1_0_conv1",
+    "op_type": "conv2d",
+    "input_shape": [
+      1,
+      64,
+      112,
+      112
+    ],
+    "output_shape": [
+      1,
+      64,
+      112,
+      112
+    ],
+    "weights_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_weights.hex",
+    "bias_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_bias.hex",
+    "weight_shape": [
+      64,
+      64,
+      1,
+      1
+    ],
+    "num_weights": 4096,
+    "scale_factor": 0.027665346839894772,
+    "zero_point": 0,
+    "pipeline_latency_cycles": 4193,
+    "clock_period_ns": 20,
+    "input_width_bits": 256,
+    "output_width_bits": 256,
+    "clock_signal": "clk",
+    "reset_signal": "rst_n",
+    "valid_in_signal": "valid_in",
+    "valid_out_signal": "valid_out",
+    "ready_in_signal": "ready_in",
+    "data_in_signal": "data_in",
+    "data_out_signal": "data_out",
+    "golden_inputs_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/goldens/layer1_0_conv1.goldin",
+    "golden_outputs_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/goldens/layer1_0_conv1.goldout",
+    "io_mode": "channel_tiled",
+    "contract_id": "tiled-streaming",
+    "channel_tile": 32
+  },
+  "reason": "retrospector_foundry_dispatch_failed",
+  "final_result": {
+    "module_id": "layer1_0_conv1",
+    "status": "fail",
+    "timing_pass": false,
+    "timing_actual_cycles": 0,
+    "timing_expected_cycles": 4193,
+    "failure_category": "unknown",
+    "violated_constraint": "retrospector_foundry_dispatch_failed",
+    "classifier_reason": "Foundry's final post-retrospector attempt failed before producing RTL.",
+    "fix_hint": "Claude Code returned an error result: You've hit your limit · resets 4pm (Europe/Berlin)"
+  },
+  "foundry_versions": [
+    {
+      "version_index": 1,
+      "module": {
+        "module_id": "layer1_0_conv1",
+        "spec_hash": "conv2d_64x64x1x1_s112x112_i256_o256_iotiled-streaming_tile32",
+        "verilog_source": "// Pointwise (1x1) conv2d - layer1_0_conv1\n// tiled-streaming contract; channel_tile=32; data_in/data_out=256 bits.\n//\n// Tiling layout\n// =============\n// IC=64, OC=64, CHANNEL_TILE=32, so IC_TILES = OC_TILES = 2.\n// One logical pixel arrives as 2 valid_in beats:\n//   beat 0 -> in_latch[ 0..31]\n//   beat 1 -> in_latch[32..63]\n// One logical pixel emits as 2 valid_out beats:\n//   beat 0 -> out_buf[ 0..31] packed into data_out[255:0]\n//   beat 1 -> out_buf[32..63] packed into data_out[255:0]\n//\n// Latency contract\n// ================\n// pipeline_latency_cycles = 4193 (LayerIR-authoritative).\n// MP=4, K_TOTAL=64, OC_PASSES=16, pass_cycles = MP*K_TOTAL + 6 = 262.\n// First valid_in beat at cycle 0 -> first valid_out beat at cycle 4193.\n//\n// Cycle budget:\n//   cycle 0    : ST_STREAM_T0 latches input beat 0 (channels  0..31).\n//   cycle 1    : ST_STREAM_T1 latches input beat 1 (channels 32..63)\n//                AND simultaneously kicks off the very first MAC issue\n//                (lane=0, k=0, oc_group=0) because that issue only needs\n//                in_latch[0], which beat 0 already provided.\n//   cycles 2..256 : ST_RUNNING issues lane=1..3 of k=0, then all (lane,k)\n//                   for k=1..63. 256 issues total = MP*K_TOTAL.\n//   cycles 257..259 : drain pipeline stages 1 and 2.\n//   cycle 260  : ST_BIAS;  cycle 261 : ST_SCALE;  cycle 262 : ST_OUTPUT\n//                of pass 0. out_buf[0..3] written; oc_group advances to 1.\n//   passes 1..14 each consume 262 cycles via ST_RUNNING/BIAS/SCALE/OUTPUT,\n//   each writing the next 4 lanes into out_buf.\n//   cycle 4192 : pass 15 ST_OUTPUT writes out_buf[60..63] AND captures\n//                packed beat 0 (out_buf[0..31]) into data_out, asserts\n//                valid_out, and transitions to ST_EMIT_BEAT1.\n//   cycle 4193 : data_out shows beat 0; valid_out=1.  ST_EMIT_BEAT1 packs\n//                out_buf[32..63] into data_out and asserts valid_out.\n//   cycle 4194 : data_out shows beat 1; valid_out=1.  Returns to\n//                ST_STREAM_T0 with ready_in=1 for the next pixel.\n//\n// MAC pipeline (3 stages from issue to acc-write), unchanged from the\n// pointwise reference: one synchronous ROM read, one registered DSP\n// multiply (use_dsp), one indexed accumulator write.\n\nmodule layer1_0_conv1 (\n    input  wire              clk,\n    input  wire              rst_n,\n    input  wire              valid_in,\n    output reg               ready_in,\n    input  wire [255:0]      data_in,\n    output reg               valid_out,\n    output reg  [255:0]      data_out\n);\n    localparam IC           = 64;\n    localparam OC           = 64;\n    localparam IH           = 112;\n    localparam IW           = 112;\n    localparam OH           = 112;\n    localparam OW           = 112;\n    localparam KH           = 1;\n    localparam KW           = 1;\n    localparam SH           = 1;\n    localparam SW           = 1;\n    localparam PH           = 0;\n    localparam PW           = 0;\n    localparam K_TOTAL      = IC * KH * KW;\n    localparam MP           = 4;\n    localparam OC_PASSES    = (OC + MP - 1) / MP;\n    localparam CHANNEL_TILE = 32;\n    localparam IC_TILES     = (IC + CHANNEL_TILE - 1) / CHANNEL_TILE;\n    localparam OC_TILES     = (OC + CHANNEL_TILE - 1) / CHANNEL_TILE;\n\n    localparam NUM_WEIGHTS    = OC * K_TOTAL;\n    localparam WEIGHT_ADDR_W  = (NUM_WEIGHTS <= 1) ? 1 : $clog2(NUM_WEIGHTS);\n    localparam OC_INDEX_W     = (OC + MP <= 1) ? 1 : $clog2(OC + MP);\n\n    localparam SCALE_MULT  = 29009;\n    localparam SCALE_SHIFT = 20;\n\n    localparam integer PROD_W        = 16;\n    localparam integer ACC_W         = PROD_W + $clog2(K_TOTAL);\n    localparam integer BIAS_W        = 32;\n    localparam integer BIASED_W      = ((ACC_W > BIAS_W) ? ACC_W : BIAS_W) + 1;\n    localparam integer SCALE_MAG_W   = $clog2(SCALE_MULT + 1);\n    localparam integer SCALE_CONST_W = SCALE_MAG_W + 1;\n    localparam integer SCALED_W      = BIASED_W + SCALE_CONST_W;\n    localparam signed [SCALE_CONST_W-1:0] SCALE_MULT_CONST = SCALE_MULT;\n    localparam signed [SCALED_W-1:0] SCALE_ROUND_BIAS =\n        {{(SCALED_W-1){1'b0}}, 1'b1} <<< (SCALE_SHIFT - 1);\n\n    localparam ST_STREAM_T0  = 3'd0;\n    localparam ST_STREAM_T1  = 3'd1;\n    localparam ST_RUNNING    = 3'd2;\n    localparam ST_BIAS       = 3'd3;\n    localparam ST_SCALE      = 3'd4;\n    localparam ST_OUTPUT     = 3'd5;\n    localparam ST_EMIT_BEAT1 = 3'd6;\n\n    (* rom_style = \"block\", ram_style = \"block\" *) reg signed [7:0]  weights [0:OC*K_TOTAL-1];\n    (* rom_style = \"block\", ram_style = \"block\" *) reg signed [31:0] biases  [0:OC-1];\n    initial begin\n        $readmemh(\"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_weights.hex\", weights);\n        $readmemh(\"C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/layer1_0_conv1_bias.hex\", biases);\n    end\n\n    reg signed [7:0] in_latch [0:IC-1];\n    reg signed [7:0] out_buf  [0:OC-1];\n\n    reg signed [ACC_W-1:0]    acc    [0:MP-1];\n    reg signed [BIASED_W-1:0] biased [0:MP-1];\n    reg signed [SCALED_W-1:0] scaled [0:MP-1];\n    reg signed [SCALED_W-1:0] v_tmp;\n\n    reg [$clog2(K_TOTAL+1)-1:0]   k_counter;\n    reg [$clog2(MP+1)-1:0]        lane_counter;\n    reg [$clog2(OC_PASSES+1)-1:0] oc_group;\n    reg [2:0] state;\n\n    reg  signed [7:0]              weight_q;\n    wire [OC_INDEX_W-1:0]          current_global_oc;\n    wire [WEIGHT_ADDR_W-1:0]       weight_read_addr;\n    assign current_global_oc = oc_group * MP + lane_counter;\n    assign weight_read_addr  = current_global_oc * K_TOTAL + k_counter;\n\n    always @(posedge clk) begin\n        weight_q <= weights[weight_read_addr];\n    end\n\n    reg                            mac_valid_q1;\n    reg [$clog2(MP+1)-1:0]         mac_lane_q1;\n    reg [$clog2(K_TOTAL+1)-1:0]    mac_k_q1;\n    reg [OC_INDEX_W-1:0]           mac_global_oc_q1;\n    reg                            mac_done_issuing;\n\n    reg                            mac_valid_q2;\n    reg [$clog2(MP+1)-1:0]         mac_lane_q2;\n    reg [OC_INDEX_W-1:0]           mac_global_oc_q2;\n\n    (* use_dsp = \"yes\" *) reg signed [PROD_W-1:0] mul_q;\n\n    integer i, lane, ch;\n    integer bias_oc;\n    integer out_oc;\n\n    always @(posedge clk or negedge rst_n) begin\n        if (!rst_n) begin\n            state            <= ST_STREAM_T0;\n            ready_in         <= 1'b1;  // [INVARIANT:READY_IN_GATING]\n            valid_out        <= 1'b0;\n            k_counter        <= 0;\n            lane_counter     <= 0;\n            oc_group         <= 0;\n            data_out         <= 256'd0;\n            mac_valid_q1     <= 1'b0;\n            mac_lane_q1      <= 0;\n            mac_k_q1         <= 0;\n            mac_global_oc_q1 <= 0;\n            mac_valid_q2     <= 1'b0;\n            mac_lane_q2      <= 0;\n            mac_global_oc_q2 <= 0;\n            mac_done_issuing <= 1'b0;\n            mul_q            <= 0;\n            for (i = 0; i < IC; i = i + 1)\n                in_latch[i] <= 8'sd0;\n            for (i = 0; i < OC; i = i + 1)\n                out_buf[i]  <= 8'sd0;\n            for (lane = 0; lane < MP; lane = lane + 1) begin\n                acc   [lane] <= 0;\n                biased[lane] <= 0;\n                scaled[lane] <= 0;\n            end\n        end else begin\n            mul_q            <= $signed(weight_q) * $signed(in_latch[mac_k_q1]);\n            mac_valid_q2     <= mac_valid_q1;\n            mac_lane_q2      <= mac_lane_q1;\n            mac_global_oc_q2 <= mac_global_oc_q1;\n\n            if (mac_valid_q2 && mac_global_oc_q2 < OC) begin\n                acc[mac_lane_q2] <= acc[mac_lane_q2] + $signed(mul_q);\n            end\n\n            case (state)\n\n            ST_STREAM_T0: begin\n                valid_out    <= 1'b0;\n                mac_valid_q1 <= 1'b0;\n                if (valid_in) begin\n                    for (ch = 0; ch < CHANNEL_TILE; ch = ch + 1)\n                        in_latch[ch] <= $signed(data_in[ch*8 +: 8]);\n                    ready_in <= 1'b1;  // [INVARIANT:READY_IN_GATING]\n                    state    <= ST_STREAM_T1;\n                end\n            end\n\n            ST_STREAM_T1: begin\n                valid_out <= 1'b0;\n                if (valid_in) begin\n                    for (ch = 0; ch < CHANNEL_TILE; ch = ch + 1)\n                        in_latch[CHANNEL_TILE + ch] <= $signed(data_in[ch*8 +: 8]);\n                    ready_in         <= 1'b0;  // [INVARIANT:READY_IN_GATING]\n                    k_counter        <= 0;\n                    lane_counter     <= 1;\n                    oc_group         <= 0;\n                    mac_done_issuing <= 1'b0;\n                    for (lane = 0; lane < MP; lane = lane + 1)\n                        acc[lane] <= 0;\n                    mac_lane_q1      <= 0;\n                    mac_k_q1         <= 0;\n                    mac_global_oc_q1 <= 0;\n                    mac_valid_q1     <= 1'b1;\n                    state            <= ST_RUNNING;\n                end\n            end\n\n            ST_RUNNING: begin\n                if (mac_done_issuing) begin\n                    mac_valid_q1 <= 1'b0;\n                    if (!mac_valid_q1 && !mac_valid_q2) begin\n                        mac_done_issuing <= 1'b0;\n                        state            <= ST_BIAS;\n                    end\n                end else begin\n                    mac_lane_q1      <= lane_counter;\n                    mac_k_q1         <= k_counter;\n                    mac_global_oc_q1 <= current_global_oc;\n                    mac_valid_q1     <= 1'b1;\n\n                    if (lane_counter == MP - 1) begin\n                        lane_counter <= 0;\n                        if (k_counter == K_TOTAL - 1) begin\n                            mac_done_issuing <= 1'b1;\n                        end else begin\n                            k_counter <= k_counter + 1;\n                        end\n                    end else begin\n                        lane_counter <= lane_counter + 1;\n                    end\n                end\n            end\n\n            ST_BIAS: begin\n                for (lane = 0; lane < MP; lane = lane + 1) begin\n                    bias_oc = oc_group * MP + lane;\n                    if (bias_oc < OC)\n                        biased[lane] <= $signed(acc[lane]) + $signed(biases[bias_oc]);\n                    else\n                        biased[lane] <= 0;\n                end\n                state <= ST_SCALE;\n            end\n\n            ST_SCALE: begin\n                for (lane = 0; lane < MP; lane = lane + 1)\n                    scaled[lane] <= $signed(biased[lane]) * $signed(SCALE_MULT_CONST);\n                state <= ST_OUTPUT;\n            end\n\n            ST_OUTPUT: begin\n                for (lane = 0; lane < MP; lane = lane + 1) begin\n                    out_oc = oc_group * MP + lane;\n                    if (out_oc < OC) begin\n                        // [INVARIANT:ROUNDING]\n                        v_tmp = (scaled[lane] + SCALE_ROUND_BIAS) >>> SCALE_SHIFT;\n                        out_buf[out_oc] <= (v_tmp >  127) ?  8'sd127 :\n                                           (v_tmp < -128) ? -8'sd128 :\n                                                            v_tmp[7:0];\n                    end\n                end\n\n                if (oc_group == OC_PASSES - 1) begin\n                    for (ch = 0; ch < CHANNEL_TILE; ch = ch + 1)\n                        data_out[ch*8 +: 8] <= out_buf[ch];\n                    valid_out <= 1'b1;  // [INVARIANT:VALID_OUT_LATENCY]\n                    state     <= ST_EMIT_BEAT1;\n                end else begin\n                    oc_group         <= oc_group + 1;\n                    k_counter        <= 0;\n                    lane_counter     <= 0;\n                    mac_done_issuing <= 1'b0;\n                    for (lane = 0; lane < MP; lane = lane + 1)\n                        acc[lane] <= 0;\n                    state <= ST_RUNNING;\n                end\n            end\n\n            ST_EMIT_BEAT1: begin\n                for (ch = 0; ch < CHANNEL_TILE; ch = ch + 1)\n                    data_out[ch*8 +: 8] <= out_buf[CHANNEL_TILE + ch];\n                valid_out <= 1'b1;\n                ready_in  <= 1'b1;\n                state     <= ST_STREAM_T0;\n            end\n\n            default: state <= ST_STREAM_T0;\n            endcase\n        end\n    end\nendmodule\n",
+        "generated_by": "Foundry",
+        "attempt": 1
+      },
+      "session_id": "f07113c2-6f47-4ed9-92d4-e276de985433",
+      "tool_use_summary": {
+        "tool_call_count": 6,
+        "tools_called": [
+          "Bash",
+          "Bash",
+          "Bash",
+          "Bash",
+          "Write",
+          "Write"
+        ],
+        "tools_counts": {
+          "Bash": 4,
+          "Write": 2
+        },
+        "total_result_bytes": 647,
+        "tool_error_count": 0
+      },
+      "documents_used": []
+    }
+  ],
+  "failure_attempts": [
+    {
+      "attempt_index": 1,
+      "stage": "foundry_assayer",
+      "module": {
+        "module_id": "layer1_0_conv1",
+        "spec_hash": "conv2d_64x64x1x1_s112x112_i256_o256_iotiled-streaming_tile32",
+        "generated_by": "Foundry",
+        "attempt": 1
+      },
+      "result": {
+        "module_id": "layer1_0_conv1",
+        "status": "syntax_error",
+        "timing_pass": false,
+        "timing_actual_cycles": 0,
+        "timing_expected_cycles": 4193,
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "failure_category": "code_bug",
+        "classifier_reason": "iverilog rejected the RTL with a syntax error (exit_code=3221225794) before Verilator could run. No resource exhaustion, bus width violation, or placement failure is present. The contract parameters (256-bit bus, tiled-streaming, 1x1 conv2d on xczu9eg) are all within capability limits. This is a first-attempt Foundry output with a parse/syntax defect that a targeted repair pass can fix."
+      },
+      "logs": {
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verilator_stderr": "",
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verif_result_json": {
+          "module_id": "layer1_0_conv1",
+          "status": "syntax_error",
+          "timing_pass": false,
+          "timing_actual_cycles": 0,
+          "timing_expected_cycles": 4193,
+          "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-Ds3aFI\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "failure_category": "code_bug",
+          "classifier_reason": "iverilog rejected the RTL with a syntax error (exit_code=3221225794) before Verilator could run. No resource exhaustion, bus width violation, or placement failure is present. The contract parameters (256-bit bus, tiled-streaming, 1x1 conv2d on xczu9eg) are all within capability limits. This is a first-attempt Foundry output with a parse/syntax defect that a targeted repair pass can fix."
+        }
+      }
+    },
+    {
+      "attempt_index": 2,
+      "stage": "surgeon_assayer",
+      "module": {
+        "module_id": "layer1_0_conv1",
+        "spec_hash": "conv2d_64x64x1x1_s112x112_i256_o256_iotiled-streaming_tile32",
+        "generated_by": "Surgeon",
+        "attempt": 2
+      },
+      "result": {
+        "module_id": "layer1_0_conv1",
+        "status": "syntax_error",
+        "timing_pass": false,
+        "timing_actual_cycles": 0,
+        "timing_expected_cycles": 4193,
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "failure_category": "code_bug",
+        "classifier_reason": "iverilog exited with code 3221225794 (0xC0000002, STATUS_NOT_IMPLEMENTED on Windows) before emitting any diagnostic lines — the process was killed by the OS, not by a Verilog semantic error. No resource exhaustion, bus-width violation, or architectural constraint is implicated. The contract (256-bit bus, tiled-streaming, 1×1 conv on xczu9eg) is well within capability limits. This is a syntax/tool-invocation failure fixable by repairing the generated Verilog so iverilog -g2012 accepts it."
+      },
+      "logs": {
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verilator_stderr": "",
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verif_result_json": {
+          "module_id": "layer1_0_conv1",
+          "status": "syntax_error",
+          "timing_pass": false,
+          "timing_actual_cycles": 0,
+          "timing_expected_cycles": 4193,
+          "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-NGMvVV\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "failure_category": "code_bug",
+          "classifier_reason": "iverilog exited with code 3221225794 (0xC0000002, STATUS_NOT_IMPLEMENTED on Windows) before emitting any diagnostic lines — the process was killed by the OS, not by a Verilog semantic error. No resource exhaustion, bus-width violation, or architectural constraint is implicated. The contract (256-bit bus, tiled-streaming, 1×1 conv on xczu9eg) is well within capability limits. This is a syntax/tool-invocation failure fixable by repairing the generated Verilog so iverilog -g2012 accepts it."
+        }
+      }
+    },
+    {
+      "attempt_index": 3,
+      "stage": "surgeon_assayer",
+      "module": {
+        "module_id": "layer1_0_conv1",
+        "spec_hash": "conv2d_64x64x1x1_s112x112_i512_o512",
+        "generated_by": "Surgeon",
+        "attempt": 2
+      },
+      "result": {
+        "module_id": "layer1_0_conv1",
+        "status": "syntax_error",
+        "timing_pass": false,
+        "timing_actual_cycles": 0,
+        "timing_expected_cycles": 4193,
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "failure_category": "code_bug",
+        "classifier_reason": "iverilog exited with code 3221225794 (0xC0000002, Windows STATUS_NOT_IMPLEMENTED or a crash) before producing any diagnostic lines — no resource overflow, no bus-width violation, no timing constraint breach. The contract parameters are all within limits (256-bit bus << 4096-bit cap, 1x1 conv with 4096 weights is well within BRAM/DSP budget). This is a syntax/parse failure on the generated Verilog files; the Surgeon's attempt 2 RTL contains a construct that iverilog-g2012 rejects or causes iverilog to crash. A targeted repair of the offending syntax is the correct next step."
+      },
+      "logs": {
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verilator_stderr": "",
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verif_result_json": {
+          "module_id": "layer1_0_conv1",
+          "status": "syntax_error",
+          "timing_pass": false,
+          "timing_actual_cycles": 0,
+          "timing_expected_cycles": 4193,
+          "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-cOUKNW\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "failure_category": "code_bug",
+          "classifier_reason": "iverilog exited with code 3221225794 (0xC0000002, Windows STATUS_NOT_IMPLEMENTED or a crash) before producing any diagnostic lines — no resource overflow, no bus-width violation, no timing constraint breach. The contract parameters are all within limits (256-bit bus << 4096-bit cap, 1x1 conv with 4096 weights is well within BRAM/DSP budget). This is a syntax/parse failure on the generated Verilog files; the Surgeon's attempt 2 RTL contains a construct that iverilog-g2012 rejects or causes iverilog to crash. A targeted repair of the offending syntax is the correct next step."
+        }
+      }
+    },
+    {
+      "attempt_index": 4,
+      "stage": "surgeon_assayer",
+      "module": {
+        "module_id": "layer1_0_conv1",
+        "spec_hash": "conv2d_64x64x1x1_s112x112_i256_o256_iotiled-streaming_tile32",
+        "generated_by": "Surgeon",
+        "attempt": 3
+      },
+      "result": {
+        "module_id": "layer1_0_conv1",
+        "status": "syntax_error",
+        "timing_pass": false,
+        "timing_actual_cycles": 0,
+        "timing_expected_cycles": 4193,
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "failure_category": "code_bug",
+        "classifier_reason": "iverilog exited with code 3221225794 (0xC0000002, access violation or abnormal termination) before producing any diagnostic lines — no resource overflow, no bus-width breach, no placement failure. The contract parameters are well within limits (256-bit bus vs 4096-bit cap, 1x1 conv with 4096 weights on a ZCU102). This is a syntax/structural Verilog error in the generated RTL that iverilog could not parse; Surgeon on attempt 3 produced malformed Verilog. A targeted repair pass should fix it."
+      },
+      "logs": {
+        "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verilator_stderr": "",
+        "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+        "verif_result_json": {
+          "module_id": "layer1_0_conv1",
+          "status": "syntax_error",
+          "timing_pass": false,
+          "timing_actual_cycles": 0,
+          "timing_expected_cycles": 4193,
+          "fix_hint": "iverilog lint rejected the RTL before Verilator could run.\n\nRepair the Verilog so `iverilog -g2012` accepts it.\n\niverilog stderr:\n\nCommand failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "iverilog_stderr": "Command failed: iverilog -o \\\\.\\nul -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\layer1_0_conv1.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-nmLv4R\\conv_datapath.v\n\nprocess: exit_code=3221225794 killed=false",
+          "failure_category": "code_bug",
+          "classifier_reason": "iverilog exited with code 3221225794 (0xC0000002, access violation or abnormal termination) before producing any diagnostic lines — no resource overflow, no bus-width breach, no placement failure. The contract parameters are well within limits (256-bit bus vs 4096-bit cap, 1x1 conv with 4096 weights on a ZCU102). This is a syntax/structural Verilog error in the generated RTL that iverilog could not parse; Surgeon on attempt 3 produced malformed Verilog. A targeted repair pass should fix it."
+        }
+      }
+    },
+    {
+      "attempt_index": 5,
+      "stage": "retrospector_foundry_dispatch",
+      "module": null,
+      "result": {
+        "module_id": "layer1_0_conv1",
+        "status": "fail",
+        "timing_pass": false,
+        "timing_actual_cycles": 0,
+        "timing_expected_cycles": 4193,
+        "failure_category": "unknown",
+        "violated_constraint": "retrospector_foundry_dispatch_failed",
+        "classifier_reason": "Foundry's final post-retrospector attempt failed before producing RTL.",
+        "fix_hint": "Claude Code returned an error result: You've hit your limit · resets 4pm (Europe/Berlin)"
+      },
+      "logs": {
+        "iverilog_stderr": "",
+        "verilator_stderr": "",
+        "fix_hint": "Claude Code returned an error result: You've hit your limit · resets 4pm (Europe/Berlin)",
+        "verif_result_json": {
+          "module_id": "layer1_0_conv1",
+          "status": "fail",
+          "timing_pass": false,
+          "timing_actual_cycles": 0,
+          "timing_expected_cycles": 4193,
+          "failure_category": "unknown",
+          "violated_constraint": "retrospector_foundry_dispatch_failed",
+          "classifier_reason": "Foundry's final post-retrospector attempt failed before producing RTL.",
+          "fix_hint": "Claude Code returned an error result: You've hit your limit · resets 4pm (Europe/Berlin)"
+        }
+      }
+    }
+  ],
+  "available_contracts": [
+    {
+      "id": "flat-bus",
+      "complexity": 0,
+      "description": "Full packed activation bus, current default contract."
+    },
+    {
+      "id": "tiled-streaming",
+      "complexity": 1,
+      "description": "Channel-tiled stream contract that keeps each activation stream within the configured bus cap."
+    },
+    {
+      "id": "dram-backed-weights",
+      "complexity": 2,
+      "description": "External-memory-backed weights contract for layers that cannot fit the simpler streaming contracts."
+    }
+  ]
+}

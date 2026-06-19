@@ -1,0 +1,22 @@
+# RQ2 Leg C verified working combo in /root/rq2_venv (WSL Ubuntu, py3.10), 2026-06-12.
+#
+# WARNING: a bare `pip install qkeras hls4ml` into a tensorflow-cpu==2.15.1 venv
+# PULLS IN tensorflow==2.21 + keras==3.x (qkeras/hls4ml declare a bare `tensorflow`
+# dep that the resolver satisfies with the latest generic wheel, ignoring the
+# installed tensorflow-cpu) and BREAKS the venv. Repair sequence that produced
+# this combo:
+#   pip uninstall -y tensorflow tf-keras keras ml-dtypes protobuf absl-py
+#   pip install --force-reinstall --no-cache-dir tensorflow-cpu==2.15.1 protobuf==3.20.3
+#   pip install pyparsing==3.1.4          # qkeras safe_eval needs delimitedList
+#   pip install --no-deps tf-keras==2.15.1  # tensorflow-model-optimization import path
+#
+tensorflow-cpu==2.15.1
+keras==2.15.0
+tf-keras==2.15.1        # install with --no-deps (else it drags generic tensorflow)
+qkeras==0.9.0
+hls4ml==1.3.0
+pyparsing==3.1.4
+protobuf==3.20.3
+tensorflow-model-optimization==0.8.1
+numpy==1.26.4
+scipy==1.15.3

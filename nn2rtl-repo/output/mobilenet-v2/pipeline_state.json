@@ -1,0 +1,50 @@
+{
+  "run_id": "fa361d08-5380-4592-8ded-67bed25fa1be",
+  "started_at": "2026-05-25T17:11:41.279Z",
+  "modules": {
+    "node_mean": "fail_abort"
+  },
+  "attempts": {
+    "node_mean": 1
+  },
+  "results": {
+    "node_mean": {
+      "module_id": "node_mean",
+      "status": "fail",
+      "timing_pass": false,
+      "timing_actual_cycles": -1,
+      "timing_expected_cycles": 52,
+      "fix_hint": "iverilog exited non-zero without compiler diagnostics.\n\nThis is treated as a deterministic verification/toolchain setup failure, not an RTL syntax bug.\n\nCheck the pipeline process environment, especially PATH, YOSYSHQ_ROOT, TMPDIR/TEMP, and the exact iverilog binary.\n\nReplay the embedded verilog_source before spending a Surgeon attempt.\n\niverilog diagnostic:\n\niverilog exited non-zero without diagnostic output.\ncommand: iverilog -o C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.ivvp -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\conv_datapath.v\ncwd: C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\nnode_error: Command failed: iverilog -o C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.ivvp -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\conv_datapath.v\nprocess: exit_code=3221225794 killed=false\nTreat this as a toolchain/runtime setup failure unless the same source produces a real compiler diagnostic when replayed.",
+      "iverilog_stderr": "iverilog exited non-zero without diagnostic output.\ncommand: iverilog -o C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.ivvp -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\conv_datapath.v\ncwd: C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\nnode_error: Command failed: iverilog -o C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.ivvp -g2012 C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\node_mean.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\coord_scheduler.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\line_buf_window.v C:\\Users\\User\\AppData\\Local\\Temp\\nn2rtl-iverilog-FGrtDr\\conv_datapath.v\nprocess: exit_code=3221225794 killed=false\nTreat this as a toolchain/runtime setup failure unless the same source produces a real compiler diagnostic when replayed.",
+      "status_class": "tb_setup_error",
+      "failure_category": "toolchain_infra",
+      "violated_constraint": "toolchain_or_testbench_setup",
+      "classifier_reason": "Deterministic evidence says the RTL did not receive a trustworthy compiler/simulation verdict because the local toolchain or testbench setup failed."
+    }
+  },
+  "max_retries": 2,
+  "total_cost_usd": 1.481725,
+  "model_usage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 19203,
+      "outputTokens": 15,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.019278,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000
+    },
+    "claude-opus-4-7": {
+      "inputTokens": 11,
+      "outputTokens": 35116,
+      "cacheReadInputTokens": 392334,
+      "cacheCreationInputTokens": 62132,
+      "webSearchRequests": 0,
+      "costUSD": 1.462447,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000
+    }
+  },
+  "retrospector_calls": {}
+}

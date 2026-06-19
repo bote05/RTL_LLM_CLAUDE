@@ -1,0 +1,1230 @@
+{
+  "network_id": "mobilenet-v2",
+  "model_name": "mobilenet-v2",
+  "output_root": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\mobilenet-v2",
+  "layer_ir_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\mobilenet-v2\\layer_ir.json",
+  "generated_at": "2026-05-15T13:38:49.223Z",
+  "counts": {
+    "total_layers": 99,
+    "runnable": 13,
+    "blocked": 2,
+    "preflight_risk": 84
+  },
+  "cycles_per_frame": {
+    "runnable": 977783,
+    "blocked": 1375,
+    "total": 2218445,
+    "blocked_ratio": 0.0006198035110178526
+  },
+  "e2e_comparison_reliable": true,
+  "reliability_rule": "e2e comparison is unreliable when blocked_cycles / total_cycles > 0.20",
+  "preflight_scope": "advisory only: import preflight uses LayerIR shape/contract heuristics; deterministic RTL synthesis preflight gates still run before Vivado.",
+  "layers": [
+    {
+      "module_id": "node_conv_810",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1140,
+      "signature_hash": "a123bb313c43d3ab93bcde0336f99460",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s2x2|d1x1|g1|bus256|tilenone|c3-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "177f9fe549f45fa15d9b1b54740160b6",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_812",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 452,
+      "signature_hash": "6d7ab81bea25d6234bf5dc45d0850603",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g32|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_2",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "177f9fe549f45fa15d9b1b54740160b6",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_814",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 537,
+      "signature_hash": "47ea05d9507dfe8f7d7391de4c9192ec",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus256|tilenone|c32-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_816",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1681,
+      "signature_hash": "9c5e601fe85481ed103f239f0f73581a",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus768|tilenone|c16-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_3",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "228420b6bd155f9e495b64086c12cd7a",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus768|tilenone|c96-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_818",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1124,
+      "signature_hash": "cb0e977f361a44ac1bc2af58e31c62fd",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s2x2|d1x1|g96|bus768|tilenone|c96-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_4",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "3df31020369940f78246fcbd7ce37960",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus768|tilenone|c96-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_820",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 2341,
+      "signature_hash": "d6e0c987c93bdaaf9b5a254d7f2512bf",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus768|tilenone|c96-24|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_822",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 3673,
+      "signature_hash": "f78418dfd48440332e9530c782e99082",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1152|tilenone|c24-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_5",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "58789093f4492df99c2377428271756f",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1152|tilenone|c144-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_824",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1572,
+      "signature_hash": "6e054c4d33a3475daddc8e0e90d30388",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g144|bus1152|tilenone|c144-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_6",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "58789093f4492df99c2377428271756f",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1152|tilenone|c144-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_826",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 3493,
+      "signature_hash": "2084c971e4d705d76c4953b82c45b5af",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1152|tilenone|c144-24|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_198",
+      "op_type": "add",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 27,
+      "signature_hash": "840248af973be231a4e65c7c75d41125",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus384|tilenone|c24-24|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_828",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 3673,
+      "signature_hash": "f78418dfd48440332e9530c782e99082",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1152|tilenone|c24-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_7",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "58789093f4492df99c2377428271756f",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1152|tilenone|c144-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_830",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1572,
+      "signature_hash": "f26e1d8766a74c2baf69982d5dad5bd8",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s2x2|d1x1|g144|bus1152|tilenone|c144-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_8",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cd60bc3b73148905e89f6801468b8ad3",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1152|tilenone|c144-144|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_832",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 4657,
+      "signature_hash": "67706e3cff223f6dba9dc23a8be0b4f1",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1152|tilenone|c144-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_834",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6433,
+      "signature_hash": "40a9e51ddc26b26954c815fbac10dd11",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1536|tilenone|c32-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_9",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "74700e90c836620107b6a156a71c1913",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_836",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 2048,
+      "signature_hash": "453beffddcc84810b00a3c035b717e1b",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g192|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_10",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "74700e90c836620107b6a156a71c1913",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_838",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6193,
+      "signature_hash": "b4c7e03356ce28605632a18a8d2d43e8",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1536|tilenone|c192-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_336",
+      "op_type": "add",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 35,
+      "signature_hash": "cc17636feb240a92b9734872f34248af",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_840",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6433,
+      "signature_hash": "40a9e51ddc26b26954c815fbac10dd11",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1536|tilenone|c32-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_11",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "74700e90c836620107b6a156a71c1913",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_842",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 2048,
+      "signature_hash": "453beffddcc84810b00a3c035b717e1b",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g192|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_12",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "74700e90c836620107b6a156a71c1913",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_844",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6193,
+      "signature_hash": "b4c7e03356ce28605632a18a8d2d43e8",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1536|tilenone|c192-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_408",
+      "op_type": "add",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 35,
+      "signature_hash": "cc17636feb240a92b9734872f34248af",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_846",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6433,
+      "signature_hash": "40a9e51ddc26b26954c815fbac10dd11",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1536|tilenone|c32-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_13",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "74700e90c836620107b6a156a71c1913",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_848",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 2048,
+      "signature_hash": "94fd4cb97b43985aa6c9f022f2505ba2",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s2x2|d1x1|g192|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_14",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "6584f543b39b9a5ccf88cfa5aa6ec8b6",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c192-192|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_850",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 12385,
+      "signature_hash": "e22848984f84c2369ce7920b6c3a374c",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus1536|tilenone|c192-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_852",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 25153,
+      "signature_hash": "cbcc588b6826a039617c69a3d0f8035b",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c64-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_15",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_854",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 4050,
+      "signature_hash": "a01b2c880b677bc555e63073ae7b333f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g384|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_16",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_856",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 24673,
+      "signature_hash": "7e43f90c90c108de0244c62e0ed61e36",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c384-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_546",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 67,
+      "signature_hash": "017c917a51501ef39ddc77f63a110680",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1024|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_858",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 25153,
+      "signature_hash": "cbcc588b6826a039617c69a3d0f8035b",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c64-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_17",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_860",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 4050,
+      "signature_hash": "a01b2c880b677bc555e63073ae7b333f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g384|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_18",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_862",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 24673,
+      "signature_hash": "7e43f90c90c108de0244c62e0ed61e36",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c384-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_618",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 67,
+      "signature_hash": "017c917a51501ef39ddc77f63a110680",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1024|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_864",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 25153,
+      "signature_hash": "cbcc588b6826a039617c69a3d0f8035b",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c64-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_19",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_866",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 4050,
+      "signature_hash": "a01b2c880b677bc555e63073ae7b333f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g384|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_20",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_868",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 24673,
+      "signature_hash": "7e43f90c90c108de0244c62e0ed61e36",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c384-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_690",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 67,
+      "signature_hash": "017c917a51501ef39ddc77f63a110680",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1024|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_870",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 25153,
+      "signature_hash": "cbcc588b6826a039617c69a3d0f8035b",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c64-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_21",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_872",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 4050,
+      "signature_hash": "a01b2c880b677bc555e63073ae7b333f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g384|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_22",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "5154d4aa791e8dd570250d03863f2c85",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus3072|tilenone|c384-384|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_874",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 37009,
+      "signature_hash": "5416bce0a8f9e66f75861249648b3a24",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s1x1|d1x1|g1|bus3072|tilenone|c384-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_876",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 56161,
+      "signature_hash": "7d69311cfad5193b3bf4bf5cda7c4691",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c96-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_23",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "937eb1f549f15f71e34b5d5580e03b8a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_878",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6066,
+      "signature_hash": "82d5a9b4955dae7f32b7ac9d826295f3",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g576|bus4608|tilenone|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_24",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "937eb1f549f15f71e34b5d5580e03b8a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_880",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 55441,
+      "signature_hash": "b8b13b59a71cf96bdbe0660c30643ca9",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c576-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_828",
+      "op_type": "add",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 99,
+      "signature_hash": "dbc2f5f0b849e50c6f05704bb425eea4",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c96-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_882",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 56161,
+      "signature_hash": "7d69311cfad5193b3bf4bf5cda7c4691",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c96-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_25",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "937eb1f549f15f71e34b5d5580e03b8a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_884",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6066,
+      "signature_hash": "82d5a9b4955dae7f32b7ac9d826295f3",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g576|bus4608|tilenone|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_26",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "937eb1f549f15f71e34b5d5580e03b8a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_886",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 55441,
+      "signature_hash": "b8b13b59a71cf96bdbe0660c30643ca9",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c576-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_900",
+      "op_type": "add",
+      "status": "preflight_risk",
+      "contract_id": "flat-bus",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 99,
+      "signature_hash": "dbc2f5f0b849e50c6f05704bb425eea4",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1536|tilenone|c96-96|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_888",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 56161,
+      "signature_hash": "7d69311cfad5193b3bf4bf5cda7c4691",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c96-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_27",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "937eb1f549f15f71e34b5d5580e03b8a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_890",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory",
+        "activation_memory_exceeds_vivado_variable_bit_limit"
+      ],
+      "estimated_cycles": 6066,
+      "signature_hash": "09cb7538c6cd8c82243bde1d98f5970f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s2x2|d1x1|g576|bus4608|tilenone|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_28",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "ad25b416666821d46d7ec0f833116dd3",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c576-576|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_892",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 92401,
+      "signature_hash": "1e315ff861152b0fbd55f2edd22d7c22",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c576-160|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_894",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [],
+      "estimated_cycles": 155041,
+      "signature_hash": "e2a5394cdf7820e831e902b5caaa7fec",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c160-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_29",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cb1ab4e0f045bc62ca3792419e1bdb4a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_896",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 10091,
+      "signature_hash": "90671612f1cccd952ae5ae3032d07e9f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g960|bus7680|tilenone|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_30",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cb1ab4e0f045bc62ca3792419e1bdb4a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_898",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 153841,
+      "signature_hash": "3ccfc226e5738fd718f66952e24aae6b",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c960-160|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_1038",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 163,
+      "signature_hash": "d8a4aef415a1f155e27650295009d61a",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus2560|tilenone|c160-160|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_900",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [],
+      "estimated_cycles": 155041,
+      "signature_hash": "e2a5394cdf7820e831e902b5caaa7fec",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c160-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_31",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cb1ab4e0f045bc62ca3792419e1bdb4a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_902",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 10091,
+      "signature_hash": "90671612f1cccd952ae5ae3032d07e9f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g960|bus7680|tilenone|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_32",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cb1ab4e0f045bc62ca3792419e1bdb4a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_904",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 153841,
+      "signature_hash": "3ccfc226e5738fd718f66952e24aae6b",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c960-160|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_1110",
+      "op_type": "add",
+      "status": "runnable",
+      "contract_id": "flat-bus",
+      "preflight_risks": [],
+      "estimated_cycles": 163,
+      "signature_hash": "d8a4aef415a1f155e27650295009d61a",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus2560|tilenone|c160-160|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_906",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [],
+      "estimated_cycles": 155041,
+      "signature_hash": "e2a5394cdf7820e831e902b5caaa7fec",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c160-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_33",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cb1ab4e0f045bc62ca3792419e1bdb4a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_908",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "depthwise-conv",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 10091,
+      "signature_hash": "90671612f1cccd952ae5ae3032d07e9f",
+      "exact_reference_key": "conv2d|depthwise-conv|k3x3|s1x1|d1x1|g960|bus7680|tilenone|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_34",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "cb1ab4e0f045bc62ca3792419e1bdb4a",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c960-960|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_910",
+      "op_type": "conv2d",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 307681,
+      "signature_hash": "69af9d252353248fd22d832fa7d7a101",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c960-320|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv_912",
+      "op_type": "conv2d",
+      "status": "runnable",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [],
+      "estimated_cycles": 411521,
+      "signature_hash": "14eee9468752608242eb40d8b0c65398",
+      "exact_reference_key": "conv2d|tiled-streaming|k1x1|s1x1|d1x1|g1|bus256|tile32|c320-1280|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "n4_35",
+      "op_type": "relu",
+      "status": "preflight_risk",
+      "contract_id": "tiled-streaming",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 1,
+      "signature_hash": "8b50f487eaf31d971bbef96e5506167e",
+      "exact_reference_key": "relu|tiled-streaming|kx|s1x1|d1x1|g1|bus256|tile32|c1280-1280|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_mean",
+      "op_type": "global_avg_pool",
+      "status": "blocked",
+      "contract_id": "flat-bus",
+      "block_reason": "no_registered_contract_fits_layer",
+      "preflight_risks": [
+        "large_scalarized_activation_memory"
+      ],
+      "estimated_cycles": 52,
+      "signature_hash": "54f2e3fd0ac981e310e3641963c83f35",
+      "exact_reference_key": "global_avg_pool|flat-bus|kx|s1x1|d1x1|g1|bus10240|tilenone|c1280-1280|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_linear",
+      "op_type": "gemm",
+      "status": "blocked",
+      "contract_id": "flat-bus",
+      "block_reason": "no_registered_contract_fits_layer",
+      "preflight_risks": [],
+      "estimated_cycles": 1323,
+      "signature_hash": "958ef003efb7428d11731f4bfdf72869",
+      "exact_reference_key": "gemm|flat-bus|kx|s1x1|d1x1|g1|bus10240|tilenone|c1280-1000|int8_symmetric_per_tensor"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "golden_vectors": 8,
+  "golden_source": "CIFAR-10 test_batch images 0..G-1 (raw 0..255, NCHW)",
+  "golden_labels": [
+    3,
+    8,
+    8,
+    0,
+    6,
+    6,
+    1,
+    6
+  ],
+  "calibration_samples": 256,
+  "calibration_source": "feed rows G..N-1 = official MLPerf Tiny calibration_samples_idxs.npy order (indices into the TEST set, exactly as upstream model_converter.py uses them)",
+  "cifar_dir": "D:\\RTL_LLM_CLAUDE\\rq2_resnet8\\data\\cifar-10-batches-py",
+  "calib_idx_path": "D:\\RTL_LLM_CLAUDE\\rq2_resnet8\\scripts\\upstream_refs\\calibration_samples_idxs.npy"
+}

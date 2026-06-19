@@ -1,0 +1,637 @@
+{
+  "method": "analytical + verilator-verified",
+  "backpressure_margin_factor": 1.5,
+  "fifos": [
+    {
+      "add_module_id": "node_add",
+      "main_path_modules": [
+        "node_conv_198",
+        "node_relu_1",
+        "node_conv_200",
+        "node_relu_2",
+        "node_conv_202"
+      ],
+      "skip_path_modules": [
+        "node_conv_204"
+      ],
+      "main_path_latency_cycles": 57984,
+      "skip_path_latency_cycles": 16769,
+      "main_path_spatial_latency_cycles": 57984,
+      "skip_path_spatial_latency_cycles": 16769,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 65536,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 45312,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 45312,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 57984,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_1",
+      "main_path_modules": [
+        "node_relu_3",
+        "node_conv_206",
+        "node_relu_4",
+        "node_conv_208",
+        "node_relu_5",
+        "node_conv_210"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 70273,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 70273,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 131072,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 74370,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 74370,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 70273,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_2",
+      "main_path_modules": [
+        "node_relu_6",
+        "node_conv_212",
+        "node_relu_7",
+        "node_conv_214",
+        "node_relu_8",
+        "node_conv_216"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 70273,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 70273,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 131072,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 74370,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 74370,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 70273,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_3",
+      "main_path_modules": [
+        "node_relu_9",
+        "node_conv_218",
+        "node_relu_10",
+        "node_conv_220",
+        "node_relu_11",
+        "node_conv_222"
+      ],
+      "skip_path_modules": [
+        "node_conv_224"
+      ],
+      "main_path_latency_cycles": 246977,
+      "skip_path_latency_cycles": 131841,
+      "main_path_spatial_latency_cycles": 99269,
+      "skip_path_spatial_latency_cycles": 131841,
+      "engine_dispatches_in_main_path": 1,
+      "engine_worst_case_occupancy_cycles": 2360082,
+      "analytical_depth_uncapped": 64,
+      "analytical_depth": 64,
+      "verified_depth": 64,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1,
+      "verilator_cycles_run": 2361108,
+      "verilator_attempts": [
+        {
+          "depth": 64,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1,
+          "cycles": 2361108,
+          "outputs": 1024,
+          "expected": 1024
+        }
+      ],
+      "sim_main_latency_cycles": 99269,
+      "throttle_events": 1,
+      "throttle_duration_cycles": 2360082,
+      "throttle_period_cycles": 2360146
+    },
+    {
+      "add_module_id": "node_add_4",
+      "main_path_modules": [
+        "node_relu_12",
+        "node_conv_226",
+        "node_relu_13",
+        "node_conv_228",
+        "node_relu_14",
+        "node_conv_230"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 279717,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 279717,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 524288,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 283814,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 283814,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 279717,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_5",
+      "main_path_modules": [
+        "node_relu_15",
+        "node_conv_232",
+        "node_relu_16",
+        "node_conv_234",
+        "node_relu_17",
+        "node_conv_236"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 279717,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 279717,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 524288,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 283814,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 283814,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 279717,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_6",
+      "main_path_modules": [
+        "node_relu_18",
+        "node_conv_238",
+        "node_relu_19",
+        "node_conv_240",
+        "node_relu_20",
+        "node_conv_242"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 279717,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 279717,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 524288,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 283814,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 283814,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 279717,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_7",
+      "main_path_modules": [
+        "node_relu_21",
+        "node_conv_244",
+        "node_relu_22",
+        "node_conv_246",
+        "node_relu_23",
+        "node_conv_248"
+      ],
+      "skip_path_modules": [
+        "node_conv_250"
+      ],
+      "main_path_latency_cycles": 985381,
+      "skip_path_latency_cycles": 525825,
+      "main_path_spatial_latency_cycles": 985381,
+      "skip_path_spatial_latency_cycles": 525825,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 1048576,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 463653,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 463653,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 985381,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_8",
+      "main_path_modules": [
+        "node_relu_24",
+        "node_conv_252",
+        "node_relu_25",
+        "node_conv_254",
+        "node_relu_26",
+        "node_conv_256"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 1116439,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 1116439,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 2097152,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 1120536,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 1120536,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 1116439,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_9",
+      "main_path_modules": [
+        "node_relu_27",
+        "node_conv_258",
+        "node_relu_28",
+        "node_conv_260",
+        "node_relu_29",
+        "node_conv_262"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 1116439,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 1116439,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 2097152,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 1120536,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 1120536,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 1116439,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_10",
+      "main_path_modules": [
+        "node_relu_30",
+        "node_conv_264",
+        "node_relu_31",
+        "node_conv_266",
+        "node_relu_32",
+        "node_conv_268"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 1116439,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 1116439,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 2097152,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 1120536,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 1120536,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 1116439,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_11",
+      "main_path_modules": [
+        "node_relu_33",
+        "node_conv_270",
+        "node_relu_34",
+        "node_conv_272",
+        "node_relu_35",
+        "node_conv_274"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 1116439,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 1116439,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 2097152,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 1120536,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 1120536,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 1116439,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_12",
+      "main_path_modules": [
+        "node_relu_36",
+        "node_conv_276",
+        "node_relu_37",
+        "node_conv_278",
+        "node_relu_38",
+        "node_conv_280"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 1116439,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 1116439,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 0,
+      "engine_worst_case_occupancy_cycles": 0,
+      "analytical_depth_uncapped": 2097152,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 1024,
+      "verilator_cycles_run": 1120536,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 1024,
+          "cycles": 1120536,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 1116439,
+      "throttle_events": 0,
+      "throttle_duration_cycles": 0,
+      "throttle_period_cycles": 0
+    },
+    {
+      "add_module_id": "node_add_13",
+      "main_path_modules": [
+        "node_relu_39",
+        "node_conv_282",
+        "node_relu_40",
+        "node_conv_284",
+        "node_relu_41",
+        "node_conv_286"
+      ],
+      "skip_path_modules": [
+        "node_conv_288"
+      ],
+      "main_path_latency_cycles": 3936791,
+      "skip_path_latency_cycles": 2100225,
+      "main_path_spatial_latency_cycles": 3,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 3,
+      "engine_worst_case_occupancy_cycles": 2360082,
+      "analytical_depth_uncapped": 64,
+      "analytical_depth": 64,
+      "verified_depth": 64,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 3,
+      "verilator_cycles_run": 7081272,
+      "verilator_attempts": [
+        {
+          "depth": 64,
+          "result": "no_deadlock_no_overflow",
+          "peak": 3,
+          "cycles": 7081272,
+          "outputs": 1024,
+          "expected": 1024
+        }
+      ],
+      "sim_main_latency_cycles": 3,
+      "throttle_events": 3,
+      "throttle_duration_cycles": 2360082,
+      "throttle_period_cycles": 2360146
+    },
+    {
+      "add_module_id": "node_add_14",
+      "main_path_modules": [
+        "node_relu_42",
+        "node_conv_290",
+        "node_relu_43",
+        "node_conv_292",
+        "node_relu_44",
+        "node_conv_294"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 4461072,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 3,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 3,
+      "engine_worst_case_occupancy_cycles": 2360082,
+      "analytical_depth_uncapped": 64,
+      "analytical_depth": 64,
+      "verified_depth": 64,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 3,
+      "verilator_cycles_run": 7081272,
+      "verilator_attempts": [
+        {
+          "depth": 64,
+          "result": "no_deadlock_no_overflow",
+          "peak": 3,
+          "cycles": 7081272,
+          "outputs": 1024,
+          "expected": 1024
+        }
+      ],
+      "sim_main_latency_cycles": 3,
+      "throttle_events": 3,
+      "throttle_duration_cycles": 2360082,
+      "throttle_period_cycles": 2360146
+    },
+    {
+      "add_module_id": "node_add_15",
+      "main_path_modules": [
+        "node_relu_45",
+        "node_conv_296",
+        "node_relu_46",
+        "node_conv_298",
+        "node_relu_47",
+        "node_conv_300"
+      ],
+      "skip_path_modules": [],
+      "main_path_latency_cycles": 4461072,
+      "skip_path_latency_cycles": 0,
+      "main_path_spatial_latency_cycles": 1051652,
+      "skip_path_spatial_latency_cycles": 0,
+      "engine_dispatches_in_main_path": 2,
+      "engine_worst_case_occupancy_cycles": 2360082,
+      "analytical_depth_uncapped": 2097152,
+      "analytical_depth": 1024,
+      "verified_depth": 1024,
+      "verilator_status": "no_deadlock_no_overflow",
+      "sizing_model": "throttled + backpressure-bounded (task 04c)",
+      "verilator_peak_occupancy": 64,
+      "verilator_cycles_run": 4724262,
+      "verilator_attempts": [
+        {
+          "depth": 1024,
+          "result": "no_deadlock_no_overflow",
+          "peak": 64,
+          "cycles": 4724262,
+          "outputs": 4096,
+          "expected": 4096
+        }
+      ],
+      "sim_main_latency_cycles": 1051652,
+      "throttle_events": 2,
+      "throttle_duration_cycles": 2360082,
+      "throttle_period_cycles": 2360146
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "module_name": "node_conv_288",
+  "module_id": "node_conv_288",
+  "clock_signal": "clk",
+  "reset_signal": "rst_n",
+  "valid_in_signal": "valid_in",
+  "valid_out_signal": "valid_out",
+  "ready_in_signal": "ready_in",
+  "data_in_signal": "data_in",
+  "data_out_signal": "data_out",
+  "bus_bytes_per_sample": 32,
+  "input_width_bits": 256,
+  "output_width_bits": 256,
+  "pipeline_latency_cycles": 2100225,
+  "clock_period_ns": 20,
+  "golden_inputs_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\goldens\\contracts\\node_conv_288_dram-backed-weights_conv2d_1024x2048x1x1_s14x14_st2x2_p0x0_d1x1_g1\\node_conv_288.goldin",
+  "golden_outputs_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\goldens\\contracts\\node_conv_288_dram-backed-weights_conv2d_1024x2048x1x1_s14x14_st2x2_p0x0_d1x1_g1\\node_conv_288.goldout",
+  "results_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\output\\reports\\node_conv_288.results.json",
+  "testbench_template_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\contracts\\dram-backed-weights\\testbench.cpp",
+  "contract_id": "dram-backed-weights",
+  "contract_name": "DRAM-backed Weights",
+  "contract_metadata_path": "C:\\Users\\User\\Desktop\\RTL_LLM_CLAUDE\\nn2rtl-repo\\contracts\\dram-backed-weights\\metadata.json",
+  "beat_width_bits": 256,
+  "beats_per_input_sample": 32,
+  "beats_per_output_sample": 64,
+  "contract_params": {
+    "beat_width_bits": 256
+  },
+  "weights_path": "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights.hex",
+  "weight_bank_paths": [
+    "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights_bank0.hex",
+    "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights_bank1.hex",
+    "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights_bank2.hex",
+    "C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/weights/node_conv_288_weights_bank3.hex"
+  ],
+  "axi_weight_data_width_bits": 64
+}

@@ -1,0 +1,90 @@
+{
+"node_relu_1": {
+"mult": 3,
+"shift": 0
+},
+"node_relu_3": {
+"mult": 1959,
+"shift": 10
+},
+"node_relu_4": {
+"mult": 469,
+"shift": 7
+},
+"node_relu_5": {
+"mult": 1773,
+"shift": 10
+},
+"node_relu_6": {
+"mult": 2,
+"shift": 0
+},
+"node_relu_7": {
+"mult": 2007,
+"shift": 10
+},
+"node_relu_10": {
+"mult": 4771,
+"shift": 12
+},
+"node_relu_16": {
+"mult": 5615,
+"shift": 12
+},
+"node_relu_17": {
+"mult": 1949,
+"shift": 10
+},
+"node_relu_20": {
+"mult": 9771,
+"shift": 12
+},
+"node_relu_22": {
+"mult": 2307,
+"shift": 11
+},
+"node_relu_23": {
+"mult": 1497,
+"shift": 10
+},
+"node_relu_26": {
+"mult": 12749,
+"shift": 13
+},
+"node_relu_27": {
+"mult": 2821,
+"shift": 11
+},
+"node_relu_30": {
+"mult": 2291,
+"shift": 11
+},
+"node_relu_35": {
+"mult": 1441,
+"shift": 10
+},
+"node_relu_36": {
+"mult": 303,
+"shift": 8
+},
+"node_relu_38": {
+"mult": 531,
+"shift": 9
+},
+"node_relu_41": {
+"mult": 2329,
+"shift": 11
+},
+"node_relu_44": {
+"mult": 1765,
+"shift": 10
+},
+"node_relu_46": {
+"mult": 89,
+"shift": 6
+},
+"node_relu_47": {
+"mult": 2777,
+"shift": 10
+}
+}

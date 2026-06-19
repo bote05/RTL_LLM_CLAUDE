@@ -1,0 +1,3061 @@
+{
+  "model_name": "resnet8",
+  "quantization": "int8_symmetric_per_tensor",
+  "generated_at": "2026-06-12T16:56:48Z",
+  "layers": [
+    {
+      "module_id": "node_conv2d",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        3,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_bias.hex",
+      "weight_shape": [
+        16,
+        3,
+        3,
+        3
+      ],
+      "num_weights": 432,
+      "scale_factor": 31.63345976296219,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 72,
+      "clock_period_ns": 20,
+      "input_width_bits": 24,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.002816211374157569,
+        0.0008910568895609008,
+        0.0022202058932879673,
+        0.0029439508535713302,
+        0.002386338751407679,
+        0.0016867811202538087,
+        0.0023799556211709883,
+        0.00371360035515193,
+        0.0016483898130212704,
+        0.0016596380287293507,
+        0.0007945188057900085,
+        0.0015533790381051045,
+        0.0024957265875386347,
+        0.00045649983108341104,
+        0.0008468770800427227,
+        0.005280031517061247
+      ],
+      "weight_scale_per_oc": [
+        0.00008902634726837277,
+        0.000028168176868348382,
+        0.000070185364165809,
+        0.00009306446008849889,
+        0.00007543717219959944,
+        0.00005332268847269006,
+        0.0000752353880670853,
+        0.00011739469482563436,
+        0.000052109058742644265,
+        0.000052464638429228216,
+        0.000025116405595326796,
+        0.000049105568905361,
+        0.00007889515109127387,
+        0.000014430916962737683,
+        0.00002677156044228468,
+        0.00016691286873538047
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 3,
+        "output_channels": 16,
+        "input_width_bits": 24,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 3,
+        "output_channels": 16,
+        "input_width_bits": 24,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "1c334d02a9375e63743cc364239b2a9e",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c3-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.0634731082465705,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "557d59b1a67e11bff7c373f7cc31530b",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_1",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_1_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_1_bias.hex",
+      "weight_shape": [
+        16,
+        16,
+        3,
+        3
+      ],
+      "num_weights": 2304,
+      "scale_factor": 0.42772744776662436,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 124,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_1.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_1.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.0021988429516971207,
+        0.0009054225466344431,
+        0.0015530957656767006,
+        0.0015971951498888967,
+        0.0017811523165543633,
+        0.0024465258189025267,
+        0.0016283766684670928,
+        0.0024228326250922212,
+        0.0013910690842131365,
+        0.003315096203406735,
+        0.0017263942217805755,
+        0.0023471626317632397,
+        0.0024589269221089,
+        0.002275153097056318,
+        0.0017394647559059136,
+        0.0017337235044214815
+      ],
+      "weight_scale_per_oc": [
+        0.005140757188200951,
+        0.002116821240633726,
+        0.0036310406867414713,
+        0.0037341422867029905,
+        0.004164222627878189,
+        0.005719824228435755,
+        0.0038070427253842354,
+        0.005664431024342775,
+        0.0032522324472665787,
+        0.007750487420707941,
+        0.0040362016297876835,
+        0.005487519316375256,
+        0.005748817231506109,
+        0.0053191655315458775,
+        0.004066759720444679,
+        0.004053337033838034
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_1_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_1_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_1_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_1_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "7218e7b4eefeaa274f4e12fcbfc5e599",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_1",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_1_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.11801993753027729,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_1.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_1.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "557d59b1a67e11bff7c373f7cc31530b",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_2",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_bias.hex",
+      "weight_shape": [
+        16,
+        16,
+        3,
+        3
+      ],
+      "num_weights": 2304,
+      "scale_factor": 1.093115374452829,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 124,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_2.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_2.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.0015444432952978501,
+        0.0023954257143117934,
+        0.0034328209735698017,
+        0.004453441428885231,
+        0.0025421165518108107,
+        0.001974677567257771,
+        0.0025296414525838432,
+        0.002311816894806885,
+        0.001401462588347656,
+        0.00251398522341486,
+        0.0023637920633994744,
+        0.004266210591070669,
+        0.0014802469019576244,
+        0.003967055339567743,
+        0.0032815967904809614,
+        0.0021486826263698894
+      ],
+      "weight_scale_per_oc": [
+        0.001412882236763835,
+        0.002191375009715557,
+        0.003140401327982545,
+        0.004074081778526306,
+        0.002325570210814476,
+        0.0018064676551148295,
+        0.002314157783985138,
+        0.0021148882806301117,
+        0.0012820811243727803,
+        0.00229983520694077,
+        0.0021624360233545303,
+        0.003902799915522337,
+        0.001354154315777123,
+        0.003629127750173211,
+        0.0030020589474588633,
+        0.0019656503573060036
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_2_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "7218e7b4eefeaa274f4e12fcbfc5e599",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_25",
+      "op_type": "add",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_add_25_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.10796658823809285,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 19,
+      "clock_period_ns": 20,
+      "input_width_bits": 256,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_add_25.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_add_25.goldout",
+      "lhs_scale_factor": 0.0634731082465705,
+      "rhs_scale_factor": 0.10796658823809285,
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "add",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 256,
+        "output_width_bits": 128,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "add",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 256,
+        "output_width_bits": 128,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "ea012157eaf1c592f6fac289a49a5577",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_2",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_2_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.09533731205256905,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 128,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_2.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_2.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 16,
+        "input_width_bits": 128,
+        "output_width_bits": 128,
+        "bus_width_bits": 128,
+        "channel_tile": null,
+        "spatial_shape": [
+          32,
+          32
+        ],
+        "spatial_family": "medium",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "557d59b1a67e11bff7c373f7cc31530b",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus128|tilenone|c16-16|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_3",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_3_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_3_bias.hex",
+      "weight_shape": [
+        32,
+        16,
+        1,
+        1
+      ],
+      "num_weights": 512,
+      "scale_factor": 0.00914925753236703,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 561,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 256,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_3.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_3.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_3_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_3_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_3_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_3_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          1,
+          1
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 32,
+        "input_width_bits": 128,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          1,
+          1
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 32,
+        "input_width_bits": 128,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "0a766dee96adc8cde369f28450e98391",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_4",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        16,
+        32,
+        32
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_bias.hex",
+      "weight_shape": [
+        32,
+        16,
+        4,
+        4
+      ],
+      "num_weights": 8192,
+      "scale_factor": 1.0396052608198756,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 8310,
+      "clock_period_ns": 20,
+      "input_width_bits": 128,
+      "output_width_bits": 256,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_4.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_4.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.0025628379441290103,
+        0.00344974562126737,
+        0.002281176841092947,
+        0.0019746969401308917,
+        0.0021600569439203616,
+        0.0027813731057293794,
+        0.002335873807055127,
+        0.0017959732749841966,
+        0.002823107462969361,
+        0.0020142373383871003,
+        0.0021849967678273644,
+        0.0035455260667436534,
+        0.0017375553652358234,
+        0.0017107508940393792,
+        0.0021247130005297397,
+        0.0020769329114343187,
+        0.002158790770107021,
+        0.0016813334719129006,
+        0.0023108976753538207,
+        0.001361310037519793,
+        0.001990341605618282,
+        0.001723684093448192,
+        0.0017854814116643443,
+        0.0022936948003609097,
+        0.0027488667374895486,
+        0.002768269380713322,
+        0.0021676334123836324,
+        0.0029934188542279213,
+        0.0026279291054443665,
+        0.0022288974901274487,
+        0.0017893556953684786,
+        0.0027428456949342354
+      ],
+      "weight_scale_per_oc": [
+        0.0024652029387652874,
+        0.003318322589620948,
+        0.002194272121414542,
+        0.0018994680140167475,
+        0.0020777664612978697,
+        0.0026754126884043217,
+        0.0022468853276222944,
+        0.0017275530844926834,
+        0.0027155571151524782,
+        0.0019375020638108253,
+        0.002101756166666746,
+        0.0034104541409760714,
+        0.001671360689215362,
+        0.001645577372983098,
+        0.002043768996372819,
+        0.0019978091586381197,
+        0.0020765485242009163,
+        0.0016172806499525905,
+        0.00222286069765687,
+        0.0013094489695504308,
+        0.0019145166734233499,
+        0.0016580178635194898,
+        0.0017174609238281846,
+        0.0022063131909817457,
+        0.0026441446971148252,
+        0.002662808168679476,
+        0.0020850542932748795,
+        0.0028793802484869957,
+        0.002527814358472824,
+        0.002143984427675605,
+        0.0017211876111105084,
+        0.0026383530348539352
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_4_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          4,
+          4
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 32,
+        "input_width_bits": 128,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          4,
+          4
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 16,
+        "output_channels": 32,
+        "input_width_bits": 128,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "3f687506c44960a2f4c898fa212d01c4",
+      "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus256|tilenone|c16-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_3",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_3_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.09170529973788524,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 256,
+      "output_width_bits": 256,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_3.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_3.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 256,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 256,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "6adb6a7dc3df3464df2886a58984b427",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_5",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_5_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_5_bias.hex",
+      "weight_shape": [
+        32,
+        32,
+        3,
+        3
+      ],
+      "num_weights": 9216,
+      "scale_factor": 0.7840748968552876,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 324,
+      "clock_period_ns": 20,
+      "input_width_bits": 256,
+      "output_width_bits": 256,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_5.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_5.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.0028468665530770815,
+        0.00308279785518904,
+        0.0016881533079993799,
+        0.001984333785570753,
+        0.0027221577152849504,
+        0.0024135633846358567,
+        0.003078448260138602,
+        0.002744757317369604,
+        0.0021965139181684364,
+        0.0020678671506007247,
+        0.003460321748062145,
+        0.002250457221377695,
+        0.004728706090938285,
+        0.003003365260477963,
+        0.0025605764478320563,
+        0.0025894967092565616,
+        0.0020081453813404508,
+        0.0023435965354532047,
+        0.002330618034617111,
+        0.0023362740051473155,
+        0.002969886376623991,
+        0.0022586983768113356,
+        0.002194693098012596,
+        0.0029936934084771154,
+        0.002184628018959845,
+        0.002881549033009604,
+        0.0029367894013088212,
+        0.0027317056113116836,
+        0.002857025831367893,
+        0.0025319108529523074,
+        0.002486115053608618,
+        0.002420699159475591
+      ],
+      "weight_scale_per_oc": [
+        0.003630860475823283,
+        0.003931764513254166,
+        0.00215305108577013,
+        0.002530796220526099,
+        0.003471808275207877,
+        0.003078230656683445,
+        0.0039262170903384686,
+        0.003500631544739008,
+        0.0028014082927256823,
+        0.0026373337022960186,
+        0.004413254093378782,
+        0.002870206953957677,
+        0.006030936725437641,
+        0.003830457106232643,
+        0.00326572940684855,
+        0.0033026139717549086,
+        0.002561165252700448,
+        0.0029889957513660192,
+        0.0029724431224167347,
+        0.002979656681418419,
+        0.0037877585273236036,
+        0.0028807176277041435,
+        0.0027990860398858786,
+        0.003818121738731861,
+        0.002786249155178666,
+        0.0036750941071659327,
+        0.003745547030121088,
+        0.003483985550701618,
+        0.003643817501142621,
+        0.0032291696406900883,
+        0.003170762211084366,
+        0.0030873315408825874
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_5_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_5_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_5_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_5_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 256,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 256,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "6936bec495e765f6eaf39eb8b2a823d4",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_56",
+      "op_type": "add",
+      "input_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_add_56_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.13737633472352517,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 35,
+      "clock_period_ns": 20,
+      "input_width_bits": 512,
+      "output_width_bits": 256,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_add_56.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_add_56.goldout",
+      "lhs_scale_factor": 0.04880561978798213,
+      "rhs_scale_factor": 0.11695987220824235,
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "add",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 512,
+        "output_width_bits": 256,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "add",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 512,
+        "output_width_bits": 256,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "b9ab66f8307fc32ccd5724786a0dea95",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_4",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "output_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_4_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.09856558972456324,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 256,
+      "output_width_bits": 256,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_4.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_4.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 256,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 32,
+        "input_width_bits": 256,
+        "output_width_bits": 256,
+        "bus_width_bits": 256,
+        "channel_tile": null,
+        "spatial_shape": [
+          16,
+          16
+        ],
+        "spatial_family": "small",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "6adb6a7dc3df3464df2886a58984b427",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus256|tilenone|c32-32|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_6",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_6_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_6_bias.hex",
+      "weight_shape": [
+        64,
+        32,
+        1,
+        1
+      ],
+      "num_weights": 2048,
+      "scale_factor": 0.004902784373119062,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 2145,
+      "clock_period_ns": 20,
+      "input_width_bits": 256,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_6.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_6.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_6_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_6_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_6_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_6_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          1,
+          1
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 64,
+        "input_width_bits": 256,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          1,
+          1
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 64,
+        "input_width_bits": 256,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "f4e05c111a32510a5452ee19cfdab79e",
+      "exact_reference_key": "conv2d|flat-bus|k1x1|s2x2|d1x1|g1|bus512|tilenone|c32-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_7",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        32,
+        16,
+        16
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_7_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_7_bias.hex",
+      "weight_shape": [
+        64,
+        32,
+        4,
+        4
+      ],
+      "num_weights": 32768,
+      "scale_factor": 1.2727433159114343,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 32902,
+      "clock_period_ns": 20,
+      "input_width_bits": 256,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_7.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_7.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.0008065624719369575,
+        0.0008745997138478883,
+        0.0015143957595530441,
+        0.001738993696946485,
+        0.0014865283953681204,
+        0.00093792376912794,
+        0.001219916866390095,
+        0.0009196302041933861,
+        0.0012688538491001464,
+        0.0012035808815173828,
+        0.0012933655310839963,
+        0.0010510043178145342,
+        0.0011869517485859093,
+        0.001243055634594576,
+        0.0011624811828953655,
+        0.0008588052787122357,
+        0.0012729191022152497,
+        0.0011164855338666377,
+        0.001117228368232369,
+        0.0009837493226441795,
+        0.0011308784590261353,
+        0.0011808536466630204,
+        0.0007898548846728512,
+        0.0018798342629549388,
+        0.001396684330905594,
+        0.0012209452923066285,
+        0.001456292584521939,
+        0.0010208125865981135,
+        0.0011246271526085488,
+        0.001191735092207349,
+        0.0010862212749904931,
+        0.0009558949230562441,
+        0.0012787288715011163,
+        0.0009605315074397748,
+        0.0010091960854462464,
+        0.0008890430898105239,
+        0.001273957899809374,
+        0.001450446958864973,
+        0.001253268181017713,
+        0.0011196965311653206,
+        0.0009356248127065402,
+        0.0010278621417731306,
+        0.001650629078208867,
+        0.0012076902142622468,
+        0.0014521762138529955,
+        0.0012298547115239,
+        0.001559903717484773,
+        0.0014491078271211854,
+        0.0017412421284813354,
+        0.001832366946959496,
+        0.0007368875421344482,
+        0.0007951648131822553,
+        0.0011539650725090173,
+        0.0010021745338007243,
+        0.001502832376207124,
+        0.0011261204519313816,
+        0.0012378717219678995,
+        0.0011974630734070712,
+        0.0010154070164046405,
+        0.000999454413185729,
+        0.0010380970613864992,
+        0.0009485113257793937,
+        0.0010945076527182063,
+        0.0010289490935846404
+      ],
+      "weight_scale_per_oc": [
+        0.0006337196682579815,
+        0.0006871768273413181,
+        0.001189867383800447,
+        0.001366334967315197,
+        0.0011679718736559153,
+        0.0007369308150373399,
+        0.0009584940271452069,
+        0.0007225574809126556,
+        0.0009969440288841724,
+        0.0009456587722525001,
+        0.0010162029648199677,
+        0.000825778697617352,
+        0.0009325931896455586,
+        0.0009766742587089539,
+        0.0009133665589615703,
+        0.0006747670704498887,
+        0.001000138116069138,
+        0.0008772275759838521,
+        0.0008778112241998315,
+        0.0007729361532256007,
+        0.0008885361603461206,
+        0.0009278018842451274,
+        0.0006205924437381327,
+        0.0014769940171390772,
+        0.001097380998544395,
+        0.0009593020658940077,
+        0.00114421546459198,
+        0.0008020569221116602,
+        0.0008836244815029204,
+        0.0009363514836877584,
+        0.0008534488151781261,
+        0.0007510508294217288,
+        0.001004702877253294,
+        0.0007546938140876591,
+        0.0007929297862574458,
+        0.0006985250511206686,
+        0.0010009543038904667,
+        0.001139622530899942,
+        0.0009846983011811972,
+        0.0008797504706308246,
+        0.0007351245149038732,
+        0.0008075957885012031,
+        0.0012969064991921186,
+        0.0009488874929957092,
+        0.001140981214120984,
+        0.0009663022356107831,
+        0.0012256231857463717,
+        0.00113857036922127,
+        0.0013681015698239207,
+        0.001439698738977313,
+        0.0005789757706224918,
+        0.0006247644778341055,
+        0.0009066754137165844,
+        0.0007874129223637283,
+        0.0011807819828391075,
+        0.0008847977733239532,
+        0.0009726012358441949,
+        0.0009408519836142659,
+        0.0007978097419254482,
+        0.0007852757116779685,
+        0.0008156374096870422,
+        0.0007452495046891272,
+        0.0008599594584666193,
+        0.0008084498113021255
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_7_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_7_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_7_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_7_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          4,
+          4
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 64,
+        "input_width_bits": 256,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          4,
+          4
+        ],
+        "stride": [
+          2,
+          2
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 32,
+        "output_channels": 64,
+        "input_width_bits": 256,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "c447c4df23831fde8142cc9b3373871b",
+      "exact_reference_key": "conv2d|flat-bus|k4x4|s2x2|d1x1|g1|bus512|tilenone|c32-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_5",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_5_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.05712437817430872,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_5.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_5.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "4442053468bd125f3ba20a55f5d6d180",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_conv2d_8",
+      "op_type": "conv2d",
+      "input_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_bias.hex",
+      "weight_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "num_weights": 36864,
+      "scale_factor": 0.30067238604677415,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1132,
+      "clock_period_ns": 20,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_8.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_conv2d_8.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "scale_factor_per_oc": [
+        0.0029710516657522716,
+        0.0026821284346451963,
+        0.0032789467338239986,
+        0.0021969061538339323,
+        0.0028845833695453587,
+        0.003447890198533202,
+        0.0027968496494887125,
+        0.0042037901130873075,
+        0.002680180034745563,
+        0.003183421934375646,
+        0.00321613085870395,
+        0.003524486844601891,
+        0.0027629254254242183,
+        0.0026102118126527605,
+        0.0032520429659083547,
+        0.002793953651822428,
+        0.003159682146118806,
+        0.004351976314306987,
+        0.0028833792707283964,
+        0.002740505945521326,
+        0.002734660745822427,
+        0.0028025453169159237,
+        0.0028789462269211115,
+        0.0028887629925551206,
+        0.0033680721680946686,
+        0.003594408022833938,
+        0.003866039554860496,
+        0.0029202157337920548,
+        0.003926814622497284,
+        0.0026558507981143727,
+        0.002915771209042561,
+        0.002920938193082232,
+        0.003254212863985713,
+        0.0036200166844638955,
+        0.002218653858606152,
+        0.0042483305683956776,
+        0.0038143134298446687,
+        0.0029127265191735315,
+        0.0025836356716245224,
+        0.0032566440235040532,
+        0.00301748563645606,
+        0.003041650499597586,
+        0.003599044643348184,
+        0.0027913766003311484,
+        0.0038442610475604,
+        0.0030187384592716623,
+        0.0023510289822557067,
+        0.002435054918025052,
+        0.002921489278308228,
+        0.0027394651001021054,
+        0.0030213236314293817,
+        0.0032232580036084435,
+        0.002391566229032149,
+        0.003310265344053183,
+        0.003073171286418828,
+        0.002909538737561369,
+        0.002915812652443703,
+        0.0037822701201414614,
+        0.002658989015658953,
+        0.003444874631054164,
+        0.002676915526836693,
+        0.0025540277217843666,
+        0.0028497000667720056,
+        0.00359442090389105
+      ],
+      "weight_scale_per_oc": [
+        0.009881358593702316,
+        0.00892043486237526,
+        0.010905380360782146,
+        0.007306644227355719,
+        0.009593775495886803,
+        0.011467265896499157,
+        0.009301983751356602,
+        0.013981297612190247,
+        0.008913954719901085,
+        0.010587676428258419,
+        0.010696462355554104,
+        0.011722017079591751,
+        0.009189155884087086,
+        0.008681248873472214,
+        0.010815901681780815,
+        0.009292352013289928,
+        0.010508720763027668,
+        0.014474146999418736,
+        0.009589770808815956,
+        0.009114591404795647,
+        0.009095150977373123,
+        0.00932092685252428,
+        0.009575027041137218,
+        0.009607676416635513,
+        0.011201800778508186,
+        0.011954566463828087,
+        0.012857980094850063,
+        0.009712284430861473,
+        0.013060110621154308,
+        0.008833038620650768,
+        0.009697502478957176,
+        0.009714687243103981,
+        0.01082311850041151,
+        0.012039737775921822,
+        0.007378974463790655,
+        0.014129433780908585,
+        0.012685945257544518,
+        0.009687376208603382,
+        0.008592859841883183,
+        0.010831204243004322,
+        0.010035792365670204,
+        0.010116161778569221,
+        0.01196998730301857,
+        0.009283781051635742,
+        0.012785547412931919,
+        0.010039959102869034,
+        0.007819238118827343,
+        0.00809869822114706,
+        0.009716520085930824,
+        0.009111129678785801,
+        0.010048557072877884,
+        0.010720166377723217,
+        0.007954060100018978,
+        0.011009542271494865,
+        0.010220996104180813,
+        0.00967677403241396,
+        0.00969764031469822,
+        0.012579373084008694,
+        0.008843475952744484,
+        0.011457236483693123,
+        0.008903097361326218,
+        0.00849438738077879,
+        0.009477757848799229,
+        0.01195460930466652
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "mac_parallelism": 4,
+      "weight_bank_paths": [
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank0.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank1.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank2.hex",
+        "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_conv2d_8_weights_bank3.hex"
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "conv2d",
+        "contract_id": "flat-bus",
+        "kernel": [
+          3,
+          3
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          1,
+          1
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "e3e572c7b47be2347af309e662d8ffab",
+      "exact_reference_key": "conv2d|flat-bus|k3x3|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_add_87",
+      "op_type": "add",
+      "input_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_add_87_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.21667052441694606,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 67,
+      "clock_period_ns": 20,
+      "input_width_bits": 1024,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_add_87.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_add_87.goldout",
+      "lhs_scale_factor": 0.10961667008287325,
+      "rhs_scale_factor": 0.18998877457746371,
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "add",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 1024,
+        "output_width_bits": 512,
+        "bus_width_bits": 1024,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "add",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 1024,
+        "output_width_bits": 512,
+        "bus_width_bits": 1024,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "df9f0be0d2a2a6e25a9cd5597c33935e",
+      "exact_reference_key": "add|flat-bus|kx|s1x1|d1x1|g1|bus1024|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_relu_6",
+      "op_type": "relu",
+      "input_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "output_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_relu_6_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.21573694484440362,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 1,
+      "clock_period_ns": 20,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_6.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_relu_6.goldout",
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "relu",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          8,
+          8
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "4442053468bd125f3ba20a55f5d6d180",
+      "exact_reference_key": "relu|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_mean",
+      "op_type": "global_avg_pool",
+      "input_shape": [
+        1,
+        64,
+        8,
+        8
+      ],
+      "output_shape": [
+        1,
+        64,
+        1,
+        1
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_mean_weights.hex",
+      "bias_path": null,
+      "weight_shape": [
+        1
+      ],
+      "num_weights": 0,
+      "scale_factor": 0.08740081342990223,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 67,
+      "clock_period_ns": 20,
+      "input_width_bits": 512,
+      "output_width_bits": 512,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_mean.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_mean.goldout",
+      "gap_spatial": [
+        8,
+        8
+      ],
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "global_avg_pool",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          1,
+          1
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "global_avg_pool",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 64,
+        "input_width_bits": 512,
+        "output_width_bits": 512,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          1,
+          1
+        ],
+        "spatial_family": "tiny",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "2bb2ea1d2841f0d898020cd800fcf867",
+      "exact_reference_key": "global_avg_pool|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-64|int8_symmetric_per_tensor"
+    },
+    {
+      "module_id": "node_linear",
+      "op_type": "gemm",
+      "input_shape": [
+        1,
+        64
+      ],
+      "output_shape": [
+        1,
+        10
+      ],
+      "weights_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_linear_weights.hex",
+      "bias_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/weights/node_linear_bias.hex",
+      "weight_shape": [
+        10,
+        64
+      ],
+      "num_weights": 640,
+      "scale_factor": 0.006067302138840834,
+      "zero_point": 0,
+      "pipeline_latency_cycles": 29,
+      "clock_period_ns": 20,
+      "input_width_bits": 512,
+      "output_width_bits": 80,
+      "clock_signal": "clk",
+      "reset_signal": "rst_n",
+      "valid_in_signal": "valid_in",
+      "valid_out_signal": "valid_out",
+      "ready_in_signal": "ready_in",
+      "data_in_signal": "data_in",
+      "data_out_signal": "data_out",
+      "golden_inputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_linear.goldin",
+      "golden_outputs_path": "D:/RTL_LLM_CLAUDE/nn2rtl-repo/output/resnet8/goldens/node_linear.goldout",
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "gemm_in_features": 64,
+      "gemm_out_features": 10,
+      "contract_id": "flat-bus",
+      "io_mode": "packed_full",
+      "quantization_family": "int8_symmetric_per_tensor",
+      "base_layer_signature": {
+        "version": 1,
+        "op_type": "gemm",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 10,
+        "input_width_bits": 512,
+        "output_width_bits": 80,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          null,
+          null
+        ],
+        "spatial_family": "unknown",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "runtime_layer_signature": {
+        "version": 1,
+        "op_type": "gemm",
+        "contract_id": "flat-bus",
+        "kernel": [
+          null,
+          null
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "groups": 1,
+        "input_channels": 64,
+        "output_channels": 10,
+        "input_width_bits": 512,
+        "output_width_bits": 80,
+        "bus_width_bits": 512,
+        "channel_tile": null,
+        "spatial_shape": [
+          null,
+          null
+        ],
+        "spatial_family": "unknown",
+        "quantization_family": "int8_symmetric_per_tensor"
+      },
+      "signature_hash": "f6e05e782782552ed66f7a5b80589753",
+      "exact_reference_key": "gemm|flat-bus|kx|s1x1|d1x1|g1|bus512|tilenone|c64-10|int8_symmetric_per_tensor"
+    }
+  ]
+}

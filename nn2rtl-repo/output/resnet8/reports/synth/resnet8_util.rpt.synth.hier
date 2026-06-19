@@ -1,0 +1,84 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date         : Tue Jun 16 13:25:32 2026
+| Host         : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -hierarchical_depth 3 -file C:/Users/User/AppData/Local/Temp/nn2rtl-resnet8synth-N5670K/resnet8_util.rpt.synth.hier
+| Design       : nn2rtl_top
+| Device       : xczu7ev-ffvc1156-2-e
+| Speed File   : -2
+| Design State : Synthesized
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++--------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+|         Instance         |               Module              | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | URAM | DSP Blocks |
++--------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+| nn2rtl_top               |                             (top) |     160175 |     160019 |       0 |  156 | 64684 |    194 |     10 |   75 |       1717 |
+|   (nn2rtl_top)           |                             (top) |          0 |          0 |       0 |    0 |    87 |      0 |      0 |    0 |          0 |
+|   u_infifo_node_conv2d_1 |                         bram_fifo |        165 |        165 |       0 |    0 |   290 |      4 |      0 |    0 |          0 |
+|   u_infifo_node_conv2d_2 |         bram_fifo__parameterized0 |        164 |        164 |       0 |    0 |   293 |      7 |      1 |    0 |          0 |
+|   u_infifo_node_conv2d_3 |       bram_fifo__parameterized0_0 |        164 |        164 |       0 |    0 |   293 |      7 |      1 |    0 |          0 |
+|   u_infifo_node_conv2d_4 |                       bram_fifo_1 |        166 |        166 |       0 |    0 |   291 |      4 |      0 |    0 |          0 |
+|   u_infifo_node_conv2d_5 |         bram_fifo__parameterized1 |        293 |        293 |       0 |    0 |   547 |      4 |      0 |    0 |          0 |
+|   u_infifo_node_conv2d_6 |         bram_fifo__parameterized2 |        295 |        295 |       0 |    0 |   549 |      4 |      0 |    0 |          0 |
+|   u_infifo_node_conv2d_7 |       bram_fifo__parameterized1_2 |        297 |        297 |       0 |    0 |   550 |      4 |      0 |    0 |          0 |
+|   u_infifo_node_conv2d_8 |         bram_fifo__parameterized3 |        544 |        544 |       0 |    0 |  1059 |      7 |      1 |    0 |          0 |
+|   u_main_node_add_56     |       bram_fifo__parameterized2_3 |       2509 |       2509 |       0 |    0 |   554 |      4 |      0 |    0 |          0 |
+|   u_main_node_add_87     |         bram_fifo__parameterized4 |       4842 |       4842 |       0 |    0 |  1068 |      7 |      1 |    0 |          0 |
+|   u_node_add_25          |                       node_add_25 |       1600 |       1600 |       0 |    0 |   547 |      0 |      0 |    0 |         32 |
+|   u_node_add_56          |                       node_add_56 |       1152 |       1152 |       0 |    0 |  2147 |      0 |      0 |    0 |         64 |
+|   u_node_add_87          |                       node_add_87 |       2303 |       2303 |       0 |    0 |  4569 |      0 |      0 |    0 |        128 |
+|   u_node_conv2d          |                       node_conv2d |      15685 |      15555 |       0 |  130 |  2918 |      0 |      0 |    3 |         23 |
+|     (u_node_conv2d)      |                       node_conv2d |      15554 |      15424 |       0 |  130 |  2719 |      0 |      0 |    0 |         23 |
+|     lbw                  |                   line_buf_window |         79 |         79 |       0 |    0 |   173 |      0 |      0 |    3 |          0 |
+|     scheduler            |                 coord_scheduler_8 |         52 |         52 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|   u_node_conv2d_1        |                     node_conv2d_1 |      15742 |      15738 |       0 |    4 |  5444 |      1 |      0 |    6 |        272 |
+|     (u_node_conv2d_1)    |                     node_conv2d_1 |       6214 |       6210 |       0 |    4 |  4517 |      1 |      0 |    0 |        272 |
+|     lbw                  | line_buf_window__parameterized0_6 |       9419 |       9419 |       0 |    0 |   901 |      0 |      0 |    6 |          0 |
+|     scheduler            |                 coord_scheduler_7 |        109 |        109 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|   u_node_conv2d_2        |                     node_conv2d_2 |      15273 |      15269 |       0 |    4 |  5455 |      1 |      0 |    6 |        272 |
+|     (u_node_conv2d_2)    |                     node_conv2d_2 |       5909 |       5905 |       0 |    4 |  4528 |      1 |      0 |    0 |        272 |
+|     lbw                  |   line_buf_window__parameterized0 |       9254 |       9254 |       0 |    0 |   901 |      0 |      0 |    6 |          0 |
+|     scheduler            |                   coord_scheduler |        110 |        110 |       0 |    0 |    26 |      0 |      0 |    0 |          0 |
+|   u_node_conv2d_3        |                     node_conv2d_3 |      14573 |      14573 |       0 |    0 |  2273 |      0 |      1 |    0 |          0 |
+|   u_node_conv2d_4        |                     node_conv2d_4 |       6504 |       6500 |       0 |    4 |  5482 |     16 |      0 |    8 |        192 |
+|     (u_node_conv2d_4)    |                     node_conv2d_4 |       5155 |       5151 |       0 |    4 |  3777 |     16 |      0 |    0 |        192 |
+|     lbw                  |   line_buf_window__parameterized1 |       1178 |       1178 |       0 |    0 |  1681 |      0 |      0 |    8 |          0 |
+|     scheduler            |   coord_scheduler__parameterized0 |        171 |        171 |       0 |    0 |    24 |      0 |      0 |    0 |          0 |
+|   u_node_conv2d_5        |                     node_conv2d_5 |      12941 |      12937 |       0 |    4 |  5709 |     28 |      1 |   12 |        190 |
+|     (u_node_conv2d_5)    |                     node_conv2d_5 |       4670 |       4666 |       0 |    4 |  3890 |     28 |      1 |    0 |        190 |
+|     lbw                  |   line_buf_window__parameterized2 |       8102 |       8102 |       0 |    0 |  1797 |      0 |      0 |   12 |          0 |
+|     scheduler            |   coord_scheduler__parameterized1 |        169 |        169 |       0 |    0 |    22 |      0 |      0 |    0 |          0 |
+|   u_node_conv2d_6        |                     node_conv2d_6 |      14142 |      14142 |       0 |    0 |  2671 |     13 |      0 |    0 |          0 |
+|   u_node_conv2d_7        |                     node_conv2d_7 |      11746 |      11741 |       0 |    5 |  7455 |     16 |      1 |   16 |        192 |
+|     (u_node_conv2d_7)    |                     node_conv2d_7 |       8381 |       8376 |       0 |    5 |  4099 |     16 |      1 |    0 |        192 |
+|     lbw                  |   line_buf_window__parameterized3 |       3069 |       3069 |       0 |    0 |  3334 |      0 |      0 |   16 |          0 |
+|     scheduler            |   coord_scheduler__parameterized2 |        296 |        296 |       0 |    0 |    22 |      0 |      0 |    0 |          0 |
+|   u_node_conv2d_8        |                     node_conv2d_8 |      17570 |      17565 |       0 |    5 |  7742 |     28 |      1 |   24 |        192 |
+|     (u_node_conv2d_8)    |                     node_conv2d_8 |       5540 |       5535 |       0 |    5 |  4135 |     28 |      1 |    0 |        192 |
+|     lbw                  |   line_buf_window__parameterized4 |      11733 |      11733 |       0 |    0 |  3589 |      0 |      0 |   24 |          0 |
+|     scheduler            |   coord_scheduler__parameterized3 |        297 |        297 |       0 |    0 |    18 |      0 |      0 |    0 |          0 |
+|   u_node_linear          |                       node_linear |       4620 |       4620 |       0 |    0 |   898 |      0 |      0 |    0 |          0 |
+|   u_node_mean            |                         node_mean |       3561 |       3561 |       0 |    0 |  2062 |      0 |      0 |    0 |        128 |
+|   u_node_relu            |                         node_relu |          1 |          1 |       0 |    0 |   113 |      0 |      0 |    0 |          0 |
+|   u_node_relu_1          |                       node_relu_1 |       1105 |       1105 |       0 |    0 |   129 |      0 |      0 |    0 |          0 |
+|   u_node_relu_2          |                       node_relu_2 |        929 |        929 |       0 |    0 |   129 |      0 |      0 |    0 |          0 |
+|   u_node_relu_3          |                       node_relu_3 |          0 |          0 |       0 |    0 |   225 |      0 |      0 |    0 |          0 |
+|   u_node_relu_4          |                       node_relu_4 |        544 |        544 |       0 |    0 |   257 |      0 |      0 |    0 |         32 |
+|   u_node_relu_5          |                       node_relu_5 |       3457 |       3457 |       0 |    0 |   513 |      0 |      0 |    0 |          0 |
+|   u_node_relu_6          |                       node_relu_6 |          1 |          1 |       0 |    0 |   449 |      0 |      0 |    0 |          0 |
+|   u_skip_node_add_25     |       bram_fifo__parameterized0_4 |        516 |        516 |       0 |    0 |   293 |      7 |      1 |    0 |          0 |
+|   u_skip_node_add_56     |       bram_fifo__parameterized2_5 |       2348 |       2348 |       0 |    0 |   554 |      4 |      0 |    0 |          0 |
+|   u_skip_node_add_87     |         bram_fifo__parameterized5 |       4711 |       4711 |       0 |    0 |  1069 |     28 |      1 |    0 |          0 |
++--------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------+------------+
+
+

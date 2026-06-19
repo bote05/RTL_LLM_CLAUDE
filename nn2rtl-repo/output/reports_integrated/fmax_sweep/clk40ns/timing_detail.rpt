@@ -1,0 +1,1302 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version      : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date              : Tue May 26 10:10:27 2026
+| Host              : DESKTOP-5HHECFE running 64-bit major release  (build 9200)
+| Command           : report_timing -delay_type max -max_paths 20 -nworst 1 -unique_pins -path_type full -file C:/Users/User/Desktop/RTL_LLM_CLAUDE/nn2rtl-repo/output/reports_integrated/fmax_sweep/clk40ns/timing_detail.rpt
+| Design            : nn2rtl_top
+| Device            : xcu250-figd2104
+| Speed File        : -2L  PRODUCTION 1.28 03-30-2022
+| Design State      : Routed
+| Temperature Grade : E
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             10.119ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[1]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.977ns  (logic 0.610ns (2.035%)  route 29.367ns (97.965%))
+  Logic Levels:           7  (CARRY8=4 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.107ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.094ns = ( 43.094 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.298    33.194    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT5 (Prop_G6LUT_SLICEL_I0_O)
+                                                      0.089    33.283 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[1]_i_1/O
+                         net (fo=1, routed)           0.048    33.331    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[1]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[1]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.094    43.094    
+                         clock pessimism              0.366    43.460    
+                         clock uncertainty           -0.035    43.425    
+    SLICE_X67Y676        FDCE (Setup_GFF_SLICEL_C_D)
+                                                      0.025    43.450    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[1]
+  -------------------------------------------------------------------
+                         required time                         43.450    
+                         arrival time                         -33.331    
+  -------------------------------------------------------------------
+                         slack                                 10.119    
+
+Slack (MET) :             10.121ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[5]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.973ns  (logic 0.645ns (2.152%)  route 29.328ns (97.848%))
+  Logic Levels:           7  (CARRY8=4 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.105ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.092ns = ( 43.092 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.259    33.155    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT5 (Prop_A6LUT_SLICEL_I0_O)
+                                                      0.124    33.279 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[5]_i_1/O
+                         net (fo=1, routed)           0.048    33.327    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[5]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[5]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.092    43.092    
+                         clock pessimism              0.366    43.458    
+                         clock uncertainty           -0.035    43.423    
+    SLICE_X67Y676        FDCE (Setup_AFF_SLICEL_C_D)
+                                                      0.025    43.448    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[5]
+  -------------------------------------------------------------------
+                         required time                         43.448    
+                         arrival time                         -33.327    
+  -------------------------------------------------------------------
+                         slack                                 10.121    
+
+Slack (MET) :             10.130ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[6]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.966ns  (logic 0.669ns (2.233%)  route 29.297ns (97.767%))
+  Logic Levels:           7  (CARRY8=4 LUT3=2 LUT6=1)
+  Clock Path Skew:        0.107ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.094ns = ( 43.094 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.225    33.121    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT3 (Prop_F6LUT_SLICEL_I0_O)
+                                                      0.148    33.269 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[6]_i_1/O
+                         net (fo=1, routed)           0.051    33.320    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[6]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[6]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.094    43.094    
+                         clock pessimism              0.366    43.460    
+                         clock uncertainty           -0.035    43.425    
+    SLICE_X67Y676        FDCE (Setup_FFF_SLICEL_C_D)
+                                                      0.025    43.450    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[6]
+  -------------------------------------------------------------------
+                         required time                         43.450    
+                         arrival time                         -33.320    
+  -------------------------------------------------------------------
+                         slack                                 10.130    
+
+Slack (MET) :             10.139ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[0]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.957ns  (logic 0.671ns (2.240%)  route 29.286ns (97.760%))
+  Logic Levels:           7  (CARRY8=4 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.107ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.094ns = ( 43.094 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.214    33.109    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT5 (Prop_H6LUT_SLICEL_I0_O)
+                                                      0.150    33.259 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[0]_i_1/O
+                         net (fo=1, routed)           0.051    33.310    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[0]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[0]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.094    43.094    
+                         clock pessimism              0.366    43.460    
+                         clock uncertainty           -0.035    43.425    
+    SLICE_X67Y676        FDCE (Setup_HFF_SLICEL_C_D)
+                                                      0.025    43.450    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[0]
+  -------------------------------------------------------------------
+                         required time                         43.450    
+                         arrival time                         -33.310    
+  -------------------------------------------------------------------
+                         slack                                 10.139    
+
+Slack (MET) :             10.143ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.953ns  (logic 0.688ns (2.297%)  route 29.265ns (97.703%))
+  Logic Levels:           7  (CARRY8=4 LUT3=2 LUT6=1)
+  Clock Path Skew:        0.107ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.094ns = ( 43.094 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 f  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 f  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 f  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 f  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 f  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 f  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.225    33.121    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT3 (Prop_F5LUT_SLICEL_I2_O)
+                                                      0.167    33.288 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_1/O
+                         net (fo=1, routed)           0.019    33.307    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[7]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.094    43.094    
+                         clock pessimism              0.366    43.460    
+                         clock uncertainty           -0.035    43.425    
+    SLICE_X67Y676        FDCE (Setup_FFF2_SLICEL_C_D)
+                                                      0.025    43.450    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]
+  -------------------------------------------------------------------
+                         required time                         43.450    
+                         arrival time                         -33.307    
+  -------------------------------------------------------------------
+                         slack                                 10.143    
+
+Slack (MET) :             10.205ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[4]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.889ns  (logic 0.611ns (2.044%)  route 29.278ns (97.956%))
+  Logic Levels:           7  (CARRY8=4 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.105ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.092ns = ( 43.092 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.208    33.104    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT5 (Prop_B6LUT_SLICEL_I0_O)
+                                                      0.090    33.194 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[4]_i_1/O
+                         net (fo=1, routed)           0.049    33.243    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[4]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[4]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.092    43.092    
+                         clock pessimism              0.366    43.458    
+                         clock uncertainty           -0.035    43.423    
+    SLICE_X67Y676        FDCE (Setup_BFF_SLICEL_C_D)
+                                                      0.025    43.448    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[4]
+  -------------------------------------------------------------------
+                         required time                         43.448    
+                         arrival time                         -33.243    
+  -------------------------------------------------------------------
+                         slack                                 10.205    
+
+Slack (MET) :             10.259ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[2]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.835ns  (logic 0.557ns (1.867%)  route 29.278ns (98.133%))
+  Logic Levels:           7  (CARRY8=4 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.105ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.092ns = ( 43.092 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.208    33.104    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT5 (Prop_D6LUT_SLICEL_I0_O)
+                                                      0.036    33.140 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[2]_i_1/O
+                         net (fo=1, routed)           0.049    33.189    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[2]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[2]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.092    43.092    
+                         clock pessimism              0.366    43.458    
+                         clock uncertainty           -0.035    43.423    
+    SLICE_X67Y676        FDCE (Setup_DFF_SLICEL_C_D)
+                                                      0.025    43.448    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[2]
+  -------------------------------------------------------------------
+                         required time                         43.448    
+                         arrival time                         -33.189    
+  -------------------------------------------------------------------
+                         slack                                 10.259    
+
+Slack (MET) :             10.260ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[3]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.834ns  (logic 0.556ns (1.864%)  route 29.278ns (98.136%))
+  Logic Levels:           7  (CARRY8=4 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.105ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.092ns = ( 43.092 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.917    31.349    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X64Y673        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.157    31.506 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403/O
+                         net (fo=4, routed)           0.332    31.839    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_403_n_0
+    SLICE_X69Y675        LUT6 (Prop_H6LUT_SLICEL_I4_O)
+                                                      0.090    31.929 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307/O
+                         net (fo=1, routed)           0.694    32.623    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[7]_i_307_n_0
+    SLICE_X65Y675        CARRY8 (Prop_CARRY8_SLICEM_DI[5]_CO[7])
+                                                      0.088    32.711 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.737    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X65Y676        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.752 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.778    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X65Y677        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.793 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.819    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X65Y678        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.896 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.207    33.103    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q32
+    SLICE_X67Y676        LUT5 (Prop_C6LUT_SLICEL_I0_O)
+                                                      0.035    33.138 r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3[3]_i_1/O
+                         net (fo=1, routed)           0.050    33.188    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q30[3]
+    SLICE_X67Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[3]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.092    43.092    
+                         clock pessimism              0.366    43.458    
+                         clock uncertainty           -0.035    43.423    
+    SLICE_X67Y676        FDCE (Setup_CFF_SLICEL_C_D)
+                                                      0.025    43.448    u_shared_engine/u_requant_pipeline/g_lane[19].data_out_q3_reg[3]
+  -------------------------------------------------------------------
+                         required time                         43.448    
+                         arrival time                         -33.188    
+  -------------------------------------------------------------------
+                         slack                                 10.260    
+
+Slack (MET) :             10.272ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[3]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.815ns  (logic 0.715ns (2.398%)  route 29.100ns (97.602%))
+  Logic Levels:           7  (CARRY8=4 LUT2=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.098ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.085ns = ( 43.085 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      28.080    31.512    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X70Y712        LUT6 (Prop_E6LUT_SLICEL_I4_O)
+                                                      0.147    31.659 f  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_407/O
+                         net (fo=4, routed)           0.333    31.992    u_shared_engine/u_requant_pipeline/g_lane[182].v_tmp__0[11]
+    SLICE_X74Y714        LUT2 (Prop_C6LUT_SLICEM_I1_O)
+                                                      0.098    32.090 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315/O
+                         net (fo=1, routed)           0.021    32.111    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315_n_0
+    SLICE_X74Y714        CARRY8 (Prop_CARRY8_SLICEM_S[2]_CO[7])
+                                                      0.161    32.272 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.298    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X74Y715        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.313 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.339    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X74Y716        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.354 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.380    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X74Y717        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.457 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.540    32.997    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q32
+    SLICE_X75Y713        LUT5 (Prop_G6LUT_SLICEL_I0_O)
+                                                      0.123    33.120 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[3]_i_1/O
+                         net (fo=1, routed)           0.048    33.168    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q30[3]
+    SLICE_X75Y713        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[3]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.085    43.085    
+                         clock pessimism              0.366    43.451    
+                         clock uncertainty           -0.035    43.416    
+    SLICE_X75Y713        FDCE (Setup_GFF_SLICEL_C_D)
+                                                      0.025    43.441    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[3]
+  -------------------------------------------------------------------
+                         required time                         43.441    
+                         arrival time                         -33.168    
+  -------------------------------------------------------------------
+                         slack                                 10.272    
+
+Slack (MET) :             10.314ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[4]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.773ns  (logic 0.627ns (2.106%)  route 29.146ns (97.894%))
+  Logic Levels:           7  (CARRY8=4 LUT2=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.098ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.085ns = ( 43.085 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      28.080    31.512    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X70Y712        LUT6 (Prop_E6LUT_SLICEL_I4_O)
+                                                      0.147    31.659 f  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_407/O
+                         net (fo=4, routed)           0.333    31.992    u_shared_engine/u_requant_pipeline/g_lane[182].v_tmp__0[11]
+    SLICE_X74Y714        LUT2 (Prop_C6LUT_SLICEM_I1_O)
+                                                      0.098    32.090 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315/O
+                         net (fo=1, routed)           0.021    32.111    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315_n_0
+    SLICE_X74Y714        CARRY8 (Prop_CARRY8_SLICEM_S[2]_CO[7])
+                                                      0.161    32.272 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.298    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X74Y715        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.313 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.339    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X74Y716        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.354 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.380    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X74Y717        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.457 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.583    33.040    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q32
+    SLICE_X75Y713        LUT5 (Prop_F6LUT_SLICEL_I0_O)
+                                                      0.035    33.075 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[4]_i_1/O
+                         net (fo=1, routed)           0.051    33.126    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q30[4]
+    SLICE_X75Y713        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[4]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.085    43.085    
+                         clock pessimism              0.366    43.451    
+                         clock uncertainty           -0.035    43.416    
+    SLICE_X75Y713        FDCE (Setup_FFF_SLICEL_C_D)
+                                                      0.025    43.441    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[4]
+  -------------------------------------------------------------------
+                         required time                         43.441    
+                         arrival time                         -33.126    
+  -------------------------------------------------------------------
+                         slack                                 10.314    
+
+Slack (MET) :             10.344ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[5]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.743ns  (logic 0.715ns (2.404%)  route 29.028ns (97.596%))
+  Logic Levels:           7  (CARRY8=4 LUT2=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.098ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.085ns = ( 43.085 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      28.080    31.512    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X70Y712        LUT6 (Prop_E6LUT_SLICEL_I4_O)
+                                                      0.147    31.659 f  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_407/O
+                         net (fo=4, routed)           0.333    31.992    u_shared_engine/u_requant_pipeline/g_lane[182].v_tmp__0[11]
+    SLICE_X74Y714        LUT2 (Prop_C6LUT_SLICEM_I1_O)
+                                                      0.098    32.090 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315/O
+                         net (fo=1, routed)           0.021    32.111    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315_n_0
+    SLICE_X74Y714        CARRY8 (Prop_CARRY8_SLICEM_S[2]_CO[7])
+                                                      0.161    32.272 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.298    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X74Y715        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.313 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.339    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X74Y716        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.354 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.380    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X74Y717        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.457 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.470    32.928    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q32
+    SLICE_X75Y713        LUT5 (Prop_E6LUT_SLICEL_I0_O)
+                                                      0.123    33.051 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[5]_i_1/O
+                         net (fo=1, routed)           0.046    33.097    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q30[5]
+    SLICE_X75Y713        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[5]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.085    43.085    
+                         clock pessimism              0.366    43.451    
+                         clock uncertainty           -0.035    43.416    
+    SLICE_X75Y713        FDCE (Setup_EFF_SLICEL_C_D)
+                                                      0.025    43.441    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[5]
+  -------------------------------------------------------------------
+                         required time                         43.441    
+                         arrival time                         -33.097    
+  -------------------------------------------------------------------
+                         slack                                 10.344    
+
+Slack (MET) :             10.352ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[2]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.736ns  (logic 0.643ns (2.162%)  route 29.093ns (97.838%))
+  Logic Levels:           7  (CARRY8=4 LUT2=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.098ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.085ns = ( 43.085 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      28.080    31.512    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X70Y712        LUT6 (Prop_E6LUT_SLICEL_I4_O)
+                                                      0.147    31.659 f  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_407/O
+                         net (fo=4, routed)           0.333    31.992    u_shared_engine/u_requant_pipeline/g_lane[182].v_tmp__0[11]
+    SLICE_X74Y714        LUT2 (Prop_C6LUT_SLICEM_I1_O)
+                                                      0.098    32.090 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315/O
+                         net (fo=1, routed)           0.021    32.111    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315_n_0
+    SLICE_X74Y714        CARRY8 (Prop_CARRY8_SLICEM_S[2]_CO[7])
+                                                      0.161    32.272 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.298    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X74Y715        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.313 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.339    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X74Y716        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.354 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.380    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X74Y717        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.457 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.530    32.987    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q32
+    SLICE_X75Y713        LUT5 (Prop_H6LUT_SLICEL_I0_O)
+                                                      0.051    33.038 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[2]_i_1/O
+                         net (fo=1, routed)           0.051    33.089    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q30[2]
+    SLICE_X75Y713        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[2]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.085    43.085    
+                         clock pessimism              0.366    43.451    
+                         clock uncertainty           -0.035    43.416    
+    SLICE_X75Y713        FDCE (Setup_HFF_SLICEL_C_D)
+                                                      0.025    43.441    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[2]
+  -------------------------------------------------------------------
+                         required time                         43.441    
+                         arrival time                         -33.089    
+  -------------------------------------------------------------------
+                         slack                                 10.352    
+
+Slack (MET) :             10.359ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[6]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.711ns  (logic 0.574ns (1.932%)  route 29.137ns (98.068%))
+  Logic Levels:           5  (CARRY8=2 LUT3=2 LUT6=1)
+  Clock Path Skew:        0.081ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.068ns = ( 43.068 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.560    30.993    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X71Y676        LUT3 (Prop_C5LUT_SLICEM_I1_O)
+                                                      0.111    31.104 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135/O
+                         net (fo=4, routed)           0.764    31.867    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135_n_0
+    SLICE_X76Y674        LUT6 (Prop_F6LUT_SLICEM_I4_O)
+                                                      0.088    31.955 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56/O
+                         net (fo=1, routed)           0.228    32.183    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56_n_0
+    SLICE_X74Y674        CARRY8 (Prop_CARRY8_SLICEM_DI[1]_CO[7])
+                                                      0.120    32.303 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9/CO[7]
+                         net (fo=1, routed)           0.026    32.329    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9_n_0
+    SLICE_X74Y675        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.406 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_3/CO[5]
+                         net (fo=8, routed)           0.510    32.916    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q33
+    SLICE_X82Y675        LUT3 (Prop_D6LUT_SLICEL_I1_O)
+                                                      0.099    33.015 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[6]_i_1/O
+                         net (fo=1, routed)           0.049    33.064    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q30[6]
+    SLICE_X82Y675        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[6]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.068    43.068    
+                         clock pessimism              0.366    43.434    
+                         clock uncertainty           -0.035    43.399    
+    SLICE_X82Y675        FDCE (Setup_DFF_SLICEL_C_D)
+                                                      0.025    43.424    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[6]
+  -------------------------------------------------------------------
+                         required time                         43.424    
+                         arrival time                         -33.064    
+  -------------------------------------------------------------------
+                         slack                                 10.359    
+
+Slack (MET) :             10.382ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[2]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.688ns  (logic 0.624ns (2.102%)  route 29.064ns (97.898%))
+  Logic Levels:           5  (CARRY8=2 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.081ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.068ns = ( 43.068 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.560    30.993    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X71Y676        LUT3 (Prop_C5LUT_SLICEM_I1_O)
+                                                      0.111    31.104 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135/O
+                         net (fo=4, routed)           0.764    31.867    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135_n_0
+    SLICE_X76Y674        LUT6 (Prop_F6LUT_SLICEM_I4_O)
+                                                      0.088    31.955 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56/O
+                         net (fo=1, routed)           0.228    32.183    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56_n_0
+    SLICE_X74Y674        CARRY8 (Prop_CARRY8_SLICEM_DI[1]_CO[7])
+                                                      0.120    32.303 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9/CO[7]
+                         net (fo=1, routed)           0.026    32.329    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9_n_0
+    SLICE_X74Y675        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.406 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_3/CO[5]
+                         net (fo=8, routed)           0.438    32.845    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q33
+    SLICE_X82Y677        LUT5 (Prop_G6LUT_SLICEL_I1_O)
+                                                      0.149    32.994 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[2]_i_1/O
+                         net (fo=1, routed)           0.048    33.042    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q30[2]
+    SLICE_X82Y677        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[2]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.068    43.068    
+                         clock pessimism              0.366    43.434    
+                         clock uncertainty           -0.035    43.399    
+    SLICE_X82Y677        FDCE (Setup_GFF_SLICEL_C_D)
+                                                      0.025    43.424    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[2]
+  -------------------------------------------------------------------
+                         required time                         43.424    
+                         arrival time                         -33.042    
+  -------------------------------------------------------------------
+                         slack                                 10.382    
+
+Slack (MET) :             10.382ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.688ns  (logic 0.585ns (1.970%)  route 29.103ns (98.030%))
+  Logic Levels:           5  (CARRY8=2 LUT3=2 LUT6=1)
+  Clock Path Skew:        0.081ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.068ns = ( 43.068 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.560    30.993    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X71Y676        LUT3 (Prop_C5LUT_SLICEM_I1_O)
+                                                      0.111    31.104 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135/O
+                         net (fo=4, routed)           0.764    31.867    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135_n_0
+    SLICE_X76Y674        LUT6 (Prop_F6LUT_SLICEM_I4_O)
+                                                      0.088    31.955 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56/O
+                         net (fo=1, routed)           0.228    32.183    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56_n_0
+    SLICE_X74Y674        CARRY8 (Prop_CARRY8_SLICEM_DI[1]_CO[7])
+                                                      0.120    32.303 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9/CO[7]
+                         net (fo=1, routed)           0.026    32.329    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9_n_0
+    SLICE_X74Y675        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.406 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_3/CO[5]
+                         net (fo=8, routed)           0.510    32.916    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q33
+    SLICE_X82Y675        LUT3 (Prop_D5LUT_SLICEL_I1_O)
+                                                      0.110    33.026 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_1/O
+                         net (fo=1, routed)           0.015    33.041    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q30[7]
+    SLICE_X82Y675        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.068    43.068    
+                         clock pessimism              0.366    43.434    
+                         clock uncertainty           -0.035    43.399    
+    SLICE_X82Y675        FDCE (Setup_DFF2_SLICEL_C_D)
+                                                      0.025    43.424    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]
+  -------------------------------------------------------------------
+                         required time                         43.424    
+                         arrival time                         -33.041    
+  -------------------------------------------------------------------
+                         slack                                 10.382    
+
+Slack (MET) :             10.383ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[1]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.687ns  (logic 0.625ns (2.105%)  route 29.062ns (97.895%))
+  Logic Levels:           5  (CARRY8=2 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.081ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.068ns = ( 43.068 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.560    30.993    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X71Y676        LUT3 (Prop_C5LUT_SLICEM_I1_O)
+                                                      0.111    31.104 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135/O
+                         net (fo=4, routed)           0.764    31.867    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135_n_0
+    SLICE_X76Y674        LUT6 (Prop_F6LUT_SLICEM_I4_O)
+                                                      0.088    31.955 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56/O
+                         net (fo=1, routed)           0.228    32.183    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56_n_0
+    SLICE_X74Y674        CARRY8 (Prop_CARRY8_SLICEM_DI[1]_CO[7])
+                                                      0.120    32.303 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9/CO[7]
+                         net (fo=1, routed)           0.026    32.329    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9_n_0
+    SLICE_X74Y675        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.406 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_3/CO[5]
+                         net (fo=8, routed)           0.433    32.840    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q33
+    SLICE_X82Y677        LUT5 (Prop_H6LUT_SLICEL_I1_O)
+                                                      0.150    32.990 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[1]_i_1/O
+                         net (fo=1, routed)           0.051    33.041    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q30[1]
+    SLICE_X82Y677        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[1]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.068    43.068    
+                         clock pessimism              0.366    43.434    
+                         clock uncertainty           -0.035    43.399    
+    SLICE_X82Y677        FDCE (Setup_HFF_SLICEL_C_D)
+                                                      0.025    43.424    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[1]
+  -------------------------------------------------------------------
+                         required time                         43.424    
+                         arrival time                         -33.041    
+  -------------------------------------------------------------------
+                         slack                                 10.383    
+
+Slack (MET) :             10.388ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[3]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.682ns  (logic 0.623ns (2.099%)  route 29.059ns (97.901%))
+  Logic Levels:           5  (CARRY8=2 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.081ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.068ns = ( 43.068 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.560    30.993    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X71Y676        LUT3 (Prop_C5LUT_SLICEM_I1_O)
+                                                      0.111    31.104 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135/O
+                         net (fo=4, routed)           0.764    31.867    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135_n_0
+    SLICE_X76Y674        LUT6 (Prop_F6LUT_SLICEM_I4_O)
+                                                      0.088    31.955 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56/O
+                         net (fo=1, routed)           0.228    32.183    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56_n_0
+    SLICE_X74Y674        CARRY8 (Prop_CARRY8_SLICEM_DI[1]_CO[7])
+                                                      0.120    32.303 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9/CO[7]
+                         net (fo=1, routed)           0.026    32.329    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9_n_0
+    SLICE_X74Y675        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.406 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_3/CO[5]
+                         net (fo=8, routed)           0.430    32.837    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q33
+    SLICE_X82Y677        LUT5 (Prop_F6LUT_SLICEL_I1_O)
+                                                      0.148    32.985 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[3]_i_1/O
+                         net (fo=1, routed)           0.051    33.036    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q30[3]
+    SLICE_X82Y677        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[3]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.068    43.068    
+                         clock pessimism              0.366    43.434    
+                         clock uncertainty           -0.035    43.399    
+    SLICE_X82Y677        FDCE (Setup_FFF_SLICEL_C_D)
+                                                      0.025    43.424    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[3]
+  -------------------------------------------------------------------
+                         required time                         43.424    
+                         arrival time                         -33.036    
+  -------------------------------------------------------------------
+                         slack                                 10.388    
+
+Slack (MET) :             10.406ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[1]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.680ns  (logic 0.642ns (2.163%)  route 29.038ns (97.837%))
+  Logic Levels:           7  (CARRY8=4 LUT2=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.096ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.083ns = ( 43.083 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      28.080    31.512    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X70Y712        LUT6 (Prop_E6LUT_SLICEL_I4_O)
+                                                      0.147    31.659 f  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_407/O
+                         net (fo=4, routed)           0.333    31.992    u_shared_engine/u_requant_pipeline/g_lane[182].v_tmp__0[11]
+    SLICE_X74Y714        LUT2 (Prop_C6LUT_SLICEM_I1_O)
+                                                      0.098    32.090 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315/O
+                         net (fo=1, routed)           0.021    32.111    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315_n_0
+    SLICE_X74Y714        CARRY8 (Prop_CARRY8_SLICEM_S[2]_CO[7])
+                                                      0.161    32.272 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.298    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X74Y715        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.313 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.339    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X74Y716        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.354 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.380    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X74Y717        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.457 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.476    32.933    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q32
+    SLICE_X75Y713        LUT5 (Prop_C6LUT_SLICEL_I0_O)
+                                                      0.050    32.983 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[1]_i_1/O
+                         net (fo=1, routed)           0.050    33.033    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q30[1]
+    SLICE_X75Y713        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[1]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.083    43.083    
+                         clock pessimism              0.366    43.449    
+                         clock uncertainty           -0.035    43.414    
+    SLICE_X75Y713        FDCE (Setup_CFF_SLICEL_C_D)
+                                                      0.025    43.439    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[1]
+  -------------------------------------------------------------------
+                         required time                         43.439    
+                         arrival time                         -33.033    
+  -------------------------------------------------------------------
+                         slack                                 10.406    
+
+Slack (MET) :             10.408ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[0]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.678ns  (logic 0.642ns (2.163%)  route 29.036ns (97.837%))
+  Logic Levels:           7  (CARRY8=4 LUT2=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.096ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.083ns = ( 43.083 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      28.080    31.512    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X70Y712        LUT6 (Prop_E6LUT_SLICEL_I4_O)
+                                                      0.147    31.659 f  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_407/O
+                         net (fo=4, routed)           0.333    31.992    u_shared_engine/u_requant_pipeline/g_lane[182].v_tmp__0[11]
+    SLICE_X74Y714        LUT2 (Prop_C6LUT_SLICEM_I1_O)
+                                                      0.098    32.090 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315/O
+                         net (fo=1, routed)           0.021    32.111    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[7]_i_315_n_0
+    SLICE_X74Y714        CARRY8 (Prop_CARRY8_SLICEM_S[2]_CO[7])
+                                                      0.161    32.272 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158/CO[7]
+                         net (fo=1, routed)           0.026    32.298    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_158_n_0
+    SLICE_X74Y715        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.313 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79/CO[7]
+                         net (fo=1, routed)           0.026    32.339    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_79_n_0
+    SLICE_X74Y716        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[7])
+                                                      0.015    32.354 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21/CO[7]
+                         net (fo=1, routed)           0.026    32.380    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_21_n_0
+    SLICE_X74Y717        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.457 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[7]_i_4/CO[5]
+                         net (fo=8, routed)           0.475    32.932    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q32
+    SLICE_X75Y713        LUT5 (Prop_D6LUT_SLICEL_I0_O)
+                                                      0.050    32.982 r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3[0]_i_1/O
+                         net (fo=1, routed)           0.049    33.031    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q30[0]
+    SLICE_X75Y713        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[0]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.083    43.083    
+                         clock pessimism              0.366    43.449    
+                         clock uncertainty           -0.035    43.414    
+    SLICE_X75Y713        FDCE (Setup_DFF_SLICEL_C_D)
+                                                      0.025    43.439    u_shared_engine/u_requant_pipeline/g_lane[182].data_out_q3_reg[0]
+  -------------------------------------------------------------------
+                         required time                         43.439    
+                         arrival time                         -33.031    
+  -------------------------------------------------------------------
+                         slack                                 10.408    
+
+Slack (MET) :             10.416ns  (required time - arrival time)
+  Source:                 u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Destination:            u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[5]/D
+                            (rising edge-triggered cell FDCE clocked by clk  {rise@0.000ns fall@20.000ns period=40.000ns})
+  Path Group:             clk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            40.000ns  (clk rise@40.000ns - clk rise@0.000ns)
+  Data Path Delay:        29.655ns  (logic 0.599ns (2.020%)  route 29.056ns (97.980%))
+  Logic Levels:           5  (CARRY8=2 LUT3=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.082ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    3.069ns = ( 43.069 - 40.000 ) 
+    Source Clock Delay      (SCD):    3.353ns
+    Clock Pessimism Removal (CPR):    0.366ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk rise edge)        0.000     0.000 r  
+                         propagated clock network latency
+                                                      3.353     3.353    
+    SLICE_X126Y547       FDCE                         0.000     3.353 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/C
+    SLICE_X126Y547       FDCE (Prop_FFF2_SLICEM_C_Q)
+                                                      0.079     3.432 r  u_shared_engine/u_requant_pipeline/scale_shift_q2_reg[1]/Q
+                         net (fo=23217, routed)      27.560    30.993    u_shared_engine/u_requant_pipeline/scale_shift_q2[1]
+    SLICE_X71Y676        LUT3 (Prop_C5LUT_SLICEM_I1_O)
+                                                      0.111    31.104 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135/O
+                         net (fo=4, routed)           0.764    31.867    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_135_n_0
+    SLICE_X76Y674        LUT6 (Prop_F6LUT_SLICEM_I4_O)
+                                                      0.088    31.955 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56/O
+                         net (fo=1, routed)           0.228    32.183    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[7]_i_56_n_0
+    SLICE_X74Y674        CARRY8 (Prop_CARRY8_SLICEM_DI[1]_CO[7])
+                                                      0.120    32.303 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9/CO[7]
+                         net (fo=1, routed)           0.026    32.329    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_9_n_0
+    SLICE_X74Y675        CARRY8 (Prop_CARRY8_SLICEM_CI_CO[5])
+                                                      0.077    32.406 f  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[7]_i_3/CO[5]
+                         net (fo=8, routed)           0.427    32.834    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q33
+    SLICE_X82Y676        LUT5 (Prop_H6LUT_SLICEL_I1_O)
+                                                      0.124    32.958 r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3[5]_i_1/O
+                         net (fo=1, routed)           0.051    33.009    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q30[5]
+    SLICE_X82Y676        FDCE                                         r  u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[5]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk rise edge)       40.000    40.000 r  
+                         propagated clock network latency
+                                                      3.069    43.069    
+                         clock pessimism              0.366    43.435    
+                         clock uncertainty           -0.035    43.400    
+    SLICE_X82Y676        FDCE (Setup_HFF_SLICEL_C_D)
+                                                      0.025    43.425    u_shared_engine/u_requant_pipeline/g_lane[18].data_out_q3_reg[5]
+  -------------------------------------------------------------------
+                         required time                         43.425    
+                         arrival time                         -33.009    
+  -------------------------------------------------------------------
+                         slack                                 10.416    
+
+
+
+
