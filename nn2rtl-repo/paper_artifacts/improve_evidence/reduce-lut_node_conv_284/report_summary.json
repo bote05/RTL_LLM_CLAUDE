@@ -1,0 +1,56 @@
+{
+ "module_id": "node_conv_284",
+ "targets": [
+  "reduce-lut"
+ ],
+ "final_action": "replaced",
+ "success": true,
+ "baseline_metrics": {
+  "lut": 227703,
+  "dsp": 2,
+  "bram": 0,
+  "latency_cycles": 2360082
+ },
+ "final_verdict": {
+  "overall": true,
+  "targets": [
+   {
+    "target": "reduce-lut",
+    "satisfied": true,
+    "baseline_value": 227703,
+    "new_value": 64530,
+    "required": "new.lut < baseline.lut * (1 - 0.05) = 216317.84999999998",
+    "reason": "LUT reduction target satisfied."
+   }
+  ]
+ },
+ "attempts_summary": [
+  {
+   "attempt_index": 1,
+   "failed_gate": null,
+   "metrics": {
+    "lut": 64530,
+    "dsp": 2,
+    "bram": 0,
+    "latency_cycles": 2360082
+   },
+   "verdict": {
+    "overall": true,
+    "targets": [
+     {
+      "target": "reduce-lut",
+      "satisfied": true,
+      "baseline_value": 227703,
+      "new_value": 64530,
+      "required": "new.lut < baseline.lut * (1 - 0.05) = 216317.84999999998",
+      "reason": "LUT reduction target satisfied."
+     }
+    ]
+   },
+   "vivado_part": "xczu9eg-ffvb1156-2-e",
+   "vivado_lut": 64530,
+   "vivado_dsp": 2,
+   "vivado_ff": 5850
+  }
+ ]
+}

@@ -1,0 +1,56 @@
+{
+ "module_id": "node_conv_248",
+ "targets": [
+  "use-dsp"
+ ],
+ "final_action": "kept-as-variant",
+ "success": true,
+ "baseline_metrics": {
+  "lut": 18012,
+  "dsp": 1,
+  "bram": 128,
+  "latency_cycles": 263688
+ },
+ "final_verdict": {
+  "overall": true,
+  "targets": [
+   {
+    "target": "use-dsp",
+    "satisfied": true,
+    "baseline_value": 1,
+    "new_value": 25,
+    "required": "new.dsp >= max(baseline.dsp + 1, 8) = 8",
+    "reason": "DSP usage target satisfied."
+   }
+  ]
+ },
+ "attempts_summary": [
+  {
+   "attempt_index": 1,
+   "failed_gate": null,
+   "metrics": {
+    "lut": 20398,
+    "dsp": 25,
+    "bram": 128,
+    "latency_cycles": 263688
+   },
+   "verdict": {
+    "overall": true,
+    "targets": [
+     {
+      "target": "use-dsp",
+      "satisfied": true,
+      "baseline_value": 1,
+      "new_value": 25,
+      "required": "new.dsp >= max(baseline.dsp + 1, 8) = 8",
+      "reason": "DSP usage target satisfied."
+     }
+    ]
+   },
+   "vivado_part": "xczu9eg-ffvb1156-2-e",
+   "vivado_lut": 20398,
+   "vivado_dsp": 25,
+   "vivado_ff": 11095
+  }
+ ]
+}
