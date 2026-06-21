@@ -1,0 +1,19 @@
+\subsection{RQ1: Where LLM Assistance Contributes}\label{sec:rq1}
+
+RQ1 is best answered as a gradient rather than a single verdict: autonomy is highest for the bounded, well-specified per-module tasks and falls away for the open-ended, system-level work of integration.
+
+Architecture mapping is the one stage that proved not to need an LLM. Its operations (graph tracing of the quantised model, batch-normalisation folding, and weight emission) are deterministic, and in the deployed pipeline they run as a deterministic ONNX frontend and a \texttt{read\_weights} tool rather than a model; the designs built on the resulting layer description pass the byte-exact gate, confirming the extraction is correct without an LLM.
+
+RTL generation, performed by the Foundry, is where LLM assistance contributes most, and its main advantage is generality. One Foundry, with no per-architecture changes and no retraining, generated the per-layer RTL for three networks spanning two architectural families (two ResNet scales and a depthwise-separable MobileNetV2), all of which pass the assembled network byte-exact gate, directly from post-training quantisation and without the per-network quantisation-aware retraining the deterministic flows require. Generation was reliable as well as general: across the ResNet-50 backbone the pipeline averaged 1.09 attempts per state entry.
+
+Closed-loop repair, performed by the Surgeon, is valuable but situational. About 91\% of state entries completed after a single Foundry attempt with no Surgeon intervention; MobileNetV2 drove more repair (1.30 attempts per entry), reflecting harder layer types such as its depthwise and ReLU6 operators. Repair was effective where invoked: ResNet-50 produced zero fail-aborts, so every module that escalated to the Surgeon was resolved.
+
+The pipeline also supports objective-directed refinement of verified RTL: an improve operation supplies a verified module and its Vivado synthesis report to an LLM under one of seven predefined PPA objectives, reverifies each candidate with Verilator, and accepts it only when a deterministic objective-specific threshold is met. Representative per-module runs raised DSP inference and cut LUT and flip-flop use by large margins with correctness preserved (Table~\ref{tab:improve}); these are isolated demonstrations, not claimed to improve the final routed networks.
+
+Orchestration and per-module verification are deterministic by design: the TypeScript orchestrator and the static C++ checker were never delegated to a model, keeping control flow, retry limits, and synthesis dispatch reproducible and the checker outside the generative loop to avoid the two-bug problem (Section~\ref{sec:verification}).
+
+Whole-network integration is the human-directed end of the gradient: System~2 (Section~\ref{sec:system2}) performed all coding, debugging, and tool invocation, while research goals, milestones, and design forks stayed with the author.
+
+Across all System~1 agents, the recorded LLM cost was roughly one to two US dollars per passing module (Table~\ref{tab:rq1cost}), excluding the separate System~2 integration agent.
+
+In short, RQ1's answer is a gradient: autonomy tracks how bounded a task is, near-autonomous on per-module generation and human-directed on integration. Because we did not evaluate deterministic replacements or role-removal ablations for the generative stages, these results characterise the observed effectiveness of those stages rather than the causal marginal benefit of the LLM at each.

@@ -195,7 +195,7 @@ RQ1 is best answered as a gradient rather than a single verdict: autonomy is hig
 
 Architecture mapping is the one stage that proved not to need an LLM. Its operations (graph tracing of the quantised model, batch-normalisation folding, and weight emission) are deterministic, and in the deployed pipeline they run as a deterministic ONNX frontend and a \texttt{read\_weights} tool rather than a model; the designs built on the resulting layer description pass the byte-exact gate, confirming the extraction is correct without an LLM.
 
-RTL generation, performed by the Foundry, is where LLM assistance contributes most, and its main advantage is generality. One Foundry, with no per-architecture changes and no retraining, generated the per-layer RTL for three architecturally distinct families (two ResNet scales and a depthwise-separable MobileNetV2), all of which pass the assembled network byte-exact gate, directly from post-training quantisation and without the per-network quantisation-aware retraining the deterministic flows require. Generation was reliable as well as general: across the ResNet-50 backbone the pipeline averaged 1.09 attempts per state entry.
+RTL generation, performed by the Foundry, is where LLM assistance contributes most, and its main advantage is generality. One Foundry, with no per-architecture changes and no retraining, generated the per-layer RTL for three networks spanning two architectural families (two ResNet scales and a depthwise-separable MobileNetV2), all of which pass the assembled network byte-exact gate, directly from post-training quantisation and without the per-network quantisation-aware retraining the deterministic flows require. Generation was reliable as well as general: across the ResNet-50 backbone the pipeline averaged 1.09 attempts per state entry.
 
 Closed-loop repair, performed by the Surgeon, is valuable but situational. About 91\% of state entries completed after a single Foundry attempt with no Surgeon intervention; MobileNetV2 drove more repair (1.30 attempts per entry), reflecting harder layer types such as its depthwise and ReLU6 operators. Repair was effective where invoked: ResNet-50 produced zero fail-aborts, so every module that escalated to the Surgeon was resolved.
 
@@ -341,7 +341,7 @@ ResNet-50: all 119 modules register as passing in the pipeline state, and 117 of
 
 MobileNetV2: the recorded System-1 cost snapshot covers 97 of the 99 modules, of which 82 are bit-identical and 15 are within tolerance. The global-average-pool and classifier modules were added afterwards, and the complete network passes the assembled network gate (Section~\ref{sec:rq3}). The per-module bit-identical and within-tolerance split for those two deferred modules is not separately recorded.
 
-A representative module-level check was particularly extensive: layer1\_0\_conv1 was verified bit-identical, with a maximum error of 0 and a first-mismatch index of $-1$, across 6,422,528 samples (also referenced in Section~\ref{sec:verification}). This is the depth of a single well-characterised check and should not be read as evidence that every module was sampled to the same extent.
+A representative module-level check was particularly extensive: layer1\_0\_conv1 was verified bit-identical, with a maximum error of 0 and a first-mismatch index of $-1$, across 6,422,528 samples. This is the depth of a single well-characterised check and should not be read as evidence that every module was sampled to the same extent.
 
 \subsection{Extended investigation: B21}
 
