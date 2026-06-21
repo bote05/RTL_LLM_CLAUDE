@@ -1,0 +1,571 @@
+\documentclass[acmtog,authorversion]{acmart}
+\setcopyright{acmcopyright}
+\copyrightyear{2026}
+\acmYear{2026}
+\acmConference[TScIT 45]{45\textsuperscript{th} Twente Student Conference on IT}{July~3,~2026}{Enschede, The Netherlands}
+\acmBooktitle{45\textsuperscript{th} Twente Student Conference on IT (TScIT 45), July 3, 2026, Enschede, The Netherlands}
+\acmISBN{}
+\acmDOI{}
+\acmPrice{}
+\settopmatter{printacmref=false}
+\makeatletter
+\def\@copyrightpermission{Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee.}
+\makeatother
+
+\usepackage{longtable}
+\usepackage{placeins}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds}
+\usepackage{rotating}
+\graphicspath{{figures/}{../figures/}}
+
+\begin{document}
+
+\title[Autonomous LLM-Driven RTL Generation for DNNs]{Autonomous LLM-Driven RTL Generation for Deep Neural Networks via Multi-Agent Orchestration}
+
+\author{Daniel Botezatu}
+\authornote{Supervisor: Amirreza Yousefzadeh (CAES). Coordinator: Ghayoor Gillani (CAES).}
+\affiliation{%
+  \institution{University of Twente}
+  \city{Enschede}
+  \country{The Netherlands}
+}
+\email{d.botezatu@student.utwente.nl}
+\renewcommand{\shortauthors}{Botezatu}
+
+\begin{abstract}
+We present nn2rtl (neural network to register-transfer level, or RTL), an autonomous multi-agent large language model (LLM) pipeline that translates trained, quantised PyTorch convolutional networks \cite{paszke2019} into independently verified, on-chip-only synthesisable Verilog for field-programmable gate arrays (FPGAs), integrated through the Model Context Protocol \cite{anthropic2025mcp} under a hard constraint forbidding external dynamic random-access memory (DRAM). Two cooperating AI systems produced all the RTL and ran the entire tool flow; the author directed the work and built the deterministic pipeline and verification environment the agents run and self-correct inside, writing no RTL and running no commands. A first system generated and verified per-layer modules; a second built the shared compute engine, debugged the design end to end, and ran the synthesis and place-and-route campaign, largely autonomously. We generated and verified all three networks byte-exact against their quantised references: the ResNet-50 convolutional backbone, MobileNetV2, and ResNet-8. On an Alveo U250 we routed MobileNetV2 at 110.90 MHz and closed the ResNet-50 backbone's timing at 83.33 MHz. In a cross-flow ResNet-8 comparison on a ZCU104 against FINN \cite{umuroglu2017finn} and hls4ml \cite{schulte2026hls4ml}, nn2rtl fitted and routed at 142.86 MHz with 87.19\% top-1 accuracy, whereas the most accurate flow, hls4ml at 89.10\%, did not fit. We characterised the observed effectiveness of LLM assistance across the design stages (RQ1), compared performance, area, and estimated power against deterministic flows (RQ2), and contributed a verification methodology with a bug taxonomy (RQ3).
+\end{abstract}
+
+\keywords{large language models, RTL generation, Verilog, neural network accelerators, multi-agent systems, FPGA, quantisation}
+
+\maketitle
+
+
+\section{Introduction}\label{sec:intro}
+State-of-the-art neural networks are typically developed as pretrained models in high-level frameworks such as PyTorch~\cite{paszke2019}. Deploying a trained convolutional neural network (CNN) on a field-programmable gate array (FPGA), a reconfigurable chip whose logic is wired into the shape of the target computation, lets the compute and memory architecture be specialised to the target network for low-latency, energy-efficient inference~\cite{petrica2020, blott2018finnr}. Realising that efficiency, however, requires translating the network into register-transfer level (RTL) hardware, a description of the circuit in terms of registers and the logic between them, that can then be synthesised (compiled from RTL into a gate-level netlist), functionally verified against the original model, and evaluated for power, performance, and area. This translation is a critical but time-consuming engineering step.
+
+Large language models (LLMs) have recently shown promise at generating code, including hardware description languages, but RTL remains a difficult target: it must satisfy strict spatial and temporal constraints, and small errors break compilation, simulation, or synthesis. Prior work on LLM-assisted RTL has largely focused on small, isolated modules such as counters and finite state machines, leaving integration and debugging to the human engineer. Compile-and-repair loops improve pass rates over single-shot generation~\cite{thakur2024autochip}, retrieval-augmented repair resolves most syntax errors~\cite{tsai2024rtlfixer}, and multi-agent decompositions raise quality on benchmark-scale problems~\cite{ho2025verilogcoder, wang2025rtlsquad, zhao2024mage}. None of these targets the neural network accelerator domain at the scale of a full network, nor carries a design through to a placed-and-routed FPGA result.
+
+nn2rtl (neural network to RTL) is an autonomous multi-agent LLM system that takes a trained, quantised PyTorch CNN~\cite{paszke2019} and produces verified, synthesisable Verilog using only on-chip memory for FPGAs. The agents coordinate with synthesis and verification tools through the Model Context Protocol (MCP)~\cite{anthropic2025mcp}, a standard interface between an LLM and external tools. We deployed and routed two large designs on an AMD Alveo U250 accelerator card, the ResNet-50~\cite{he2016} convolutional backbone and the complete MobileNetV2~\cite{sandler2018}, and ran a cross-flow comparison of a smaller ResNet-8 on a ZCU104 board against the two established deterministic flows, FINN~\cite{umuroglu2017finn} and hls4ml~\cite{schulte2026hls4ml, duarte2018hls4ml}. All three networks were independently verified byte-exact against their quantised reference, and all three were placed and routed (the back-end mapping onto physical FPGA sites).
+
+Two cooperating AI systems produced all RTL and executed the synthesis and verification flow, while the author set goals, approved milestones, resolved design forks, and built the deterministic pipeline and verification environment the agents run and self-correct inside. System~1 generates and verifies per-layer modules; System~2 integrates them and runs synthesis and place-and-route (Figure~\ref{fig:arch}).
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig1_architecture}
+\caption{The two cooperating AI systems: System~1 generates and verifies per-layer RTL modules; System~2 assembles, debugs, and routes the full design.}
+\Description{A two-part block diagram. The left block, System 1, shows a deterministic orchestrator, a deterministic ONNX frontend, the Foundry and Surgeon language model agents, and a deterministic Assayer, emitting verified per-layer Verilog modules. The right block, System 2, shows the integration agent consuming those modules, building the shared engine and top wrapper, and driving Verilator and Vivado to a routed design. An arrow from a human director box points to both systems, labelled goals and milestone approval only.}
+\label{fig:arch}
+\end{figure*}
+
+Our contributions are: (1) an end-to-end multi-agent pipeline that autonomously generates and independently verifies functional FPGA hardware for full CNNs; (2) two large designs taken from trained PyTorch checkpoints to placed-and-routed implementations on an Alveo U250, the ResNet-50 convolutional backbone and the complete MobileNetV2, plus a routed complete ResNet-8 on a ZCU104; (3) a cross-flow performance and area comparison against FINN and hls4ml, with estimated power against FINN; and (4) a verification methodology and failure taxonomy for trusting LLM-generated hardware. A hard constraint shaped the entire design: all weights and activations remain in on-chip memory, with no external DRAM. We impose this deliberately: external DRAM would move the memory bottleneck off chip and add platform-dependent bandwidth and energy costs, whereas the on-chip-only constraint gives a fixed budget shared by the compared designs. This on-chip-only requirement made FPGA memory the binding resource and drove key architectural decisions, most notably a single shared, time-multiplexed compute engine in place of separate datapaths for each heavy convolution.
+
+This work is guided by three research questions:
+\begin{enumerate}
+  \item Across the stages of model-to-RTL generation, including architecture mapping, RTL synthesis from the network specification, and closed-loop repair, where does LLM assistance contribute, and which stages still require deterministic or hand-written components?
+  \item What is the resulting implementation quality, in terms of power, performance, and area (PPA), compared with deterministic FPGA-targeted workflows such as FINN and hls4ml?
+  \item What verification is needed to trust LLM-generated hardware, independent of how it was produced: what classes of integration and correctness bugs arise, and what methodology detects them, given that individually correct modules can still fail once composed into a full design?
+\end{enumerate}
+
+The remainder of the paper is organised as follows. Section~\ref{sec:related} surveys related work, Section~\ref{sec:method} describes the two-system methodology and the verification and quantisation flows, Section~\ref{sec:setup} details the experimental setup, Section~\ref{sec:results} reports results against the three research questions, and Section~\ref{sec:conclusion} concludes.
+
+\section{Background and Related Work}\label{sec:related}
+The intersection of large language models (LLMs) and hardware design has advanced quickly, but important gaps remain in scale, autonomy, and domain specialisation. The work in this paper sits at the meeting point of three threads: using LLMs to write register-transfer-level (RTL) hardware code, applying them specifically to AI accelerators, and the deterministic FPGA flows that have long served as the reference point for such accelerators. We review each in turn and then state the gap this work fills.
+
+\subsection{LLM-Assisted RTL Generation}
+Tomlinson et al. \cite{tomlinson2024} used ChatGPT to generate the complete Verilog for a programmable spiking-neuron-array ASIC, verified it with hand-written testbenches, and taped it out through Tiny Tapeout, establishing early feasibility at small scale; the verification and tapeout were human-driven rather than part of a closed autonomous loop. Two developments then put generation on firmer ground. First, functional benchmarks and fine-tuned open models made model-level RTL generation measurable: VerilogEval \cite{liu2023verilogeval} and RTLLM \cite{lu2024} are standard functional benchmarks, and RTLCoder \cite{liu2024rtlcoder} shows that a fine-tuned open model can rival much larger proprietary ones. Second, compile-and-repair loops feed the compiler or simulator error back to the generator: AutoChip \cite{thakur2024autochip} drives successive rounds of correction from compiler feedback, and RTLFixer \cite{tsai2024rtlfixer} adds retrieval-augmented repair, resolving roughly 98.5\% of the compilation errors in its debugging dataset. Together these results established that an outer loop of automated checking turns an unreliable one-shot generator into a usable RTL producer, but they target mostly isolated, benchmark-scale modules.%
+
+
+\subsection{Multi-Agent RTL Generation}
+A natural next step was to split the task across cooperating agents rather than asking one model to do everything. VerilogCoder \cite{ho2025verilogcoder} combines a graph planner with repair guided by syntax trees and waveforms. RTLSquad \cite{wang2025rtlsquad} and MAGE \cite{zhao2024mage} decompose generation into specialised roles for exploration, implementation, and verification, reporting quality gains on benchmark-scale Verilog problems and echoing a broader move towards automating the design of agentic systems themselves \cite{hu2024}. These systems are primarily evaluated on self-contained, benchmark-scale RTL tasks; nn2rtl instead studies model-derived, composed neural network hardware through network-level verification and FPGA implementation.
+
+\subsection{LLMs for AI-Accelerator Design}
+A separate line of work pointed LLMs directly at accelerator generation. GPT4AIGChip \cite{fu2023gpt4aigchip} drove an LLM pipeline that produced high-level-synthesis (HLS) accelerator templates through demonstration-augmented prompting. TPU-Gen \cite{vungarala2025tpugen} combines fine-tuned models and retrieval-augmented generation with automated validation and a refinement loop to generate parameterised systolic-array tensor-processing-unit implementations. Neither, however, verifies the composed hardware layer-by-layer against the quantised execution of a source CNN, nor studies full network integration under an all-weights-on-chip constraint, the regime nn2rtl targets.
+
+\subsection{Autonomous End-to-End Hardware Generation}
+A recent end-to-end demonstration is the original Design Conductor \cite{verkor2026}, a non-peer-reviewed technical report that used an LLM-driven workflow to take a complete RISC-V CPU from specification through to layout. This is an important proof that automation can span the whole flow, but CPUs and neural network accelerators expose different pressures. A CPU is control-heavy: its difficulty lies in instruction decoding, hazards, and branching state machines. A deep neural network (DNN) accelerator is data-intensive: it performs very regular arithmetic over large tensors, and its dominant cost is moving weights and activations on and off chip and through the compute array, the dataflow concern characterised for accelerators by Eyeriss \cite{chen2017}. A strategy tuned for control logic does not transfer directly to this regular-compute, movement-bound regime. The same group has since extended the harness to a transformer key-value-cache inference accelerator~\cite{verkor2026dc2}, the closest concurrent work. It is a floating-point design verified by the agent's own testbenches against a software reference, with residual numerical deviation accepted rather than exact equality required; it manages its key-value cache through external DRAM; and it reports no comparison against deterministic flows. This contrasts with the byte-exact integer verification, all-weights-on-chip constraint, and head-to-head evaluation we pursue for convolutional networks here.
+
+\subsection{Deterministic FPGA Flows Used as Baselines}
+The accelerators we compare against are produced by mature, deterministic toolchains that emit synthesisable hardware without any LLM involvement, which makes them fair benchmarks for whether LLM-generated RTL can approach conventional quality. FINN \cite{umuroglu2017finn, blott2018finnr} compiles quantisation-aware-trained PyTorch \cite{paszke2019} models into per-layer streaming dataflow accelerators, with each layer folded to a chosen degree of parallelism; the FINN ResNet-50 build on the Alveo U250 \cite{petrica2020} is the established large-network demonstration of this style. hls4ml \cite{schulte2026hls4ml, duarte2018hls4ml}, which originated in particle physics, takes an HLS route and generates streaming (io\_stream) dataflow at higher arithmetic precision. fpgaConvNet \cite{venieris_fpgaconvnet} is a further deterministic generator in this family. For the same-network ResNet-8 comparison these flows are the obvious reference, and prior hls4ml and custom high-level-synthesis ResNet-8 entries do exist \cite{tailor2023, minnella2023}. They are not directly usable as drop-in baselines, however: the published hls4ml ResNet-8 entry alters the residual skip connection \cite{tailor2023}, which changes the network; the closest custom HLS ResNet-8 design \cite{minnella2023} uses a different toolchain; and there is no published FINN ResNet-8 baseline at all. For those reasons the FINN and nn2rtl ResNet-8 numbers reported here are our own builds of the unmodified network.
+
+\subsection{The Gap This Work Fills}
+None of these threads, on its own, covers the whole problem. What is missing is a pipeline that combines these strengths for full convolutional neural networks: a closed-loop, multi-agent system whose generated modules are checked deterministically for numerical correctness and exact timing against reference outputs, that emits RTL for the full network kept entirely on chip, and that carries the result all the way through synthesis and place-and-route to a routed, timing-closed implementation. This work fills that gap with two cooperating AI systems (Section~\ref{sec:twosystems}). Prior work has shown LLM-driven accelerator-template generation, multi-agent RTL generation on benchmark tasks, and autonomous end-to-end CPU and accelerator implementation~\cite{fu2023gpt4aigchip, verkor2026, verkor2026dc2, vungarala2025tpugen, wang2025rtlsquad, zhao2024mage}. We are not aware of prior work that demonstrates the complete combination studied here: LLM-agent-generated full network CNN RTL, deterministic checking against a quantised reference, an all-weights-on-chip constraint, and FPGA place-and-route.
+
+\section{Methodology and System Design}
+\label{sec:method}
+
+\subsection{Two Cooperating AI Systems}
+\label{sec:twosystems}
+
+nn2rtl is built around a deliberate division of labour between two cooperating AI systems with different autonomy boundaries, and that division provides the structural basis for answering RQ1. The first is an autonomous \emph{per-module pipeline} that converts a trained, quantised PyTorch CNN~\cite{paszke2019} into individually verified Verilog modules. The second is a \emph{coding and integration agent}, a separate Claude Opus 4.8 instance, that assembles those modules into an integrated network-level accelerator, debugs it end to end, and drives the synthesis and place-and-route campaign. System 2 uses Opus 4.8 simply because it became available during the integration work as the newer state-of-the-art release; measuring its advantage over the Opus 4.7 used by System 1's generation agents was out of scope, and any 4.7-to-4.8 difference would be too small to isolate from the per-module variation in task difficulty. As stated in Section~\ref{sec:intro}, the author acted as research director; every line of hardware and every tool invocation came from one of the two AI systems. The author's positive contribution is the deterministic infrastructure that makes this autonomy possible: the orchestrator that runs the loop and, at its core, the static C++ oracle and two byte-exact gates of Section~\ref{sec:verification} against which the agents correct their own output. A high-level directive such as ``make it work'' has nothing to close against without this fixed feedback loop; the agents wrote and integrated all of the hardware, but the infrastructure that let them do so reliably is the human's. We describe the second system as \emph{largely} rather than \emph{fully} autonomous precisely because these human decision points remain. Figure~\ref{fig:arch} shows the overall architecture and the feedback edges that close each loop.
+
+\subsection{The Autonomous Per-Module Pipeline (System 1)}
+\label{sec:system1}
+
+System 1 is organised as three structural layers: a Claude Code plugin that defines the agent roles and skills, an Agent SDK orchestrator built on the Claude Agent SDK that forms the deterministic control plane, and a local MCP server~\cite{anthropic2025mcp} that exposes the design tools to the agents. The orchestrator is ordinary deterministic TypeScript, not a language model: it maintains the pipeline state, selects the next action, dispatches the agents, enforces retry limits, and runs Vivado synthesis on every module that passes verification. Because the coordination is deterministic, non-determinism enters only at the explicitly invoked LLM stages; everything else (state transitions, retry limits, verification, and synthesis dispatch) is reproducible.
+
+System 1's language model agents are the Foundry and Surgeon, supported by the Failure-Classifier and Retrospector, each pinned to a full model identifier to avoid tier-alias drift (Table~\ref{tab:agents} in Appendix~\ref{app:agents}); architecture mapping runs as a deterministic ONNX frontend.
+
+Verification is performed by a deterministic component rather than an agent. The deterministic Assayer receives the generated module and its layer IR (the per-layer specification of shape, weights, and quantisation produced during architecture mapping), runs Icarus Verilog for a syntax check followed by Verilator with the static C++ testbench, and returns a schema-validated verification result carrying the numerical and timing evidence.
+
+Failures return structured compiler or simulation evidence for bounded repair. The Failure-Classifier distinguishes ordinary code defects from architectural failures, and passing modules proceed directly to Vivado synthesis; Figure~\ref{fig:pipeline} in Appendix~\ref{app:figures} gives the complete state machine.
+
+\subsection{Deterministic Verification and Pattern Reuse}
+\label{sec:verification}
+
+Functional correctness is judged by a single static, author-specified C++ testbench that is never produced by a language model (Figure~\ref{fig:verify}). In contrast to work that uses LLMs to generate testbenches \cite{qiu2024autobench}, we deliberately keep the oracle outside the generative loop: if the same agent wrote both the design and its test, a shared misunderstanding could make a wrong module appear correct, a correlated-oracle failure we term the two-bug problem. The testbench reads a description of the module together with binary golden vectors (the reference input stimuli and the expected output activations the module must reproduce) and checks three things: every output value, the exact pipeline latency, and the valid/ready handshake timing. Crucially, the reference is the activation stream of the \emph{quantised} model, so the checker evaluates the RTL against the deployed quantised arithmetic rather than against the original floating-point model. At the per-module level the numerical gate permits a maximum error of three integer units, though well-implemented modules typically remain within one and many are strictly bit-identical, and a module passes only when its first output also appears on exactly the contracted cycle. The assembled network end-to-end harnesses are stricter: they require strict byte-exactness, with zero mismatched bytes. Weight values are never shown to the language models: the extraction step writes them to disk and the generated RTL loads them through a standard memory-initialisation read, which keeps numerical weight data outside the LLM context and makes generation reproducible.
+
+The pipeline also keeps a failure-memory and pattern-reuse cache: it retains classified failures and successful implementation patterns so that later related modules can reuse earlier evidence. The promotion, archival, and retrieval policy is given in Appendix~\ref{app:selfimprove}; the integration-bug taxonomy is reported in Section~\ref{sec:rq3}.
+
+\subsection{Integration and the Shared Compute Engine (System 2)}
+\label{sec:system2}
+
+The second system turns a set of verified modules into integrated device-level designs that fit within a single FPGA. Implementing every convolution as its own spatial datapath is correct but far too large for the target FPGA. The integration agent therefore built a shared, time-multiplexed compute engine for the heavy convolutions while retaining cheaper operators as spatial modules; the quantified area benefit is reported in Section~\ref{sec:rq2}, and the engine's internal sub-blocks are listed in Appendix~\ref{app:engine}. The same integration agent wired and patched the top-level wrapper, performed all end-to-end byte-exact debugging, and ran the entire synthesis and place-and-route campaign largely unattended under standing directives, including adversarial multi-agent cross-checks.
+
+\subsection{Quantisation and the On-Chip-Only Memory Constraint}
+\label{sec:quant}
+
+The pipeline's default number format is per-tensor symmetric INT8 post-training quantisation (PTQ), applied to the PyTorch weights before generation begins, with batch-normalisation folded into the preceding convolution so that no standalone normalisation layer appears in hardware~\cite{jacob2018}. Fitting the full ResNet-50~\cite{he2016} backbone on chip, however, required a lower-precision weight format. The W4A8 GPTQ~\cite{frantar2023} path (the WxAy notation denotes $x$-bit weights and $y$-bit activations) introduced per-output-channel scaling and nibble-packed weights while retaining 32-bit accumulation. The final deployable ResNet-50 configuration combined INT3 and INT4 convolutional weights to satisfy the on-chip BRAM limit. Per-output-channel scaling is necessary at this precision. MobileNetV2~\cite{sandler2018} deploys at INT8 with per-output-channel scaling on its depthwise layers.
+
+The memory policy is the constraint that shapes the entire design. We adopt this constraint deliberately: all weights and activations remain in on-chip memory and the design never accesses external DRAM, which keeps FPGA capacity a fixed, comparable budget rather than shifting the memory bottleneck off chip. This makes on-chip capacity the binding resource and rules out the device's abundant UltraRAM for weights: only block RAM supports bitstream content-initialisation on this target~\cite{amd_ug573} (confirmed empirically as bug~B40, Appendix~\ref{app:bugindex}), so weights live in block RAM and LUT-RAM, block RAM binds the fit, and nibble packing plus selective lower precision become the weight-fit mechanisms.
+
+\section{Experimental Setup}\label{sec:setup}
+
+We evaluate our two-system AI pipeline on three convolutional networks across two FPGA boards.
+
+\subsection{Target Devices}
+
+We target two Xilinx UltraScale+ FPGAs. The Alveo U250 is a large datacentre accelerator card with four super-logic regions (SLRs); we use it for the two ImageNet-scale backbones. The ZCU104 is a much smaller embedded Zynq UltraScale+ board; we use it for the cross-flow comparison so that all three flows (ours, FINN, and hls4ml) compete for the same fixed budget. Table~\ref{tab:devices} lists the resource totals for both parts.
+
+\begin{table}[t]
+\centering
+\caption{On-chip resource budgets of the two target FPGAs (device totals from Vivado).}
+\label{tab:devices}
+\begin{tabular}{lrr}
+\toprule
+Resource & Alveo U250 & ZCU104 \\
+\midrule
+LUT     & 1,728,000 & 230,400 \\
+FF      & 3,456,000 & 460,800 \\
+DSP     & 12,288    & 1,728   \\
+BRAM36  & 2,688     & 312     \\
+URAM    & 1,280     & 96      \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The quantisation choices that keep the weight footprint within this budget, and why block RAM (not UltraRAM) is the binding resource, are detailed in Section~\ref{sec:quant}.
+
+\subsection{Networks and Roles}
+
+The three networks play distinct roles. \emph{ResNet-50}~\cite{he2016} is our primary subject: the full backbone is generated, integrated, and placed-and-routed on the U250. The U250 ResNet-50 design emits the pre-pool $7\times7\times2048$ feature map; global average pooling and the fully connected classifier are executed in software to obtain the reported top-1, and the assembled network byte-exact gate is over the 100,352-byte feature-map output. \emph{MobileNetV2}~\cite{sandler2018} provides an architectural contrast on the same U250, because its depthwise-separable convolutions stress the pipeline differently from ResNet-50's standard convolutions. \emph{ResNet-8}~\cite{banbury2021} is the cross-flow baseline on the ZCU104: it is the MLCommons MLPerf Tiny pretrained model (16/32/64 filters, 78,666 parameters), small enough that our flow, FINN, and hls4ml can all be measured against one another on a single embedded board.
+
+ResNet-8 needed one model transformation before our flow could reproduce it: its two stride-2 3x3 convolutions use asymmetric "same" padding, which our generator does not express directly, so we rewrote each as an equivalent zero-embedded 4x4 kernel with symmetric padding. This changes the hardware mapping but not the outputs, which we verified bit-exact against the reference on all 10,000 test images.
+
+\subsection{Datasets and Quantisation}
+
+The ImageNet-scale networks are evaluated on the same 1500-image ImageNet validation subset, disjoint from the 256-image calibration set: for ResNet-50 we report GPTQ accuracy on this subset, and the MobileNetV2 top-1 is measured on the same subset. Because this top-1 is measured over a 1500-image subset, its 95\% confidence interval is roughly two points, and about three points for a difference between two figures, so accuracy gaps below this on the subset are indicative rather than significant. ResNet-8 is evaluated on the full CIFAR-10 test set of 10,000 images.
+
+Each flow quantises in its own native way, which we preserve rather than force into a common scheme, since each flow's quality is partly a property of its quantiser. Our flow's default is per-tensor INT8 post-training quantisation with \emph{no retraining}; the deployed networks use per-output-channel scales, quantised directly from their trained weights. We treat this no-retraining property as a feature: it removes the labelled-data and training-time cost that the comparison flows incur, and on ResNet-8 it still matches the floating-point reference's top-1. FINN quantises ResNet-8 with W4A4 quantisation-aware training (QAT) in Brevitas, and hls4ml uses W8A8 QAT in QKeras; both therefore retrain, whereas our flow does not.
+
+\subsection{Toolchain and Verification}
+
+Our flow uses Icarus Verilog for a lint pass, Verilator driven by a static C++ testbench for functional and cycle-accurate timing verification, and Vivado v2025.2 for synthesis and place-and-route. The agents reach these tools through an MCP server~\cite{anthropic2025mcp} that exposes operations to lint and simulate RTL, run synthesis and place-and-route, extract layer weights, and write generated Verilog to disk. For the cross-flow comparison, FINN v0.10.1 runs on the Vivado 2024.2 flow and hls4ml 1.3.0 runs with Vitis HLS 2024.2.
+
+We note one fairness caveat: the Vivado version differs across the flows (2025.2 for our flow versus 2024.2 for FINN and hls4ml). Back-end tool versions affect timing and utilisation results, so the cross-flow PPA numbers should be read as indicative of each flow's design choices rather than as a controlled single-variable comparison.
+
+\subsection{Metrics and Measurement Classes}\label{sec:metrics}
+
+For routes that meet timing we report $F_{\max}$ as the guaranteed clock, $F_{\max} = 1000 / T$ for a met constraint period $T$ in nanoseconds; ResNet-50, ResNet-8 and FINN met their constraints. For a route that does not meet its target we instead report the achievable $F_{\max} = 1000 / (T - \text{WNS})$, where WNS is the worst negative slack reported by Vivado: MobileNetV2's 110.90~MHz is this achievable value for a route that did not close timing at its 7~ns target. Frame throughput for our latency-bound designs follows as $\text{fps} = F_{\max} \times 10^{6} / (\text{cycles per frame})$, where the cycle count is measured per inference; FINN, being a fully pipelined dataflow accelerator, instead sustains $\text{fps} = F_{\max} \times 10^{6} / (\text{initiation interval})$, where the initiation interval is far smaller than the full latency.
+
+For honesty across the three flows, these throughput figures rest on different bases and must not be read as like-for-like: nn2rtl's is cycle-accurate from a routed design, FINN's is the analytical estimate above from a routed implementation, and hls4ml has only a C-synthesis latency estimate with no route. None is an on-board silicon measurement.
+
+Correctness is evaluated using the two gates of Section~\ref{sec:verification}. We report total on-chip power from Vivado's post-route \texttt{report\_power}. Because we use vectorless estimation (no recorded switching activity file), these figures are a relative comparison rather than absolute silicon draw; confidence is low for the nn2rtl designs and medium for FINN.
+
+\subsection{Artifact availability}
+The pipeline, all generated RTL, the per-network golden vectors, and the post-route timing, utilisation, and power reports are available at \url{https://github.com/bote05/RTL_LLM_CLAUDE}, with the per-agent model identifiers in Table~\ref{tab:agents}. The nn2rtl figures behind Tables~\ref{tab:resnet8}, \ref{tab:fullnet}, \ref{tab:efficiency}, and~\ref{tab:improve} come from in-repository reports, with the objective-directed refinement reports underlying Table~\ref{tab:improve} included under \texttt{output/reports/}; the FINN and hls4ml figures come from their separate build hosts (FINN on Vivado 2024.2, hls4ml on Vitis HLS 2024.2), which are external to the artifact package. The networks and datasets are the public ResNet-50, MobileNetV2, ResNet-8, ImageNet, and CIFAR-10 releases under their original licences.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{RQ1: Where LLM Assistance Contributes}\label{sec:rq1}
+
+RQ1 is best answered as a gradient rather than a single verdict: autonomy is highest for the bounded, well-specified per-module tasks and falls away for the open-ended, system-level work of integration.
+
+Architecture mapping is the one stage that proved not to need an LLM. Its operations (graph tracing of the quantised model, batch-normalisation folding, and weight emission) are deterministic, and in the deployed pipeline they run as a deterministic ONNX frontend and a \texttt{read\_weights} tool rather than a model; the designs built on the resulting layer description pass the byte-exact gate, confirming the extraction is correct without an LLM.
+
+RTL generation, performed by the Foundry, is where LLM assistance contributes most, and its main advantage is generality. One Foundry, with no per-architecture changes and no retraining, generated the per-layer RTL for three architecturally distinct families (two ResNet scales and a depthwise-separable MobileNetV2), all of which pass the assembled network byte-exact gate, directly from post-training quantisation and without the per-network quantisation-aware retraining the deterministic flows require. Generation was reliable as well as general: across the ResNet-50 backbone the pipeline averaged 1.09 attempts per state entry.
+
+Closed-loop repair, performed by the Surgeon, is valuable but situational. About 91\% of state entries completed after a single Foundry attempt with no Surgeon intervention; MobileNetV2 drove more repair (1.30 attempts per entry), reflecting harder layer types such as its depthwise and ReLU6 operators. Repair was effective where invoked: ResNet-50 produced zero fail-aborts, so every module that escalated to the Surgeon was resolved.
+
+The pipeline also supports objective-directed refinement of verified RTL: an improve operation supplies a verified module and its Vivado synthesis report to an LLM under one of seven predefined PPA objectives, reverifies each candidate with Verilator, and accepts it only when a deterministic objective-specific threshold is met. Representative per-module runs raised DSP inference and cut LUT and flip-flop use by large margins with correctness preserved (Table~\ref{tab:improve}); these are isolated demonstrations, not claimed to improve the final routed networks.
+
+Orchestration and per-module verification are deterministic by design: the TypeScript orchestrator and the static C++ checker were never delegated to a model, keeping control flow, retry limits, and synthesis dispatch reproducible and the checker outside the generative loop to avoid the two-bug problem (Section~\ref{sec:verification}).
+
+Whole-network integration is the human-directed end of the gradient: System~2 (Section~\ref{sec:system2}) performed all coding, debugging, and tool invocation, while research goals, milestones, and design forks stayed with the author.
+
+Across all System~1 agents, the recorded LLM cost was roughly one to two US dollars per passing module (Table~\ref{tab:rq1cost}), excluding the separate System~2 integration agent.
+
+RQ1 therefore shows a gradient. Autonomy tracks how bounded a task is: per-module generation is nearly autonomous, while integration is human-directed. Because we did not evaluate deterministic replacements or role-removal ablations for the generative stages, these results characterise the observed effectiveness of those stages rather than the causal marginal benefit of the LLM at each.
+
+\subsection{RQ2: Implementation Quality versus FINN and hls4ml}\label{sec:rq2}
+
+The only same-network head-to-head is ResNet-8 on the ZCU104; the ImageNet-scale ResNet-50 and MobileNetV2 results (Alveo U250) are standalone. The comparison fixes the network and device but is a native-flow design-point comparison.
+
+On the ZCU104, the three flows resolve the small-device wall in three different ways (Table~\ref{tab:resnet8}). hls4ml~\cite{schulte2026hls4ml, duarte2018hls4ml} reaches the highest precision and accuracy (89.10\%) but does not fit: its on-chip block-RAM memory is dominated by streaming dataflow buffers (the frame-deep buffering the residual skip connections require) rather than by weights, and the weight and activation memories alone would fit comfortably. This is structural to the streaming dataflow architecture combined with a residual topology, and it is consistent with the literature, in that published hls4ml ResNet-8 entries either drop the skip connections or alter them~\cite{tailor2023}, or fit only a smaller device after buffer-depth optimisation; the ResNet-8 benchmark itself is the MLPerf Tiny reference model~\cite{banbury2021}. nn2rtl sits in the middle: at INT8 it serialises the network onto one shared compute engine, which fits and is bound by digital signal processing (DSP) blocks (Table~\ref{tab:resnet8}). FINN~\cite{umuroglu2017finn, blott2018finnr} uses the lowest precision (W4A4) and substantially fewer resources. Its throughput (FINN's own analytical estimate) spans from a baseline below nn2rtl's cycle-accurate figure to a maximum-fold point that, only in that highest configuration, is the fastest of the three (Table~\ref{tab:resnet8}).
+
+\begin{table*}[t]
+\centering
+\caption{ResNet-8 comparison on the ZCU104 using each flow's native quantisation. Power estimates are vectorless.}
+\label{tab:resnet8}
+\begin{tabular}{@{}p{0.13\textwidth}p{0.16\textwidth}p{0.135\textwidth}p{0.15\textwidth}p{0.17\textwidth}@{}}
+\toprule
+Metric & nn2rtl (INT8 PTQ) & FINN base (W4A4) & FINN max-fold (W4A4) & hls4ml (W8A8 QAT) \\
+\midrule
+Top-1 (CIFAR-10) & 87.19\% & 86.68\% & 86.68\% & 89.10\% \\
+Fmax & 142.86~MHz & 100~MHz & 300.03~MHz & 137.32~MHz (est.) \\
+Throughput & about 9,670~fps & about 1,017~fps & about 32,555~fps & did not fit \\
+Cycles/frame & 14,774 (latency) & about 98,304 (II) & 9,216 (II) & 175,714 (C-synth) \\
+LUT & 154,188 (66.92\%) & 25,760 (11\%) & 63,739 (28\%) & 200,938 (87\%) \\
+DSP & 1,717 (99.36\%) & 74 (4\%) & 569 (33\%) & 488 (28\%) \\
+BRAM & 199 tiles (63.78\%) & about 40 (13\%) & 64.5 (21\%) & 1,216 BRAM18$^{\dagger}$ (about 194\%) \\
+FF & 64,728 (14.05\%) & 30,824 (7\%) & 62,499 (14\%) & 100,239 (22\%) \\
+Power & 7.3~W & n/a & 9.1~W & n/a \\
+Fit / route & routed, timing met & routed & routed & C-synth only, no route \\
+\bottomrule
+\end{tabular}
+\vspace{2pt}
+\begin{minipage}{0.97\textwidth}
+FINN and hls4ml figures come from build-host reports; nn2rtl figures come from in-repository post-route reports (Section~\ref{sec:setup}). $^{\dagger}$hls4ml reports block RAM in BRAM18 (half-width) units; 1,216 BRAM18 equal 608 BRAM36, and the percentage is computed on BRAM36, as for the other rows.
+\end{minipage}
+\end{table*}
+
+At ImageNet scale the two designs are standalone results (Table~\ref{tab:fullnet}). MobileNetV2 is fully routed as a complete network; its 7~ns route did not close timing, so we report the achievable signoff $F_{\max}$ rather than a guaranteed clock (Table~\ref{tab:fullnet}). The ResNet-50 convolutional backbone fits the device, with block RAM the binding resource, and the design routes and meets timing at its target clock (Table~\ref{tab:fullnet}). Published FINN ResNet-50 results on the U250~\cite{petrica2020} (binary W1A2: 2,703~fps at 195~MHz, 67.27\% top-1, 1,027~kLUT; ternary: 69.85\% top-1) are illustrative rather than head-to-head, since FINN uses low-precision QAT against nn2rtl's mixed INT3/INT4 PTQ; hls4ml has no comparable published ResNet-50-scale dataflow.
+
+\begin{table*}[t]
+\centering
+\caption{Place-and-route summary for the two Alveo U250 designs (ResNet-50 backbone and complete MobileNetV2), measured at signoff.}
+\label{tab:fullnet}
+\begin{tabular}{@{}p{0.24\textwidth}p{0.36\textwidth}p{0.32\textwidth}@{}}
+\toprule
+Metric & ResNet-50 (INT3/INT4) & MobileNetV2 (INT8 per-channel) \\
+\midrule
+Top-1 accuracy & 77.07\% & 71.27\% \\
+Routed Fmax & 83.33~MHz & 110.90~MHz \\
+Throughput & 14.71~fps & 93.61~fps \\
+Cycles/frame & 5,664,715 & 1,184,731 \\
+LUT & 1,196,343 (69.23\%) & 322,628 (18.67\%) \\
+BRAM tile & 2,656 (98.81\%) & 1,812.5 (67.43\%) \\
+DSP & 6,983 (56.83\%) & 3,345 (27.22\%) \\
+Power (vectorless) & 16.0~W & 11.1~W \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The central area finding links area to performance. Built as individual spatial datapaths, the fourteen heaviest convolutions alone would consume 1,803,388 LUTs; the shared time-multiplexed engine that replaces them, and that in the deployed design serves all seventeen heavy-layer dispatches, uses 107,268 LUTs, both measured by Vivado post-synthesis on the U250, a reduction of roughly 17 times. This is an explicit area-for-latency trade: time-multiplexing collapses the area but serialises the computation, which is precisely why the full backbone fits the device yet runs at low throughput, and it is the mechanism behind the ResNet-50 frame rate reported above.
+
+On the accuracy and precision axis, nn2rtl's default is per-tensor symmetric INT8 post-training quantisation with batch normalisation folded; the deployed ResNet-8 and MobileNetV2 instead use per-output-channel scaling (ResNet-8 on 7 of its 9 convolutions), which is what reaches accuracy parity. ResNet-8's INT8 top-1 equals that of its floating-point reference (both 87.19\%), with no retraining (Table~\ref{tab:resnet8}). The deployed ResNet-50 uses a mixed-precision configuration (18 INT3 and 35 INT4 convolutional layers, per output channel) and reaches 77.07\% as deployed; an all-INT4 configuration measured higher on the subset (79.47\%, against an 80.07\% floating-point baseline) but did not fit, and the mixed precision was forced by the on-chip block-RAM budget rather than chosen for accuracy. MobileNetV2 uses per-output-channel scaling on its depthwise layers (Table~\ref{tab:fullnet}).
+
+On the ZCU104, nn2rtl's ResNet-8 draws about 7.3~W against FINN's 9.1~W at maximum folding, so FINN reaches roughly 3.37 times the throughput for modestly higher power, 9.1~W versus 7.3~W; this is a folding and dataflow advantage (a fully pipelined design with a small initiation interval, against our latency-bound single-frame engine) rather than a clock-speed one.
+
+Normalising throughput by power and by area yields the efficiency picture in Table~\ref{tab:efficiency} of Appendix~\ref{app:efficiency}, derived purely from the locked routed-Fmax, vectorless-power, and post-route-LUT figures with no additional synthesis. The one like-for-like comparison is on the ZCU104, where nn2rtl and FINN run the same ResNet-8: there FINN's W4A4 dataflow has 2.70 times higher estimated throughput per vectorless watt and 8.14 times higher throughput per thousand LUTs than nn2rtl's time-multiplexed INT8 engine. The two U250 entries are different networks, so their throughput-per-watt figures are not comparable: they reflect each workload's cost, not accelerator efficiency. We avoid cross-device energy comparisons because the platforms have substantially different static-power baselines.
+
+RQ2 therefore has a differentiated answer. At small scale nn2rtl demonstrates feasibility and accuracy comparable to FINN: it fits where the highest-precision flow does not, but it remains materially less PPA-efficient than FINN's highly folded dataflow implementation. At full scale it delivers a routed depthwise-separable network and a routed residual backbone under a hard on-chip-only constraint the deterministic flows were not run against. The limits are plain: the head-to-head is on one device, and the FINN throughput is derived from its routed clock and an analytical initiation interval.
+
+\subsection{RQ3: Verification for Trustworthy Generated Hardware}\label{sec:rq3}
+
+Trusting RTL that an LLM produced requires verification that is both independent of the generator and layered. The per-module checker is a static C++ testbench run by System~1's per-module pipeline against golden vectors generated deterministically from the quantised reference. The verification principle is independent of the RTL generator, whereas the taxonomy records the bugs encountered in this particular AI-generated system.
+
+We use two functional-verification gates, supplemented by synthesis and implementation checks. The two gates of Section~\ref{sec:verification} apply: a per-module numerical-and-latency gate and a stricter byte-exact assembled network gate. Among the fresh System-1 verification records, most modules are strictly bit-identical and the remaining recorded modules satisfy the three-unit numerical tolerance; the complete evidence state is documented in Appendix~\ref{app:bugs}. All three networks then pass the stricter assembled network gate over their tested vectors: the routed ResNet-50 backbone with 0 of 100,352 bytes mismatching, and MobileNetV2 and ResNet-8 each with zero mismatches across their golden vectors. Because the RTL matched its quantised reference byte-exactly on the tested vectors, we report that reference's accuracy, ResNet-8's 87.19\% on the full 10,000-image CIFAR-10 test set, as the deployed model's accuracy; this is not a separate on-board hardware measurement over the whole test set.
+
+Two observations explain why per-module agreement alone does not establish trust. First, component byte-exactness does not imply end-to-end byte-exactness: a module's isolation golden is built on the same integration assumptions that may be wrong, so a locally correct module can be globally wrong. Second, summary statistics conceal bugs: a 99.9960\% byte-exact layer still hid a dropped multiply-accumulate error affecting 2 of 50,176 outputs (B47); further cases are catalogued in Appendices~\ref{app:bugs} and~\ref{app:bugindex}. The byte-exact end-to-end comparison is therefore the primary functional oracle in simulation.
+
+Table~\ref{tab:taxonomy} in Appendix~\ref{app:bugs} groups the 77 bugs into twelve classes, each with the diagnostic evidence that localises it (every bug is also listed individually, with its symptom and fix, in Table~\ref{tab:bugindex} of Appendix~\ref{app:bugindex}), including the full B21 investigation and the memory-read-latency contract bug (B34) that was byte-exact in isolation but wrong once integrated. This corpus is distinct from the Surgeon per-module generation-failure classes (Appendix~\ref{app:selfimprove}), which catalogue faults in producing a single module rather than faults that emerge during composition.
+
+In answer to RQ3, trusting generated RTL requires verification independent of the generator and layered across a per-module and an assembled network gate, because individually correct modules can still fail once composed. This establishes functional correctness over the tested vectors, not exhaustively or on silicon; the taxonomy is drawn from this design's bug history rather than claimed universal to all generated or hand-written hardware.
+
+\section{Conclusion, Limitations, and Future Work}\label{sec:conclusion}
+
+Two cooperating AI systems produced verified, on-chip FPGA implementations of three CNNs: the ResNet-50 convolutional backbone and complete MobileNetV2 on the Alveo U250, and complete ResNet-8 on the ZCU104, with the author acting as research director. All three passed strict assembled network byte-exact verification against their quantised references. We read this as evidence that current LLM agents can write functional, independently verified RTL and integrate a whole accelerator, not just isolated snippets.
+
+Bounded per-module generation was the most reliable and readily verified use of the LLM, while system-level integration remained largely autonomous but human-directed. The hardware demonstrates feasibility rather than PPA superiority: the shared engine let the design fit by trading area for latency.
+
+We are deliberate about limitations. The ResNet-8 head-to-head is on a single device; the power figures are vectorless and relative only; and ``functional correctness'' here means byte-exact agreement with the quantised reference over the tested vectors, not exhaustive or on-silicon validation. Future work includes improving accelerator throughput, replacing vectorless power estimates with vectored on-silicon measurements, and extending the pipeline to additional networks.
+
+\section*{AI Statement}
+During the preparation of this work the author used Claude (Anthropic) to assist in enhancing the writing of this paper. After using this tool, the author reviewed and edited the content as needed and takes full responsibility for the content of the work. This is distinct from the two AI systems studied here, whose roles are described in the body.
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{my-paper}
+
+\clearpage
+\appendix
+\counterwithin{figure}{section}
+\counterwithin{table}{section}
+\section{Verification, Integration, and Toolchain Bug Catalogue}\label{app:bugs}
+
+This appendix expands Section~\ref{sec:rq3} with the bug taxonomy, the full per-module verification evidence state, and the extended B21 investigation; the complete per-bug index (B1 to B77) is given in Appendix~\ref{app:bugindex}. Every bug catalogued here was surfaced and resolved by the integration agent (System~2) itself, working from high-level functional directives and its own adversarial multi-agent cross-checks (Section~\ref{sec:system2}); the author set objectives and approved milestones but wrote no RTL, ran no commands, and diagnosed none of these faults.
+
+\subsection{Bug taxonomy (twelve classes)}
+
+We group the 77 indexed bugs into twelve classes by root cause and by the evidence that localises each. Table~\ref{tab:taxonomy} also identifies the gate at which each class is exposed.
+
+\begin{table*}[t]
+\centering
+\caption{Bug taxonomy over the 77 indexed bugs, with detection gate and localisation evidence. B51 spans two classes, so the counts sum to 78.}
+\label{tab:taxonomy}
+\begin{tabular}{@{}r p{0.27\textwidth} r p{0.13\textwidth} p{0.39\textwidth}@{}}
+\toprule
+\# & Bug class & $n$ & Detection gate & What localises it \\
+\midrule
+1 & Stale-artifact / regeneration omission & 7 & assembled network & fresh self-consistent golden; artifact mtimes; full regeneration chain \\
+2 & Missing or wrong activation-rescale arithmetic & 2 & assembled network & un-confounded bracket; fit the transfer over the whole input domain \\
+3 & Operand half-swap, scaling and tiling layout & 8 & assembled network & operand probe at the transfer handshake; offline golden replay \\
+4 & Handshake / backpressure / deadlock & 17 & assembled network & live simulation-state inspection; freeze signature (downstream ready, no valid output) \\
+5 & Latency and memory-read-latency contract & 4 & module / assembled & exact-latency check; engine-isolation harness with controllable read latency \\
+6 & Simulation-artifact false-positive & 4 & verification & Verilator \texttt{--x-initial 0}; single-threaded run; mapped primitive counts \\
+7 & Contract / bus-width / packing & 6 & assembled network & port width versus contract map; coherent multi-stage patching \\
+8 & Engine datapath arithmetic / counter-leak & 5 & assembled network & single-pixel-isolation testbench; per-pixel grid; drop-multiply-accumulate model \\
+9 & Component byte-exact but end-to-end wrong & 9 & assembled network & per-node probe bisection; Python triangulation \\
+10 & Golden-reference float-accumulation artifact & 2 & verification & compare two scale choices; persistent residual implicates the golden \\
+11 & Autonomous-pipeline pattern-reuse and toolchain hazards & 12 & preflight / PPA & structural gates; infrastructure separation; raw-evidence rubric \\
+12 & Frontend / accuracy-measurement & 2 & measurement & deployment integer path; batch-normalisation identity; scale-ratio check \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Per-module verification evidence state}
+
+ResNet-50: all 119 modules register as passing in the pipeline state, and 117 of 119 carry fresh on-disk evidence, of which 108 are bit-identical and 9 are within the three-unit tolerance. The remaining 2 modules have ambiguous records (a superseded stale failure or a missing results file) and their exact status is left open.
+
+MobileNetV2: the recorded System-1 cost snapshot covers 97 of the 99 modules, of which 82 are bit-identical and 15 are within tolerance. The global-average-pool and classifier modules were added afterwards, and the complete network passes the assembled network gate (Section~\ref{sec:rq3}). The per-module bit-identical and within-tolerance split for those two deferred modules is not separately recorded.
+
+A representative module-level check was particularly extensive: layer1\_0\_conv1 was verified bit-identical, with a maximum error of 0 and a first-mismatch index of $-1$, across 6,422,528 samples (also referenced in Section~\ref{sec:verification}). This is the depth of a single well-characterised check and should not be read as evidence that every module was sampled to the same extent.
+
+\subsection{Extended investigation: B21}
+
+During end-to-end verification of ResNet-50, a sparse error affecting roughly 2.7\% of outputs appeared in wide-channel residual additions in the network's later stages, present only in the composed chain; every implicated module had passed its per-module gate in isolation. Localising it required an eight-hypothesis adversarial code review across 83 handshake-fed nodes. The review first attributed the error to a spatial\_run handshake asymmetry and applied a fix that gated valid\_in by spatial\_run across those nodes, recorded as B21. That attribution was later superseded: the true defect was a missing per-layer activation requantisation in 22 of 48 ReLU modules (B7), where the template had emitted a plain \(\max(0,x)\). The B21 handshake change was retained only because it independently reduced cycle count by about 12\%. The episode shows that, even after the assembled network gate flags a composed-design failure, root-cause attribution can be hard and a plausible but incorrect fix can mask the true cause, so the byte-exact comparison rather than any single hypothesis remained the arbiter.
+
+\section{Additional System Details}\label{app:details}
+
+\subsection{Per-module failure classification and pattern reuse}\label{app:selfimprove}
+
+The per-module pipeline classifies each generation failure into one of sixteen recurring arithmetic and structural error classes (for example integer overflow, missing saturation, or unfolded batch-normalisation), augmented by four infrastructure classes that separate genuine RTL defects from toolchain problems. This failure-memory and pattern-reuse cache retains the broken RTL and the full failure history, so later modules on related layers begin from accumulated experience. When a module passes, it also stores a pattern note with reference RTL; a note is promoted to active guidance after it has helped three later modules and archived if a module that later uses it fails, with promotion gated on the module still passing the final verification and Vivado checks. This is a reuse mechanism rather than a measured self-optimisation.
+
+\subsection{System-1 agents and cost}\label{app:agents}
+
+Table~\ref{tab:agents} lists the System-1 components and their pinned models; the roles are described in Section~\ref{sec:system1}. Four are language model agents (Foundry, Surgeon, Failure-Classifier, Retrospector), and architecture mapping runs as a deterministic ONNX frontend. The model column abbreviates the common \texttt{claude-} prefix.
+
+Table~\ref{tab:rq1cost} reports the System-1-only pipeline cost discussed in Section~\ref{sec:rq1}; the MobileNetV2 figures cover the 97 modules in the recorded cost snapshot.
+
+\subsection{Derived efficiency}\label{app:efficiency}
+
+Table~\ref{tab:efficiency} gives the energy and area efficiency derived in Section~\ref{sec:rq2}. These values require no additional synthesis, and energy figures are comparable only within a device.
+
+\subsection{Shared compute engine}\label{app:engine}
+
+The shared time-multiplexed engine, like all of the generated hardware, was produced by the integration agent (System~2) and was not specified by the human: it comprises a 256-lane signed multiply-accumulate array feeding 256 wide accumulators, a three-stage requantisation pipeline, an address generator, a configuration-register block, and a memory-to-stream bridge. Its structure was the agent's own; the author set goals and approved milestones but supplied no wiring diagram or module specification.
+
+\subsection{Objective-directed refinement}\label{app:improve}
+
+The improve operation supplies a verified module and its Vivado synthesis report to a language model agent with one of seven predefined PPA objectives (use-DSP, use-BRAM, reduce-LUT, reduce-FF, improve-Fmax, reduce-latency, increase-throughput) and a fixed per-objective guidance prompt. Each candidate is reverified with Verilator and resynthesised, and is accepted only when a deterministic objective-specific threshold is met. Table~\ref{tab:improve} lists representative verified runs.
+
+\begin{table*}[!htbp]
+\centering
+\caption{System-1 components and pinned models.}
+\label{tab:agents}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}p{0.15\textwidth}p{0.16\textwidth}p{0.50\textwidth}p{0.12\textwidth}@{}}
+\toprule
+Component & Input & Job and output & Model \\
+\midrule
+Architecture mapping & Quantised checkpoint & Trace graph, fold batch normalisation, and emit weight/bias hex and the Layer IR via deterministic \texttt{read\_weights}; outputs the Layer IR once at start-up & deterministic \\
+Foundry & One layer specification & Generate synthesisable signed-integer Verilog with memory-init weights, valid/ready, exact latency, and no simulation-only constructs; outputs metadata and RTL via \texttt{write\_verilog} & \texttt{opus-4-7} \\
+Surgeon & Failing module, result, and history & Classify the fault and rewrite only faulty lines while preserving the interface; outputs repaired metadata and RTL via \texttt{write\_verilog} & \texttt{opus-4-7} \\
+Failure-Classifier & Module failure evidence & Produce the retry-or-abort policy category & \texttt{sonnet-4-6} \\
+Retrospector & Failure history, prior RTL, and pattern-reuse knowledge & Inject one advisory into a resumed Foundry session without writing RTL & \texttt{opus-4-7} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table}[!htbp]
+\centering
+\caption{Full-network System~1 pipeline economics.}
+\label{tab:rq1cost}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Network & Total LLM & Cost per & Avg attempts & Modules \\
+        & cost (USD) & module (USD) & per entry & passed \\
+\midrule
+ResNet-50    & 170.61 & 1.43 & 1.09 & 119 \\
+MobileNetV2  & 196.39 & 2.02 & 1.30 & 97 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\caption{Efficiency derived from the routed figures.}
+\label{tab:efficiency}
+\setlength{\tabcolsep}{1pt}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Design & Device & fps/W & mJ/inf & fps/kLUT \\
+\midrule
+ResNet-50 (INT3/INT4) & U250 & 0.92 & 1087.7 & 0.012 \\
+MobileNetV2 (INT8) & U250 & 8.43 & 118.58 & 0.290 \\
+ResNet-8 nn2rtl (INT8) & ZCU104 & 1,325 & 0.75 & 62.7 \\
+ResNet-8 FINN (W4A4, max-fold) & ZCU104 & 3,575 & 0.28 & 510.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+\onecolumn
+
+\begin{table}[!htbp]
+\centering
+\caption{Representative verified refinement runs; these isolated demonstrations were not carried into the final routed networks.}
+\label{tab:improve}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{@{}p{0.28\columnwidth}p{0.17\columnwidth}p{0.28\columnwidth}p{0.19\columnwidth}@{}}
+\toprule
+Module & Objective & Resource change & Acceptance \\
+\midrule
+\texttt{node\_conv\_248} & use DSP & 1 $\rightarrow$ 25 DSP & DSP $\geq$ 8 \\
+\texttt{node\_conv\_284} & reduce LUT & 227,703 $\rightarrow$ 64,530 LUT & $\geq$5\% cut \\
+\texttt{node\_conv\_290} & use BRAM & 0 $\rightarrow$ 7 BRAM & BRAM $>$ 0 \\
+\texttt{node\_conv\_292} & reduce FF & 267,737 $\rightarrow$ 10,357 FF & $\geq$10\% cut \\
+\texttt{node\_conv\_298} & reduce FF & 267,918 $\rightarrow$ 6,254 FF & $\geq$10\% cut \\
+\bottomrule
+\end{tabular}
+\end{table}
+\FloatBarrier
+
+\section{Full bug index (B1 to B77)}\label{app:bugindex}
+
+The complete catalogue is given in Table~\ref{tab:bugindex}.
+
+\setlength{\LTchunksize}{12}
+\begin{longtable}{@{}l l l p{0.30\textwidth} p{0.33\textwidth}@{}}
+\caption{Complete index of the 77 indexed bugs. $\star$ marks spine bugs.}\label{tab:bugindex}\\
+\toprule
+ID & Class & Net & Symptom & Fix \\
+\midrule
+\endfirsthead
+\caption[]{(continued)}\\
+\toprule
+ID & Class & Net & Symptom & Fix \\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{\textit{continued on next page}}\\
+\endfoot
+\bottomrule
+\endlastfoot
+B1 & 1 & RN50 & 14 engine convs systematically low (\textasciitilde{}16\% e2e error), small +bias at final ReLU & rebuild bias\_memory\_map (stale per-tensor bias.mem); engine real-mem isolation harness exonerated the RTL \\
+B2 & 1 & RN50 & e2e numbers fluctuated, byte-exact milestones not reproducible, \textasciitilde{}16\% error hidden & refresh\_final\_golden.py retiles a fresh logical golden into the stale contract golden \\
+B3 & 1 & RN50 & windowed $3\times3$ convs saturate (max 7f) while $1\times1$ clean & regen\_mp\_k\_weights.py regenerated stale wide tiled packings (read via \$readmemh) \\
+B4 & 1 & RN50 & saturation explosion (add\_9 0$\rightarrow$7625), relu\_48 saturated & extend the add-rescale patcher to Style-B (FUSED\_LHS\_MULT) adds it had silently skipped \\
+B5 & 1 & both & engine wrong addresses / range-assert under mixed INT3 packing & reorder build\_weight\_memory\_map, dedup\_engine\_banks, nibble\_int3 [SUPERSEDED] \\
+B6 & 1 & RN50 & part of a multi-day \textasciitilde{}16\% e2e bug (test-only) & single-file repack with --wgt-bits 4 (INT3 wide hex read under WGT\_BITS(4) wrappers) \\
+B7 $\star$ & 2 & RN50 & diffuse e2e error, conv\_200 93.9\% wrong, near-orthogonal final map & add per-layer requant to the 22 of 48 rescaling ReLUs (template emitted a plain \(\max(0,x)\)) \\
+B8 & 2 & RN50 & byte-exact on vec0, mismatching bytes on vec1 & re-fit each ReLU transfer over all 128 inputs via a bounding interval (was vector-overfit) \\
+B9 & 3 & RN50 & residual error mean$|$d$|\approx2.7$ onset conv\_252 $\rightarrow$ \textasciitilde{}4\% at final ReLU & swap the reversed data\_in halves of node\_add\_7 (lone offender among 16 adds) \\
+B10 $\star$ & 3 & MBV2 & all 10 residual adds wrong despite both operands byte-exact and aligned & fix concat order to lhs=low=skip / rhs=high=main in build\_top\_wrapper (was \{skip,main\}) \\
+B11 & 3 & RN50 & tiled adds (OC$\geq$1024) fail \textasciitilde{}22\%, RTL passes pure-Python sim & add to isTiledAdd plus per-beat lhs$|$rhs interleave retile (tooling bug, not RTL) \\
+B12 & 3 & MBV2 & conv\_818 (first DW after dispatch) 100\% wrong, stem byte-exact & rewrite g\_w\_lt to one 2048-bit word per beat, deepen act mem, remap D0/D1 bases \\
+B13 & 3 & MBV2 & conv\_878 (576-ch) correct to ch319 then wrong from ch320; same on 960-ch & add pull\_idx register decoupling resident-beat index from pull advance (off-by-one is\_last) \\
+B14 & 3 & RN50 & every weight read wrong, engine garbage & Path D: 8 native 288-bit URAM banks (288-vs-2048 width, $8\times288\neq2048$, $>>$3 skip) \\
+B15 & 3 & RN50 & IC$>$256 layers re-read ch0; 8 of 14 heavy layers wrong dot products & read addr = base + (in\_r$\cdot$IW+in\_c)$\cdot$ic\_chunks + ic\_chunk\_idx (was no IC stride) \\
+B16 & 3 & RN50 & every bias byte-swapped to a huge wrong value ($-4 \rightarrow -50{,}331{,}649$) & struct.pack('$>$i') big-endian (was '$<$i', LSByte landed high) \\
+B17 $\star$ & 4 & RN50 & chain-wide lockstep freeze, no frame ever emitted & comprehensive backpressure (pulse producers asserted valid, ignored ready) \\
+B18 & 4 & RN50 & after backpressuring 25 ReLUs, freeze byte-identical & backpressure must cover every producer (loss relocated to pulse-style conv\_200) \\
+B19 & 4 & RN50 & subset of pointwise convs sped up $\rightarrow$ fast/slow imbalance, beat loss & fix param-grep (31 serial $1\times1$ convs existed, only 12 parallelised) \\
+B20 $\star$ & 4 & RN50 & frame never completes; wide 2048-ch ReLUs drop last beat (3135/3136) & drop spatial\_run from the ReLU$\rightarrow$skid transfer so always-ready skids accept every beat \\
+B21 & 4 & RN50 & sparse \textasciitilde{}2.7\% broad-channel residual, stages 3-4, in-chain only & gate valid\_in by spatial\_run across 83 skid-fed nodes [SUPERSEDED by B7; kept \textasciitilde{}12\% cycles] \\
+B22 & 4 & RN50 & MP 16$\rightarrow$32 on 38 convs hard-deadlocks e2e (output stuck 0) & proposed symmetric output skid on conv\_202$\rightarrow$add LHS; kept byte-exact MP=16 baseline \\
+B23 & 4 & RN50 & deadlock entering final stage (skip FIFOs 0-6 full, 7-15 empty) & revert one-sided tail-pipe (+3 spatial vs +0 engine desynced the add join) \\
+B24 & 4 & MBV2 & dispatch-1 deadlock, bridge waits on an inflated tile count & set engine\_output\_bridge TILES\_PER\_BEAT=1 (engine writes 1 position per 2048-bit beat) \\
+B25 & 4 & MBV2 & dispatch 21 deadlock, loader at full capacity from \textasciitilde{}17 real positions & expose wsel\_empty as wr\_accept, re-gate 19 retile-bridge producers (duplication) \\
+B26 & 4 & MBV2 & engine-top parks in S\_WAIT\_DRAIN, drain\_complete never asserts & param-gated output-backpressure primitive (store-and-drop FIFO overflowed, dropped beats) \\
+B27 & 4 & MBV2 & engine-top deadlock dispatch 0, scheduler stuck in S\_WAIT\_LOAD & apply\_loader\_word\_resize.py (capacity in output beats vs 2048-bit words, off by 2048/BUS\_W) \\
+B28 & 4 & MBV2 & e2e deadlock with backpressure retile bridges & per-bridge spatial\_run\_drain\_br\_i mask (a shared global any\_retile\_stall dropped beats) \\
+B29 & 4 & MBV2 & e2e timeout when all 17 DW at MP=16 (also MP=8) & revert conv\_884/908 to MP=4 [SUPERSEDED: MP16 later byte-exact once bridges deleted] \\
+B30 & 4 & RN50 & engine FSM enters ST\_REQUANT, never advances, deadlock & remove 8 datapath tie-offs outside the ifndef guard, wire from addr-gen and bias mem \\
+B31 & 4 & RN50 & AXI4-Lite write never completes, engine never configured & collapse S\_WRITE\_ADDR and S\_WRITE\_DATA into one S\_WRITE asserting awvalid+wvalid the same cycle \\
+B32 & 4 & RN50 & engine never starts, design does nothing on input & add scheduler instance, wire AXI master$\rightarrow$slave, drive engine\_start (was tied 0) \\
+B33 & 4 & MBV2 & stem freeze / e2e never completes, \textasciitilde{}50\% beats dropped & elastic-pipeline rollout across all spatial producers (was push-only, no backpressure) \\
+B34 $\star$ & 5 & RN50 & small $\pm1..\pm12$ in-chain errors on engine convs, isolation sims passed & align engine to 2-cycle weight read (URAM READ\_LATENCY\_A=2 vs 1-cycle pipeline = stale weight) \\
+B35 & 5 & MBV2 & engine output catastrophically wrong, 2048-bit bus truncated to 1024 & override engine params WGT\_W=8 / URAM\_DATA\_W=2048 / WLAT=2 (defaulted to ResNet INT4) \\
+B36 & 5 & RN50 & clean mismatch with timing\_pass=true, \textasciitilde{}0.5-1\% sign-skewed & change the prefetch guard oc\_pass+2 $<$ OC\_PASSES to $<=$ (stale double-buffered cache) \\
+B37 $\star$ & 6 & RN50 & deep conv reads \textasciitilde{}94-96\% wrong vs golden in many harnesses & run Verilator --x-initial 0 (uninitialised FF X-poisoning; true residual only 2.72\%) \\
+B38 & 6 & MBV2 & \textasciitilde{}688 wrong logit bytes under --threads 4, cycle count unchanged & pin the runner to --threads 1 (multithread scheduler cross-partition hazard) \\
+B39 & 6 & RN50 & long-standing $\pm1$ error on spatial conv\_216 & drive the undriven window\_kwm1\_wire in line\_buf\_window.v (lint-flagged UNDRIVEN) \\
+B40 & 6 & RN50 & functional sim reads correct URAM, falsely implying init works & inspect mapped primitive count (synth fell back to RAMB36E2; sim exercised BRAM not URAM) \\
+B41 $\star$ & 7 & MBV2 & both tops consume all input, produce no output (final-stage deadlock) & contract-regen major phase: retile bridges (576/960/1280-ch $>$ 4096-bit flat-bus cap) \\
+B42 & 7 & MBV2 & correcting one high-OC stage deadlocks the next; chain regresses & coherent multi-stage contract patching [SUPERSEDED: region later byte-exact] \\
+B43 & 7 & RN50 & every layer's requant output garbage (scale high bits discarded) & widen SCALE\_MULT\_W 16$\rightarrow$32 (ResNet scales \textasciitilde{}30 bits, e.g. 1284434803) \\
+B44 & 7 & RN50 & $\pm1$ errors on rounding boundaries accumulating through depth & apply\_scale\_constant\_fix.py re-derive 21 convs' mult/shift [SUPERSEDED for engine ROM; spatial kept] \\
+B45 & 7 & RN50 & engine FSM never leaves requant for layers narrower than max OC & change ST\_REQUANT exit to oc\_pass\_idx == oc\_pass\_total\_m1[2:0] (was hardcoded ==7) \\
+B46 & 7 & RN50 & SELRANGE warnings ($\times10$) on $1\times1$ / non-MP\_K==9 conv instances & gate the channel\_select assign in generate (USE\_CHAN\_WINDOW=1 else tie 0) \\
+B47 $\star$ & 8 & RN50 & layer 99.9960\% byte-exact, 2/50,176 wrong at pixel [1,4] (off by $-1$) & re-gate weight/act read on \textasciitilde{}mac\_done not \textasciitilde{}k\_at\_last (suppressed the last MAC tuple) \\
+B48 $\star$ & 8 & RN50 & OCs off by the ic=0 contribution, mismatch 2..8578 on 9 of 14 layers & wrap counter-advance in if(!mac\_done) (ic\_cnt leaked 0$\rightarrow$1, dropped first MAC) \\
+B49 $\star$ & 8 & RN50 & same bug = 0 mismatches on some layers, thousands on others & (B48 fix): visibility is data-dependent, mismatch tracks the count of a[ic=0]$\neq$0 pixels \\
+B50 & 8 & RN50 & engine convs off-by-one (got=gold$-1$) on negative half-boundaries & unconditional +HALF round-half-up (was sign-aware HALF / HALF-1) \\
+B51 & 5/8 & RN50 & engine dropped the last MAC of every output-channel pass & re-gate counter-advance by \textasciitilde{}mac\_done not \textasciitilde{}k\_at\_last (one bug, two class lenses) \\
+B52 $\star$ & 9 & both & sub-blocks each pass local gates but do not work wired together & 3 audit rounds fixed 12 cross-piece bugs (AXI / scale-trunc / URAM-bus / bias / FSM-exit / byte-order) \\
+B53 $\star$ & 9 & MBV2 & modules byte-exact in isolation, integrated chain corrupts from 1st dispatch & march a per-node e2e probe (iso goldens were consistent-with-the-bug); e2e mismatch is the primary functional oracle in simulation \\
+B54 & 9 & RN50 & byte-correct per-OC conv still reports mismatch via equiv\_one & DBG\_SCALE dump + Python triangulation localised to the tiling path; mandate in-chain e2e \\
+B55 & 9 & RN50 & all conv outputs zero (got=0) in sim & make SCALE\_PATH absolute (relative path did not resolve in sim cwd $\rightarrow$ scale ROM zero) \\
+B56 & 9 & RN50 & hard all-zero from the first engine-fed residual add onward & run the executable with cwd at repo root (\$readmemh relative paths not found $\rightarrow$ mems zero) \\
+B57 & 9 & RN50 & known-good conv\_198 equiv\_one max\_error 75, design ok in-chain & triangulate\_conv198.py recompute matched the logical goldout $\rightarrow$ fault is the RTL path only \\
+B58 & 9 & RN50 & an earlier review concluded the deployed weights were INT8 & adversarial re-scan: the \_wide INT8 files are dead (engine computes from the INT4 URAM bank) \\
+B59 & 9 & MBV2 & conv\_820 wrong despite byte-exact spatial input, \textasciitilde{}99\% downstream & set scheduler act\_out\_base[D1]=12544 (a dead act\_out write collided with ldr2/ldr3 windows) \\
+B60 & 1/9 & RN50 & conv\_248 stage-3 residual off $\pm1$-6 (equiv\_one max\_error up to 51) & verify known-good stage-1/2 conv vs fresh INT4 goldens; deferred pending consistent regen \\
+B61 & 9 & MBV2 & per-module off-by-one (max\_error=1) on 17 of \textasciitilde{}17 flagged & canonical compute\_scale\_approx + unconditional bias + shift bumps \\
+B62 & 10 & MBV2 & node\_linear 2/8000 off-by-one logits & harden golden\_impl Int8Gemm to integer requantize (golden cast acc to float32; the RTL is correct) \\
+B63 & 10 & MBV2 & a generic integer-hardened golden emits bytes the RTL will not (119 vs 118) & harden only node\_mean (7619,18); flag and skip relu/add (per-module agent-chosen constants) \\
+B64 & 11 & both & a working contract permanently flagged manual\_correction\_needed & add a toolchain\_infra class + retryable fallbacks (transient infra is not an RTL failure) \\
+B65 & 11 & both & contract switched but verified against flat-bus goldens (wrong protocol) & executable plans + per-contract golden retile/repack + latency [SUPERSEDED: now executable] \\
+B66 & 11 & both & a later degraded repair becomes the cached state, the better design lost & gate cache promotion on the module still passing after the Vivado/PPA gate \\
+B67 & 11 & MBV2 & grouped/depthwise/dilated conv verifies against wrong math & add groups/dilation fields to LayerIR + depthwise detection + asymmetric-pad rejection \\
+B68 & 11 & both & the pattern-reuse cache cannot tell which learned docs a module used & deterministic pattern injection + hard-fail/retry when a required lookup is absent \\
+B69 & 11 & both & a valid MaxPool omitted by stale extraction instructions & route extraction through deterministic read\_weights [SUPERSEDED] \\
+B70 & 11 & both & a file looks stale/missing depending on Win/WSL/native opener & normalise all path forms at tool boundaries + content-hash fingerprint identity \\
+B71 & 11 & RN50 & pipeline repeatedly repairs correct RTL (phantom failures, \$7.50) & harden run\_iverilog to emit a structured no-diagnostic; classify as tb\_setup\_error/toolchain\_infra \\
+B72 $\star$ & 11 & both & Verilator passes but synth preflight fails on an async-reset array write & split the memory write into a dedicated always @(posedge clk)-only block (restore RAM inference) \\
+B73 & 11 & both & Verilator never terminates, hits the wall-clock cap & add VERILATOR\_SIM\_TIMEOUT\_MS + an output\_counter\_missing structural preflight rule \\
+B74 & 11 & RN50 & stem first\_mismatch $\approx$7122, max\_error 1-3, errors in the last quarter & move the wrap math (IW-1+PW) into coord\_scheduler.v + right-pad from zero BRAM cells \\
+B75 & 12 & RN50 & measured top-1 \textasciitilde{}0\% or a misleading \textasciitilde{}73\% $\rightarrow$ false "design broken" & measure via the onnx\_frontend int path / BN-identity injection (ONNX is BN-folded, double-counts) \\
+B76 & 12 & both & Vitis HLS launches, idles indefinitely at \textasciitilde{}0\% CPU, no csynth & plain float ONNX + per-layer ap\_fixed (move\_scales explodes scalar $\rightarrow$ per-element constants) \\
+B77 & 11 & both & repair agent steered to add drain logic, real bug = off-by-one exit & replace the TB prose hypothesis with raw mismatch numbers + a general interpretation rubric \\
+\end{longtable}
+
+Note: $\star$ marks spine bugs. B51 (class 5/8) is the only bug counted under two classes, which is why the per-class counts in Table~\ref{tab:taxonomy} total 78 for 77 distinct bugs; B60 is labelled 1/9 but counted once, under class 1.
+
+\section{Pipeline and Verification Diagrams}\label{app:figures}
+
+Figure~\ref{fig:pipeline} details the System-1 per-module pipeline state machine and its failure-memory and pattern-reuse loop (Section~\ref{sec:system1}); Figure~\ref{fig:verify} details the two functional-verification gates and the reference-independence principle (Section~\ref{sec:verification}).
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{fig2_pipeline_fsm}
+\caption{The System-1 per-module pipeline as a state machine, with Vivado synthesis dispatch and the failure-memory and pattern-reuse loop. Deterministic components are shaded separately from the LLM agents.}
+\Description{A flowchart of the System-1 per-module pipeline drawn as a finite state machine. A central vertical spine runs through the states pending, generating, verifying, pass, synthesizing, and module accepted. To the left, the Foundry and Surgeon language model agents feed the generating state; to the right, the deterministic Assayer drives verifying and Vivado drives synthesizing. An upper-right failure branch sends a mismatch to the Failure-Classifier, which routes either to a fail-retry state that loops back to generating or to a fail-abort state, with the Retrospector issuing a single advisory; a synthesis failure aborts similarly. A lower-left failure-memory and pattern-reuse loop records classified faults into a failure corpus and a pattern-reuse cache that returns learned guidance to the Surgeon. Deterministic components are shaded separately from the language model agents.}
+\label{fig:pipeline}
+\end{figure}
+
+\clearpage
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{fig3_verification}
+\caption{The two-gate verification methodology: a per-module Gate~1 and a stricter byte-exact Gate~2 over the assembled network. The reference and checker are produced without an LLM, preserving the ``two-bug'' independence principle.}
+\Description{A diagram of the two-gate verification methodology. A quantised model deterministically produces golden reference vectors. Per-module vectors and generated module RTL feed Gate 1, which checks numerical error, exact pipeline latency, and valid/ready timing; network-level vectors and assembled RTL feed the stricter byte-exact Gate 2. The reference and checker remain outside the generative loop.}
+\label{fig:verify}
+\end{figure}
+
+\end{document}
