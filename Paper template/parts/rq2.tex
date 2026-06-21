@@ -1,0 +1,65 @@
+\subsection{RQ2: Implementation Quality versus FINN and hls4ml}\label{sec:rq2}
+
+The only same-network head-to-head is ResNet-8 on the ZCU104; the ImageNet-scale ResNet-50 and MobileNetV2 results (Alveo U250) are standalone. The comparison fixes the network and device but is a native-flow design-point comparison.
+
+On the ZCU104, the three flows resolve the small-device wall in three different ways (Table~\ref{tab:resnet8}). hls4ml~\cite{schulte2026hls4ml, duarte2018hls4ml} reaches the highest precision and accuracy (89.10\%) but does not fit: its on-chip block-RAM memory is dominated by streaming dataflow buffers (the frame-deep buffering the residual skip connections require) rather than by weights, and the weight and activation memories alone would fit comfortably. This is structural to the streaming dataflow architecture combined with a residual topology, and it is consistent with the literature, in that published hls4ml ResNet-8 entries either drop the skip connections or alter them~\cite{tailor2023}, or fit only a smaller device after buffer-depth optimisation; the ResNet-8 benchmark itself is the MLPerf Tiny reference model~\cite{banbury2021}. nn2rtl sits in the middle: at INT8 it serialises the network onto one shared compute engine, which fits and is bound by digital signal processing (DSP) blocks (Table~\ref{tab:resnet8}). FINN~\cite{umuroglu2017finn, blott2018finnr} uses the lowest precision (W4A4) and substantially fewer resources. Its throughput (FINN's own analytical estimate) spans from a baseline below nn2rtl's cycle-accurate figure to a maximum-fold point that, only in that highest configuration, is the fastest of the three (Table~\ref{tab:resnet8}).
+
+\begin{table*}[t]
+\centering
+\caption{ResNet-8 comparison on the ZCU104 using each flow's native quantisation. Power estimates are vectorless.}
+\label{tab:resnet8}
+\footnotesize
+\begin{tabular}{@{}p{0.13\textwidth}p{0.16\textwidth}p{0.135\textwidth}p{0.15\textwidth}p{0.17\textwidth}@{}}
+\toprule
+Metric & nn2rtl (INT8 PTQ) & FINN base (W4A4) & FINN max-fold (W4A4) & hls4ml (W8A8 QAT) \\
+\midrule
+Top-1 (CIFAR-10) & 87.19\% & 86.68\% & 86.68\% & 89.10\% \\
+Fmax & 142.86~MHz & 100~MHz & 300.03~MHz & 137.32~MHz (est.) \\
+Throughput & about 9,670~fps & about 1,017~fps & about 32,555~fps & did not fit \\
+Cycles/frame & 14,774 (latency) & about 98,304 (II) & 9,216 (II) & 175,714 (C-synth) \\
+LUT & 154,188 (66.92\%) & 25,760 (11\%) & 63,739 (28\%) & 200,938 (87\%) \\
+DSP & 1,717 (99.36\%) & 74 (4\%) & 569 (33\%) & 488 (28\%) \\
+BRAM & 199 tiles (63.78\%) & about 40 (13\%) & 64.5 (21\%) & 1,216 BRAM18$^{\dagger}$ (about 194\%) \\
+FF & 64,728 (14.05\%) & 30,824 (7\%) & 62,499 (14\%) & 100,239 (22\%) \\
+Power & 7.3~W & n/a & 9.1~W & n/a \\
+Fit / route & routed, timing met & routed & routed & C-synth only, no route \\
+\bottomrule
+\end{tabular}
+\vspace{2pt}
+\begin{minipage}{0.97\textwidth}
+\footnotesize FINN and hls4ml figures come from build-host reports; nn2rtl figures come from in-repository post-route reports (Section~\ref{sec:setup}). $^{\dagger}$hls4ml reports block RAM in BRAM18 (half-width) units; 1,216 BRAM18 equal 608 BRAM36, and the percentage is computed on BRAM36, as for the other rows.
+\end{minipage}
+\end{table*}
+
+At ImageNet scale the two designs are standalone results (Table~\ref{tab:fullnet}). MobileNetV2 is fully routed as a complete network; its 7~ns route did not close timing, so we report the achievable signoff $F_{\max}$ rather than a guaranteed clock (Table~\ref{tab:fullnet}). The ResNet-50 convolutional backbone fits the device, with block RAM the binding resource, and the design routes and meets timing at its target clock (Table~\ref{tab:fullnet}). Published FINN ResNet-50 results on the U250~\cite{petrica2020} (binary W1A2: 2,703~fps at 195~MHz, 67.27\% top-1, 1,027~kLUT; packed ternary W2A2: 69.85\% top-1, synthesised within U250 resource limits but failed placement) are illustrative rather than head-to-head, since FINN uses low-precision QAT against nn2rtl's mixed INT3/INT4 PTQ; hls4ml has no comparable published ResNet-50-scale dataflow.
+
+\begin{table*}[t]
+\centering
+\caption{Place-and-route summary for the two Alveo U250 designs (ResNet-50 backbone and complete MobileNetV2), measured at signoff.}
+\label{tab:fullnet}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}p{0.36\textwidth}p{0.32\textwidth}@{}}
+\toprule
+Metric & ResNet-50 (INT3/INT4) & MobileNetV2 (INT8 per-channel) \\
+\midrule
+Top-1 accuracy & 77.07\% & 71.27\% \\
+Routed Fmax & 83.33~MHz & 110.90~MHz \\
+Throughput & 14.71~fps & 93.61~fps \\
+Cycles/frame & 5,664,715 & 1,184,731 \\
+LUT & 1,196,343 (69.23\%) & 322,628 (18.67\%) \\
+BRAM tile & 2,656 (98.81\%) & 1,812.5 (67.43\%) \\
+DSP & 6,983 (56.83\%) & 3,345 (27.22\%) \\
+Power (vectorless) & 16.0~W & 11.1~W \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The central area finding links area to performance. Built as individual spatial datapaths, the fourteen heaviest convolutions alone would consume 1,803,388 LUTs; the shared time-multiplexed engine that replaces them, and that in the deployed design serves all seventeen heavy-layer dispatches, uses 107,268 LUTs, both measured by Vivado post-synthesis on the U250, a reduction of roughly 17 times. This is an explicit area-for-latency trade: time-multiplexing collapses the area but serialises the computation, which is precisely why the full backbone fits the device yet runs at low throughput, and it is the mechanism behind the ResNet-50 frame rate reported above.
+
+On the accuracy and precision axis, nn2rtl's default is per-tensor symmetric INT8 post-training quantisation with batch normalisation folded; the deployed ResNet-8 and MobileNetV2 instead use per-output-channel scaling (ResNet-8 on 7 of its 9 convolutions), which is what reaches accuracy parity. ResNet-8's INT8 top-1 equals that of its floating-point reference (both 87.19\%), with no retraining (Table~\ref{tab:resnet8}). The deployed ResNet-50 uses a mixed-precision configuration (18 INT3 and 35 INT4 convolutional layers, per output channel) and reaches 77.07\% as deployed; an all-INT4 configuration measured higher on the subset (79.47\%, against an 80.07\% floating-point baseline) but did not fit, and the mixed precision was forced by the on-chip block-RAM budget rather than chosen for accuracy. MobileNetV2 uses per-output-channel scaling on its depthwise layers (Table~\ref{tab:fullnet}).
+
+On the ZCU104, nn2rtl's ResNet-8 draws about 7.3~W against FINN's 9.1~W at maximum folding, so FINN reaches roughly 3.37 times the throughput for modestly higher power, 9.1~W versus 7.3~W; this is a folding and dataflow advantage (a fully pipelined design with a small initiation interval, against our latency-bound single-frame engine) rather than a clock-speed one.
+
+Normalising throughput by power and by area yields the efficiency picture in Table~\ref{tab:efficiency} of Appendix~\ref{app:efficiency}, derived purely from the locked routed-Fmax, vectorless-power, and post-route-LUT figures with no additional synthesis. The one like-for-like comparison is on the ZCU104, where nn2rtl and FINN run the same ResNet-8: there FINN's W4A4 dataflow has 2.70 times higher estimated throughput per vectorless watt and 8.14 times higher throughput per thousand LUTs than nn2rtl's time-multiplexed INT8 engine. The two U250 entries are different networks, so their throughput-per-watt figures are not comparable: they reflect each workload's cost, not accelerator efficiency. We avoid cross-device energy comparisons because the platforms have substantially different static-power baselines.
+
+RQ2 therefore has a differentiated answer. At small scale nn2rtl demonstrates feasibility and accuracy comparable to FINN: it fits where the highest-precision flow does not, but it remains materially less PPA-efficient than FINN's highly folded dataflow implementation. At full scale it delivers a routed depthwise-separable network and a routed residual backbone under a hard on-chip-only constraint the deterministic flows were not run against. The limits are plain: the head-to-head is on one device, and the FINN throughput is derived from its routed clock and an analytical initiation interval.
