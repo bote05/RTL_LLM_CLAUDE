@@ -37,8 +37,6 @@ ResNet-50: all 119 modules register as passing in the pipeline state, and 117 of
 
 MobileNetV2: the recorded System-1 cost snapshot covers 97 of the 99 modules, of which 82 are bit-identical and 15 are within tolerance. The global-average-pool and classifier modules were added afterwards, and the complete network passes the assembled network gate (Section~\ref{sec:rq3}). The per-module bit-identical and within-tolerance split for those two deferred modules is not separately recorded.
 
-A representative module-level check was particularly extensive: layer1\_0\_conv1 was verified bit-identical, with a maximum error of 0 and a first-mismatch index of $-1$, across 6,422,528 samples. This is the depth of a single well-characterised check and should not be read as evidence that every module was sampled to the same extent.
-
 \subsection{Per-class gate mapping}
 
 \begin{enumerate}
