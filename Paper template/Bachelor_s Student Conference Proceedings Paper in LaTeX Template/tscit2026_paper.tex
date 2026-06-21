@@ -337,7 +337,7 @@ We group the 77 indexed bugs into twelve classes by root cause and by the eviden
 
 \subsection{Per-module verification evidence state}
 
-ResNet-50: all 119 modules register as passing in the pipeline state, and 117 of 119 carry fresh on-disk evidence, of which 108 are bit-identical and 9 are within the three-unit tolerance. The remaining 2 modules have ambiguous records (a superseded stale failure or a missing results file) and their exact status is left open.
+ResNet-50: all 119 modules register as passing in the pipeline state, and 117 of 119 carry fresh on-disk evidence, of which 108 are bit-identical and 9 are within the three-unit tolerance. The remaining 2 modules lack complete fresh result files because later integration changes altered the testing environment and their original per-module passes were not rerun. Their final per-module evidence is therefore incomplete; nevertheless, the assembled ResNet-50 backbone passes the stricter byte-exact network-level gate.
 
 MobileNetV2: the recorded System-1 cost snapshot covers 97 of the 99 modules, of which 82 are bit-identical and 15 are within tolerance. The global-average-pool and classifier modules were added afterwards, and the complete network passes the assembled network gate (Section~\ref{sec:rq3}). The per-module bit-identical and within-tolerance split for those two deferred modules is not separately recorded.
 
