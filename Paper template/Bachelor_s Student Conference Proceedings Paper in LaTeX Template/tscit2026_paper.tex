@@ -546,11 +546,13 @@ B77 & 11 & both & repair agent steered to add drain logic, real bug = off-by-one
 
 Note: $\star$ marks spine bugs. B51 (class 5/8) is the only bug counted under two classes, which is why the per-class counts in Table~\ref{tab:taxonomy} total 78 for 77 distinct bugs; B60 is labelled 1/9 but counted once, under class 1.
 
+\clearpage
+
 \section{Pipeline and Verification Diagrams}\label{app:figures}
 
 Figure~\ref{fig:pipeline} details the System-1 per-module pipeline state machine and its failure-memory and pattern-reuse loop (Section~\ref{sec:system1}); Figure~\ref{fig:verify} details the two functional-verification gates and the reference-independence principle (Section~\ref{sec:verification}).
 
-\begin{figure}[p]
+\begin{figure}[!htbp]
 \centering
 \includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{fig2_pipeline_fsm}
 \caption{The System-1 per-module pipeline as a state machine, with Vivado synthesis dispatch and the failure-memory and pattern-reuse loop. Deterministic components are shaded separately from the LLM agents.}
