@@ -13,6 +13,7 @@
 \makeatother
 
 \usepackage{longtable}
+\usepackage{array}
 \usepackage{placeins}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, fit, backgrounds}
@@ -374,7 +375,7 @@ The improve operation supplies a verified module and its Vivado synthesis report
 \caption{System-1 components and pinned models.}
 \label{tab:agents}
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}p{0.15\textwidth}p{0.16\textwidth}p{0.50\textwidth}p{0.12\textwidth}@{}}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.18\textwidth}p{0.16\textwidth}p{0.47\textwidth}p{0.12\textwidth}@{}}
 \toprule
 Component & Input & Job and output & Model \\
 \midrule
