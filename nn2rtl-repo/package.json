@@ -1,5 +1,6 @@
 {
   "name": "nn2rtl",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "check:twins": "node scripts/check-twins.mjs",

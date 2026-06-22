@@ -2,6 +2,13 @@
 
 This is the MLPerf Tiny image classification reference model.
 
+> **Licence and attribution.** The files in this directory are redistributed from
+> the MLCommons Tiny benchmark (https://github.com/mlcommons/tiny) under the
+> Apache License, Version 2.0 (see [LICENSE](LICENSE) in this directory).
+> `eval_functions_eembc.py` additionally derives from EEMBC / SiliconLabs
+> `platform_ml_models`. Source provenance and SHA-256 checksums are recorded in
+> `rq2_resnet8/ACQUISITION.md`.
+
 A ResNet8 model is trained on the CIFAR10 dataset available at:
 https://www.cs.toronto.edu/~kriz/cifar.html
 

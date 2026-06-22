@@ -1,6 +1,7 @@
 {
   "name": "nn2rtl-mcp",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=20"

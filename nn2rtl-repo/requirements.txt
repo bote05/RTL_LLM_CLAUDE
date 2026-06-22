@@ -1,0 +1,14 @@
+# Python dependencies for the nn2rtl pipeline (System 1 generation, plus the
+# quantisation and accuracy-measurement harnesses under scripts/).
+#
+# onnx / onnxruntime are pinned to the versions used for the thesis results
+# (see paper_artifacts/README.md: onnx 1.21.0 / onnxruntime 1.23.0, opset 18).
+# Pin torch / numpy to your own environment to reproduce the quantised weights
+# byte-exactly; GPTQ/PTQ numerics can drift across torch versions.
+
+torch
+torchvision
+numpy
+onnx==1.21.0
+onnxruntime==1.23.0
+pytest

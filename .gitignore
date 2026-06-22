@@ -25,6 +25,10 @@ Thumbs.db
 .idea/
 *.swp
 
+# Environment (defensive: never commit secrets at the repo root)
+.env
+.env.*
+
 # Vitis / Vivado / DFx tool droppings (created in CWD by the EDA tools)
 *.log
 *.jou

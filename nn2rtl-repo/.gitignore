@@ -231,3 +231,17 @@ verify/cyc_lbw_c960/
 !output/reports/rederive_*.log
 !output/reports_integrated/resnet_final_bundle/*.log
 !output/mobilenet-v2/reports/final_bundle/*.log
+
+# --- Public-release hygiene: untrack stray EDA/debug scratch that slipped past
+#     the globs above (Vivado console *.out, OOC *_done markers, *_old.v stale
+#     RTL backups, and one-off conv200/conv198 debug captures). ---
+output/**/*.out
+output/**/*_done
+output/**/*_old.v
+output/**/*.i8
+output/reports_integrated/*.hex
+
+# --- THESIS EVIDENCE: ResNet-50 inertness proofs referenced by
+#     paper_artifacts/README.md (rescued from the global *.log rule). ---
+!output/mobilenet-v2/reports/dw_quartet/resnet_inertness_stage1.log
+!output/mobilenet-v2/reports/dw_quartet/resnet_inertness_stage2.log

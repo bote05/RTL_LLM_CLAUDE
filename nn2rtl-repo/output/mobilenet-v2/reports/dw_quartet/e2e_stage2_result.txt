@@ -1,0 +1,15 @@
+[par-e2e] building (-j 24, --no-pch) ...
+[par-e2e] build OK (31s)
+[par-e2e] running 8 vectors, 8 at a time (--threads 1 each) ...
+[par-e2e] === per-vector results (sim 57s) ===
+  vec0: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec1: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec2: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec3: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec4: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec5: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec6: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+  vec7: [tb][mbv2][summary] result=PASS mismatch_bytes=0 first_mismatch_beat=-1 beats_seen=32/1 in_beats=50176/50176
+[par-e2e] TOTAL mismatch (8 vecs) = 0 ; wall=89s
+[par-e2e] RESULT: PASS (8/8 byte-exact)
+e2e_cycles=1380155

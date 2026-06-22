@@ -1,7 +1,7 @@
 # Paper artifacts — TScIT 45 (nn2rtl)
 
 Maps each headline table cell in the paper to the in-repo report that produced it.
-Sealed commit: `50c3054`. nn2rtl tool versions: Vivado 2025.2, Verilator, Icarus Verilog
+Sealed commit: `50c30545081e253949d35e00fd7b6e93c8458a07`. nn2rtl tool versions: Vivado 2025.2, Verilator, Icarus Verilog
 (`iverilog -g2012`); ONNX frontend onnx 1.21.0 / onnxruntime 1.23.0 / opset 18.
 FINN v0.10.1 on Vivado 2024.2; hls4ml 1.3.0 on Vitis HLS 2024.2.
 
@@ -20,7 +20,7 @@ FINN v0.10.1 on Vivado 2024.2; hls4ml 1.3.0 on Vitis HLS 2024.2.
 |---|---|
 | ResNet-50 77.07% deployed | `output/reports/rederive_deployed_20260618.log` (BN-fold-aware re-derivation, 1500-img subset) |
 | ResNet-50 83.33 MHz / 5,664,715 cyc / LUT 1,196,343 / BRAM 2,656 / DSP 6,983 / 16.0 W | kp4mp32_c16 routed checkpoint: `first_light_postroute_timing_kp4mp32_c16.rpt` (+ util/power) under `output/reports_integrated/` |
-| ResNet-50 byte-exact 0/100,352 | `output/mobilenet-v2/reports/dw_quartet/resnet_inertness_stage1.log` and `stage2.log` (both at 5,664,715 cyc) |
+| ResNet-50 byte-exact 0/100,352 (routed netlist) | `output/mobilenet-v2/reports/dw_quartet/resnet_inertness_stage1.log` and `stage2.log` — both show the routed **5,664,715-cycle** netlist passing the end-to-end value test at `total mismatching bytes = 0 / 100352`, `result=PASS beats=3136/3136`. This is the routed design's own byte-exact proof (synthesis/P&R is logic-equivalent to the verified RTL). |
 | MobileNetV2 71.27% deployed | `output/reports/rederive_mbv2_20260618.log` (1500-img subset) |
 | MobileNetV2 110.90 MHz / 1,184,731 cyc / LUT 322,628 / BRAM 1,812.5 / DSP 3,345 / 11.1 W | `output/mobilenet-v2/reports/synth/checkpoints/mbv2_route_postroute_util_final_c8.rpt` + `mbv2_route_final_c8.json` |
 | MobileNetV2 byte-exact 8/8 | `output/mobilenet-v2/reports/final_bundle/e2e_result.txt` |

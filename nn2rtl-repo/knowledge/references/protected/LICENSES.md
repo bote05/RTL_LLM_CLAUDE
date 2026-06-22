@@ -1,7 +1,7 @@
 # Reference-file provenance
 
 Three reference files are load-bearing in the pattern library today.
-All written in this repo, same license as the rest of the codebase.
+All written in this repo, under the repository's MIT licence (see /LICENSE).
 
 ## `conv1x1_passing_reference.v`
 
